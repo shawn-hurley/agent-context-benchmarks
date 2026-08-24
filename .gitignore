@@ -1,0 +1,17 @@
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.egg-info/
+build/
+dist/
+
+# run outputs
+runs/
+!runs/.gitkeep
+
+# vendored benchmark evaluation artifacts
+SWE-bench/
+
+bin/
+*_PLAN.md

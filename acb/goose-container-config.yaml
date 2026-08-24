@@ -1,0 +1,29 @@
+# Goose configuration for SWE-bench container evaluation
+# Disables internet search/fetch extension to ensure offline operation
+# This file is injected into containers at ~/.config/goose/config.yaml
+
+# Extensions section - disables fetch, keeps essential tools
+extensions:
+  developer:
+    type: builtin
+    name: developer
+    enabled: true
+    bundled: true
+    timeout: 300
+  
+  memory:
+    type: builtin
+    name: memory
+    enabled: true
+    bundled: true
+    timeout: 300
+  
+  # Fetch extension explicitly disabled to prevent internet searches
+  # This extension provides web browsing and internet search capabilities
+  fetch:
+    type: stdio
+    name: fetch
+    enabled: false
+    cmd: uvx
+    args: ["-y", "mcp-server-fetch"]
+    timeout: 300
