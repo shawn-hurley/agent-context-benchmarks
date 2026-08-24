@@ -1,0 +1,67 @@
+# Token pricing, USD per 1,000,000 tokens. Keyed by model id -- matches
+# config/proxy.yaml's `models:` keys / the `model` field in usage.jsonl rows.
+#
+# Deliberately separate from proxy.yaml: proxy.yaml is about how the proxy
+# *connects* to a backend (endpoint, api, credentials); this is a pure
+# reporting concern, applied whenever a report is generated (acb/costs.py),
+# not baked into usage.jsonl at record time -- so updating a price (or
+# adding one retroactively) never requires re-running anything, same "never
+# re-run to add a metric" philosophy as every other derived metric in
+# acb/usage.py.
+#
+# A model missing from this file shows as "no cost data" in reports, not a
+# silent $0 -- that's reserved for models that genuinely cost nothing
+# per-token (below).
+models:
+  claude-opus-4-8:
+    input_per_1m: 15.00
+    output_per_1m: 75.00
+    cache_read_per_1m: 1.50
+    cache_write_per_1m: 18.75
+
+  claude-sonnet-4-5:
+    input_per_1m: 3.00
+    output_per_1m: 15.00
+    cache_read_per_1m: 0.30
+    cache_write_per_1m: 3.75
+
+  gpt-4o:
+    input_per_1m: 2.50
+    output_per_1m: 10.00
+
+  # Local models: no per-token dollar cost (hardware/electricity aside,
+  # which is out of scope) -- explicit 0.0, not "missing from this file".
+  local-qwen:
+    input_per_1m: 0.0
+    output_per_1m: 0.0
+
+  mlx-community/Qwen3.8-27B-4bit:
+    input_per_1m: 0.0
+    output_per_1m: 0.0
+
+  mlx-community/Qwen3-Coder-30B-A3B-Instruct-4bit-dwq-v2:
+    input_per_1m: 0.0
+    output_per_1m: 0.0
+
+  # Google Vertex AI Anthropic -- same per-token rates as direct Anthropic API.
+  # Vertex sets its own lifecycle/pricing; verify against
+  # cloud.google.com/vertex-ai/generative-ai/pricing if rates change.
+  google-vertex-anthropic/claude-haiku-4-5:
+    input_per_1m: 1.00
+    output_per_1m: 5.00
+    cache_read_per_1m: 0.10
+    cache_write_per_1m: 1.25
+
+  # From the 4.6 generation onward Anthropic uses dateless IDs on Vertex.
+  # @default in the key is our convention for the Vertex default-version alias.
+  # Pricing matches the direct Anthropic API (Feb 2026 rates).
+  google-vertex-anthropic/claude-sonnet-4-6@default:
+    input_per_1m: 3.00
+    output_per_1m: 15.00
+    cache_read_per_1m: 0.30
+    cache_write_per_1m: 3.75
+
+  # Remote inference server (Tailscale peer) -- no per-token dollar cost.
+  Qwen3.6-35B-A3B-NVFP4:
+    input_per_1m: 0.0
+    output_per_1m: 0.0

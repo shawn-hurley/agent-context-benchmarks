@@ -71,6 +71,20 @@ class ModelSpec:
     tls: bool = True
     key_env: str | None = None
     reports_cache: bool = False
+    # Vertex AI fields -- present only for Google Vertex Anthropic backends.
+    # vertex_model is the Vertex model path segment (e.g.
+    # "claude-haiku-4-5@20251001"); its presence is the signal that this is a
+    # Vertex model and that the proxy needs vertex_anthropic_prepare + Bearer
+    # auth + path_rewrite instead of the normal Anthropic filter chain.
+    # Project is read from GOOGLE_CLOUD_PROJECT and region from CLOUD_ML_REGION
+    # at build_config() time -- neither is baked into the model spec so a
+    # single proxy.yaml entry works across GCP environments.
+    vertex_model: str | None = None
+
+    @property
+    def is_vertex(self) -> bool:
+        """True when this backend routes through Vertex AI's Anthropic endpoint."""
+        return self.vertex_model is not None
 
     @property
     def upstream_url(self) -> str:

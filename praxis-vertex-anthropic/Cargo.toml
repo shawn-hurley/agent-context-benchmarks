@@ -1,0 +1,19 @@
+[package]
+name = "praxis-vertex-anthropic"
+version = "0.1.0"
+edition = "2021"
+
+# Marker: tells praxis-ai's build script this crate exports filters
+# and should be auto-discovered at build time.
+[package.metadata.praxis-filters]
+
+[dependencies]
+async-trait = "0.1"
+bytes = "1"
+http = "1"
+lazy_static = "1.4"
+praxis-filter = { version = "0.5.3", package = "praxis-proxy-filter" }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml = { package = "yaml_serde", version = "0.10" }
+tracing = "0.1"

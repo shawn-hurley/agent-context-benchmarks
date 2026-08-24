@@ -54,17 +54,22 @@ class Benchmark(ABC):
 
     @abstractmethod
     def prepare_container(self, instance: Instance, pod: str, build_dir: Path,
-                          arch: str, goose_binary: Path) -> str:
+                          arch: str) -> str:
         """Materialize a running container (attached to `pod`) the harness
         will edit code in; return its name.
 
-        The `build_dir`/`arch`/`goose_binary` params are runner-computed
-        orchestration details (image build scratch space, target
-        architecture, the harness's Linux binary) rather than a fully
-        benchmark-agnostic signature -- there's only one real implementation
-        (SWEBench) today, so this leans on its concrete needs rather than a
-        speculative generic shape. Revisit if/when a second container-mode
-        benchmark exists.
+        The `build_dir`/`arch` params are runner-computed orchestration
+        details (image build scratch space, target architecture) rather than
+        a fully benchmark-agnostic signature -- there's only one real
+        implementation (SWEBench) today, so this leans on its concrete needs
+        rather than a speculative generic shape. Revisit if/when a second
+        container-mode benchmark exists.
+
+        Deliberately benchmark-only: staging a harness's own runtime (e.g. a
+        binary it needs `podman cp`'d in) is NOT this method's job -- the
+        runner calls `HarnessAdapter.setup_container()` separately, after
+        this returns and before `run_container()`, so this method (and every
+        Benchmark) stays agnostic to which harness is running.
         """
 
     @abstractmethod

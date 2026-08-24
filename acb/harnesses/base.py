@@ -10,9 +10,17 @@ the harness runs inside the same SWE-bench eval image evaluation will grade
 the patch in, so its dev environment matches evaluation exactly, rather than
 whatever happens to be on the machine running `acb`. A harness needs a Linux
 build (or an image with its runtime baked in) to support this -- `goose`
-ships a static-ish Linux binary and is the only harness implemented today;
-`claude-code`/`opencode`/`pi` are stubs in acb/harnesses/stubs.py pending
-their own container port.
+ships a static-ish Linux binary; `claude-code` ships a standalone per-arch
+native binary too (see acb/harnesses/claude_code.py). `opencode`/`pi` are
+still stubs in acb/harnesses/stubs.py pending their own container port.
+
+Staging a harness's own runtime into the container (e.g. `podman cp`-ing in
+a binary) is the harness's job, not the benchmark's -- see
+`setup_container()` below. This used to be baked into
+`Benchmark.prepare_container()`'s signature as a goose-specific
+`goose_binary: Path` param; that coupling didn't survive a second
+container-mode harness (claude-code needs a different binary entirely) and
+has been pulled out into this per-harness hook instead.
 """
 
 from __future__ import annotations
@@ -53,6 +61,37 @@ class HarnessAdapter(ABC):
             env["OPENAI_BASE_URL"] = base_url
             env["OPENAI_API_KEY"] = api_key
         return env
+
+    def effective_api(self, model_api: str) -> str:
+        """Return the API surface this harness will speak for the given model backend API.
+
+        Default: match the model's API, so no proxy translation is needed and
+        the harness connects to the backend natively. Override in harnesses
+        that are locked to one API regardless of the backend -- e.g.
+        ClaudeCode always speaks Anthropic Messages, so its override always
+        returns "anthropic" and praxis's existing anthropic→openai filter
+        handles OpenAI-speaking backends transparently.
+
+        The runner stores the resolved value on the instance (harness.api)
+        before constructing the proxy and calling build_container_env(), so
+        both see the right API without needing a separate argument.
+        """
+        return model_api
+
+    def setup_container(self, container: str, arch: str, out_dir: Path) -> None:
+        """Stage anything this harness needs into `container` before
+        `run_container()` execs it (e.g. `podman cp`-ing in a per-arch
+        binary this harness ships as). Called once per instance, after the
+        benchmark's own `prepare_container()` returns the container name and
+        before `run_container()` runs.
+
+        Default no-op: a harness with nothing beyond what the benchmark's
+        image already provides doesn't need to override this. See
+        `acb/harnesses/goose.py`'s `Goose.setup_container()` (downloads+
+        caches a per-arch Linux binary, then copies it in) or
+        `acb/harnesses/claude_code.py`'s equivalent for worked examples.
+        """
+        return None
 
     @abstractmethod
     def run_container(self, prompt: str, container: str, model: str, env: dict[str, str],

@@ -23,7 +23,8 @@ ANTHROPIC_HOST below.
 Progress visibility: `--no-session` means goose persists no transcript of its
 own (that's normally what its sqlite session store is for); combined with
 generation often taking minutes, a plain `subprocess.run(capture_output=True)`
-would leave the console silent the whole time. Instead this adapter:
+would leave the console silent the whole time. Instead this adapter (via the
+shared plumbing in acb/harnesses/_streaming.py, also used by claude-code):
 
 * uses `--output-format stream-json` so goose emits one JSON event per
   message/tool-call/tool-result as they happen instead of a single blob at
@@ -38,19 +39,15 @@ would leave the console silent the whole time. Instead this adapter:
 
 from __future__ import annotations
 
-import json
 import shlex
 import subprocess
 import tarfile
-import threading
-import time
 import urllib.request
 from pathlib import Path
 
+from acb.container import container_cp_in, container_exec_capture
+from acb.harnesses._streaming import execute
 from acb.harnesses.base import HarnessAdapter, HarnessResult
-
-HEARTBEAT_INTERVAL = 10  # seconds
-ACTIVITY_TEXT_TAIL = 160  # chars of rolling assistant-text preview to keep
 
 # goose ships static-ish Linux release binaries here (verified against 1.46/
 # 1.47); used to get goose into a SWE-bench testbed container, which has no
@@ -110,61 +107,34 @@ def _describe_event(obj: dict) -> tuple[str | None, bool]:
     return None, False
 
 
-class _RunState:
-    """Activity state shared between the reader thread and the heartbeat loop.
-
-    Plain attribute assignment is safe across threads under the GIL for this
-    use case (single reader, single reader-of-the-latest-value) -- no lock
-    needed for a "best effort, latest wins" heartbeat.
-    """
-
-    def __init__(self) -> None:
-        self.last_activity = "starting..."
-        self._text_accum = ""
-
-    def note_text(self, delta: str) -> None:
-        self._text_accum = (self._text_accum + delta)[-ACTIVITY_TEXT_TAIL:]
-        preview = self._text_accum.strip()
-        self.last_activity = f"thinking: {preview}" if preview else "thinking..."
-
-    def note_event(self, description: str) -> None:
-        self._text_accum = ""
-        self.last_activity = description
-
-
-def _read_stream(proc: subprocess.Popen, transcript_path: Path,
-                  state: _RunState, buffer: list[str]) -> None:
-    """Tail the harness's stdout: persist every line, update `state` live."""
-    transcript_path.parent.mkdir(parents=True, exist_ok=True)
-    with transcript_path.open("w", encoding="utf-8") as tf:
-        for line in proc.stdout:  # type: ignore[union-attr]
-            buffer.append(line)
-            tf.write(line)
-            tf.flush()
-            stripped = line.strip()
-            if not stripped:
-                continue
-            try:
-                obj = json.loads(stripped)
-            except json.JSONDecodeError:
-                # startup banner / non-JSON noise -- not an error, just opaque
-                state.note_event("processing...")
-                continue
-            if not isinstance(obj, dict):
-                state.note_event("processing...")
-                continue
-            description, is_text_delta = _describe_event(obj)
-            if is_text_delta:
-                state.note_text(description or "")
-            elif description is not None:
-                state.note_event(description)
-            else:
-                state.note_event("processing...")
-
-
 class Goose(HarnessAdapter):
     name = "goose"
-    api = "openai"
+    api = "openai"  # default; runner overrides via effective_api()
+
+    def effective_api(self, model_api: str) -> str:
+        """Goose supports both openai and anthropic providers natively.
+
+        Match the model backend's API so no proxy translation is needed:
+        - model_api="openai"    -> --provider openai  + OPENAI_HOST (current default)
+        - model_api="anthropic" -> --provider anthropic + ANTHROPIC_HOST
+        
+        NOTE: Goose's Anthropic provider (using the Anthropic Rust SDK) appears
+        to be incompatible with Vertex AI's SSE streaming format, resulting in
+        "empty response" errors. This is a goose/SDK issue, not a proxy issue.
+        OpenAI-compatible models (vLLM, Ollama) work fine.
+        """
+        return model_api
+
+    def setup_container(self, container: str, arch: str, out_dir: Path) -> None:
+        """Download (once, cached) this arch's goose Linux binary and copy it
+        into `container` at /usr/local/bin/goose, before run_container()
+        execs it. Previously done inline in SWEBench.prepare_container() --
+        moved here so benchmark code stays harness-agnostic (see
+        HarnessAdapter.setup_container()); behavior is unchanged.
+        """
+        binary = ensure_linux_binary(arch, out_dir / ".cache")
+        container_cp_in(container, binary, "/usr/local/bin/goose")
+        container_exec_capture(container, ["chmod", "+x", "/usr/local/bin/goose"])
 
     def run_container(self, prompt: str, container: str, model: str, env: dict[str, str],
                        out_dir: Path, instance_id: str,
@@ -183,7 +153,7 @@ class Goose(HarnessAdapter):
         goose_argv = [
             binary, "run",
             "-t", prompt,
-            "--provider", "openai",
+            "--provider", self.api,
             "--model", model,
             "--no-session",
             "--output-format", "stream-json",
@@ -220,19 +190,30 @@ class Goose(HarnessAdapter):
         transcript_path = Path(out_dir) / "goose" / instance_id / "transcript.jsonl"
         label = f"[goose:{instance_id}]"
         timeout = self.config.get("timeout", 1800)
-        return self._execute(exec_cmd, env=None, cwd=None,
-                             transcript_path=transcript_path, label=label, timeout=timeout)
+        return execute(exec_cmd, env=None, cwd=None, transcript_path=transcript_path,
+                       label=label, timeout=timeout, describe_event=_describe_event)
 
     def build_container_env(self, base_url: str, api_key: str) -> dict[str, str]:
-        """Minimal env for `run_container` -- no host env inherited (irrelevant/huge)."""
-        return {
+        """Minimal env for `run_container` -- no host env inherited (irrelevant/huge).
+
+        Goose uses per-provider env vars (OPENAI_HOST / ANTHROPIC_HOST) rather
+        than the generic OPENAI_BASE_URL / ANTHROPIC_BASE_URL convention --
+        verified against goose 1.46.0 (see module docstring). Branch on
+        self.api, which the runner sets via effective_api() before this is called.
+        """
+        env = {
             "HOME": "/root",
-            "OPENAI_HOST": base_url,
-            "OPENAI_API_KEY": api_key,
-            "GOOSE_PROVIDER": "openai",
+            "GOOSE_PROVIDER": self.api,
             "GOOSE_TELEMETRY_ENABLED": "false",
-            "GOOSE_MODE": "auto",  # Auto mode with config-based tool restrictions
+            "GOOSE_MODE": "auto",
         }
+        if self.api == "anthropic":
+            env["ANTHROPIC_HOST"] = base_url
+            env["ANTHROPIC_API_KEY"] = api_key
+        else:
+            env["OPENAI_HOST"] = base_url
+            env["OPENAI_API_KEY"] = api_key
+        return env
 
     @staticmethod
     def _inject_goose_config(container: str) -> None:
@@ -266,43 +247,3 @@ class Goose(HarnessAdapter):
             print(f"[goose] injected config to {container}:{config_dst}", flush=True)
         except subprocess.CalledProcessError as e:
             print(f"[goose] warning: failed to inject config: {e}", flush=True)
-
-    @staticmethod
-    def _execute(cmd: list[str], env: dict[str, str] | None, cwd: str | None,
-                 transcript_path: Path, label: str, timeout: int) -> HarnessResult:
-        proc = subprocess.Popen(
-            cmd, cwd=cwd, env=env,
-            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
-            text=True, bufsize=1,
-        )
-        state = _RunState()
-        buffer: list[str] = []
-        reader = threading.Thread(
-            target=_read_stream, args=(proc, transcript_path, state, buffer),
-            daemon=True,
-        )
-        reader.start()
-
-        start = time.monotonic()
-        timed_out = False
-        while True:
-            try:
-                proc.wait(timeout=HEARTBEAT_INTERVAL)
-                break
-            except subprocess.TimeoutExpired:
-                elapsed = time.monotonic() - start
-                if elapsed >= timeout:
-                    proc.kill()
-                    proc.wait()
-                    timed_out = True
-                    break
-                print(f"{label} still working ({elapsed:.0f}s elapsed) "
-                      f"-- last: {state.last_activity}", flush=True)
-
-        reader.join(timeout=5)
-        output = "".join(buffer)
-        if timed_out:
-            print(f"{label} timed out after {timeout}s", flush=True)
-            return HarnessResult(output=output, exit_code=-1, timed_out=True)
-        print(f"{label} finished (exit code {proc.returncode})", flush=True)
-        return HarnessResult(output=output, exit_code=proc.returncode)

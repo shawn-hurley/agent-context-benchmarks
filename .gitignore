@@ -10,8 +10,13 @@ dist/
 runs/
 !runs/.gitkeep
 
+# local configuration (copy from config.example/)
+config/
+.config/
+
 # vendored benchmark evaluation artifacts
 SWE-bench/
 
 bin/
 *_PLAN.md
+target

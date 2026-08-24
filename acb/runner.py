@@ -27,7 +27,6 @@ from acb.benchmarks import make_benchmark, Prediction
 from acb.config import RunConfig, Registries
 from acb.container import build_image, container_stop_rm, image_exists, pod_create, pod_remove
 from acb.harnesses import make_harness
-from acb.harnesses.goose import ensure_linux_binary
 from acb.proxy import ProxyTags
 from acb.proxy.praxis import PraxisContainerBackend
 from acb.report import build_report
@@ -36,7 +35,7 @@ from acb.report import build_report
 # that computes real per-request token usage -- see acb/proxy/praxis.py's
 # module docstring for the live-verified gaps in how it exposes that data
 # (and how acb works around them) that make this less simple than it sounds.
-PRAXIS_IMAGE = "acb-praxis-ai:latest"
+PRAXIS_IMAGE_DEFAULT = "acb-praxis-ai:latest"
 
 _ARCH_MAP = {"arm64": "arm64", "aarch64": "arm64", "x86_64": "amd64", "amd64": "amd64"}
 
@@ -49,20 +48,67 @@ def _resolve_arch(bench_cfg: dict) -> str:
 
 
 def _ensure_praxis_image(bench_cfg: dict) -> str:
-    if image_exists(PRAXIS_IMAGE):
-        return PRAXIS_IMAGE
+    """Return the praxis-ai image tag to use, building it if absent.
+
+    The image tag is taken from ``bench_cfg["praxis_image"]`` when present
+    (set via benchmarks.yaml's ``praxis_image`` key -- useful during
+    development to keep a side tag like ``acb-praxis-ai:vertex-dev``
+    separate from the stable ``acb-praxis-ai:latest``).  Falls back to
+    ``PRAXIS_IMAGE_DEFAULT`` when not set.
+    """
+    image = bench_cfg.get("praxis_image", PRAXIS_IMAGE_DEFAULT)
+    if image_exists(image):
+        return image
     praxis_ai_repo = bench_cfg.get("praxis_ai_repo")
     if not praxis_ai_repo:
         raise RuntimeError(
-            f"{PRAXIS_IMAGE} not found and no `praxis_ai_repo` configured to build it "
+            f"{image} not found and no `praxis_ai_repo` configured to build it "
             "(benchmarks.yaml swebench.praxis_ai_repo -- path to a checkout of "
             "https://github.com/praxis-proxy/ai with a Containerfile)."
         )
     praxis_ai_repo = Path(praxis_ai_repo)
-    print(f"[praxis-ai] building {PRAXIS_IMAGE} from {praxis_ai_repo} ...", flush=True)
-    build_image(praxis_ai_repo / "Containerfile", praxis_ai_repo, PRAXIS_IMAGE)
-    print(f"[praxis-ai] built {PRAXIS_IMAGE}", flush=True)
-    return PRAXIS_IMAGE
+    print(f"[praxis-ai] building {image} from {praxis_ai_repo} ...", flush=True)
+    build_image(praxis_ai_repo / "Containerfile", praxis_ai_repo, image)
+    print(f"[praxis-ai] built {image}", flush=True)
+    return image
+
+
+def _fetch_vertex_token() -> str:
+    """Fetch a fresh GCP OAuth2 Bearer token via Application Default Credentials.
+
+    Reads ``GOOGLE_APPLICATION_CREDENTIALS`` (service account key JSON)
+    automatically via ``google.auth.default()``.  Called once per instance
+    immediately before the praxis container is started; the token is valid
+    for ~1 hour, well beyond any single-instance benchmark run.
+
+    The token is passed explicitly to ``PraxisContainerBackend`` via
+    ``extra_env`` rather than written to ``os.environ``, which would be a
+    race condition under ``max_workers > 1`` (multiple ``do_one()`` threads
+    share the same process environment).
+
+    Raises ``RuntimeError`` with a clear message if ``google-auth`` is not
+    installed or credentials cannot be resolved.
+    """
+    try:
+        import google.auth  # type: ignore[import]
+        import google.auth.transport.requests  # type: ignore[import]
+    except ImportError as exc:
+        raise RuntimeError(
+            "google-auth is required for Vertex AI runs: "
+            "pip install 'google-auth>=2.0'"
+        ) from exc
+
+    credentials, _ = google.auth.default(
+        scopes=["https://www.googleapis.com/auth/cloud-platform"]
+    )
+    credentials.refresh(google.auth.transport.requests.Request())
+    token: str = credentials.token
+    if not token:
+        raise RuntimeError(
+            "google.auth.default() returned credentials but no token was produced; "
+            "verify GOOGLE_APPLICATION_CREDENTIALS points to a valid service account key."
+        )
+    return token
 
 
 def run(cfg: RunConfig, registries: Registries | None = None) -> Path:
@@ -94,7 +140,6 @@ def run(cfg: RunConfig, registries: Registries | None = None) -> Path:
         """
         arch = _resolve_arch(bench_cfg)
         build_dir = out_dir / "image_build"
-        goose_binary = ensure_linux_binary(arch, out_dir / ".cache")
 
         # Podman uses the pod name as the shared hostname for its network
         # namespace, which Linux caps at 64 bytes (HOST_NAME_MAX) -- verified:
@@ -116,17 +161,39 @@ def run(cfg: RunConfig, registries: Registries | None = None) -> Path:
                     "implementation; only `praxis` does today."
                 )
             harness = make_harness(cfg.harness, harness_cfg)
+            # Resolve which API the harness will speak for this model backend.
+            # Stored as an instance variable so both PraxisContainerBackend
+            # (which needs it to decide whether proxy translation is required)
+            # and build_container_env() (which uses self.api to pick env vars
+            # and CLI flags) see the same resolved value without needing a
+            # separate parameter threaded through every call.
+            harness.api = harness.effective_api(model_spec.api)
             testbed_container = benchmark.prepare_container(
-                instance, pod_name, build_dir, arch, goose_binary,
+                instance, pod_name, build_dir, arch,
             )
+            # Harness-specific asset staging (e.g. goose's binary,
+            # claude-code's) is the harness's own job now, not the
+            # benchmark's -- see HarnessAdapter.setup_container().
+            harness.setup_container(testbed_container, arch, out_dir)
             tags = ProxyTags(
                 run_id=cfg.run_id, benchmark=cfg.benchmark, harness=cfg.harness,
                 model=cfg.model, instance_id=instance.instance_id,
             )
+            # Fetch a fresh GCP OAuth2 token for Vertex AI backends.
+            # Done here (per-instance, inside do_one) rather than once at
+            # run() level so a long multi-instance run never uses an expired
+            # token (tokens live ~1 hour). Passed explicitly via extra_env
+            # rather than os.environ to avoid races between concurrent
+            # do_one() threads sharing the same process environment.
+            praxis_extra_env: dict[str, str] = {}
+            if model_spec.is_vertex:
+                praxis_extra_env["GCP_ACCESS_TOKEN"] = _fetch_vertex_token()
+
             praxis_backend = PraxisContainerBackend(
                 tags=tags, usage_path=usage_path, config=proxy_cfg,
                 model_spec=model_spec, harness_api=harness.api,
                 pod=pod_name, image=_ensure_praxis_image(bench_cfg),
+                extra_env=praxis_extra_env,
             )
             with praxis_backend:
                 env = harness.build_container_env(praxis_backend.base_url, praxis_backend.api_key)

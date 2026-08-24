@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 from acb.harnesses.base import HarnessAdapter, HarnessResult
+from acb.harnesses.claude_code import ClaudeCode
 from acb.harnesses.goose import Goose
-from acb.harnesses.stubs import ClaudeCode, OpenCode, Pi
+from acb.harnesses.opencode import OpenCode
+from acb.harnesses.pi import Pi
 
 _HARNESSES: dict[str, type[HarnessAdapter]] = {
     "claude-code": ClaudeCode,

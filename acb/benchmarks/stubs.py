@@ -27,7 +27,7 @@ class LiveCodeBench(Benchmark):
         raise NotImplementedError("wire up LiveCodeBench dataset loading")
 
     def prepare_container(self, instance: Instance, pod: str, build_dir: Path,
-                          arch: str, goose_binary: Path) -> str:
+                          arch: str) -> str:
         raise NotImplementedError("build/start a LiveCodeBench scratch container")
 
     def collect_prediction_container(self, instance, container, model) -> Prediction:
@@ -46,7 +46,7 @@ class ScarfBench(Benchmark):
         raise NotImplementedError("wire up ScarfBench dataset loading")
 
     def prepare_container(self, instance: Instance, pod: str, build_dir: Path,
-                          arch: str, goose_binary: Path) -> str:
+                          arch: str) -> str:
         raise NotImplementedError("build/start a ScarfBench container")
 
     def collect_prediction_container(self, instance, container, model) -> Prediction:

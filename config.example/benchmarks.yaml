@@ -1,0 +1,47 @@
+# Benchmark registry.
+
+swebench:
+  # NOTE: SWE-bench/SWE-bench_Verified, not princeton-nlp/SWE-bench_Verified.
+  # The vendored harness (v5.0.2, task-repo architecture) requires each
+  # instance to carry `image`/`eval_script`/`log_parser`/`eval_type` fields
+  # (swebench/harness/utils.py make_test_spec(), no fallback -- KeyError
+  # without them). princeton-nlp's dataset predates this schema and lacks
+  # those columns entirely; SWE-bench/SWE-bench_Verified has them. Confirmed
+  # via the HF datasets-server schema for both.
+  dataset: SWE-bench/SWE-bench_Verified
+  split: test
+  max_workers: 4
+  # Container backend for evaluation. "auto" uses DOCKER_HOST if set, else a
+  # running Podman machine's socket, else the docker default.
+  container_backend: auto        # auto | podman | docker
+  # docker_host: unix:///path/to.sock   # explicit override if needed
+  # namespace: ""                # set "" to build images locally (e.g. arm64
+  #                              # Macs where prebuilt x86_64 images are absent)
+
+  # --- Container-mode generation (the only mode -- see acb/runner.py) ----
+  # The harness runs *inside* the same SWE-bench eval image evaluation will
+  # grade the patch in (built on demand from the task repo -- see
+  # acb/benchmarks/image_builder.py), so its dev environment matches
+  # evaluation exactly. Requires Podman; `goose` and `claude-code` both
+  # support this today (HarnessAdapter.run_container()) -- opencode/pi are
+  # still stubs pending their own container port (acb/harnesses/stubs.py).
+  image_arch: auto                 # auto | amd64 | arm64 (auto = host arch)
+  task_repo: SWE-bench/swe-bench-tasks   # source of per-instance Dockerfiles
+  # Local checkout of https://github.com/praxis-proxy/ai (has a
+  # Containerfile) -- built once into `acb-praxis-ai:latest` and reused
+  # across instances/runs. Only read if that image doesn't already exist.
+  #
+  # praxis-ai, not core praxis: only praxis-ai has the `token_count` filter
+  # that computes real per-request token usage (core praxis has no such
+  # filter at all -- see acb/proxy/praxis.py's module docstring for the real,
+  # live-verified gaps in praxis-ai's own token-usage-exposure mechanisms
+  # that acb works around).
+  praxis_ai_repo: /Users/shurley/repos/research-llm-cost/ai
+
+livecodebench:
+  # stub -- see acb/benchmarks/stubs.py
+  {}
+
+scarfbench:
+  # stub -- see acb/benchmarks/stubs.py
+  {}

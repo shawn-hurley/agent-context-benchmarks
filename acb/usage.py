@@ -89,6 +89,13 @@ class InstanceMetrics:
     peak_context: int = 0
     per_turn_prompt: list[int] = field(default_factory=list)
     cache_efficiency: float = 0.0  # cache_read / total prompt tokens sent
+    # KNOWN GAP (container-mode/Praxis source only): PraxisContainerBackend
+    # never populates cache_read_tokens/cache_creation_tokens (see its
+    # _parse_usage_log() docstring for why -- praxis-ai's token_count filter
+    # discards that breakdown upstream, it's not a parsing bug here) so this
+    # silently reads 0.0 for every Praxis-based run regardless of real cache
+    # reuse -- indistinguishable from "no caching happened" without also
+    # checking the model's own `reports_cache` flag (config/proxy.yaml).
     resolved: bool | None = None  # filled in from benchmark evaluation
 
     @classmethod

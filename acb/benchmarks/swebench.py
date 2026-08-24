@@ -14,14 +14,47 @@ from __future__ import annotations
 
 import json
 import subprocess
-import sys
 import threading
 from pathlib import Path
+
+# Path to the vendored SWE-bench checkout and its isolated venv.
+# The venv is created on first use by _ensure_swebench_venv() so acb's own
+# venv never needs swebench's deps (docker, modal, unidiff, etc.).
+_SWEBENCH_DIR = Path(__file__).resolve().parents[2] / "SWE-bench"
+_SWEBENCH_VENV = _SWEBENCH_DIR / ".venv"
+
+
+def _ensure_swebench_venv() -> Path:
+    """Return the path to the SWE-bench venv's Python, creating it if needed.
+
+    Creates a uv-managed venv inside ``SWE-bench/.venv`` and installs the
+    vendored swebench package (with all its own deps) into it.  Only runs
+    the first time -- subsequent calls return immediately once the venv
+    Python exists.
+
+    This keeps docker, modal, unidiff, and the rest of swebench's dep tree
+    completely isolated from acb's own venv.
+    """
+    python = _SWEBENCH_VENV / "bin" / "python"
+    if python.exists():
+        return python
+    print("[swebench] creating isolated venv for SWE-bench evaluation ...", flush=True)
+    subprocess.run(
+        ["uv", "venv", str(_SWEBENCH_VENV)],
+        cwd=str(_SWEBENCH_DIR),
+        check=True,
+    )
+    subprocess.run(
+        ["uv", "pip", "install", "--python", str(python), "-e", "."],
+        cwd=str(_SWEBENCH_DIR),
+        check=True,
+    )
+    print("[swebench] SWE-bench venv ready.", flush=True)
+    return python
 
 from acb.benchmarks.base import Benchmark, Instance, Prediction
 from acb.benchmarks.image_builder import ensure_instance_image
 from acb.container import (
-    container_cp_in,
     container_create,
     container_env,
     container_exec_capture,
@@ -101,7 +134,7 @@ class SWEBench(Benchmark):
         )
 
     def prepare_container(self, instance: Instance, pod: str, build_dir: Path,
-                          arch: str, goose_binary: Path) -> str:
+                          arch: str) -> str:
         """Build/resolve the instance's image and start it as a long-lived
         container (`sleep infinity`) attached to `pod`, so the harness can
         `podman exec` into it. Returns the container name.
@@ -110,6 +143,11 @@ class SWEBench(Benchmark):
         `/testbed` checkout at `base_commit` (baked in at image-build time by
         the task repo's own Dockerfile) -- no separate git setup is needed
         here.
+
+        Purely benchmark concerns (image resolution, the container itself,
+        the untracked-files baseline below) -- staging the harness's own
+        runtime (e.g. goose's binary) happens separately, after this
+        returns, via `HarnessAdapter.setup_container()`.
         """
         image = ensure_instance_image(
             instance.instance_id, arch, build_dir,
@@ -118,8 +156,6 @@ class SWEBench(Benchmark):
         container_name = f"{pod}-testbed"
         container_create(pod, image, container_name, command=["sleep", "infinity"])
         container_start(container_name)
-        container_cp_in(container_name, goose_binary, "/usr/local/bin/goose")
-        container_exec_capture(container_name, ["chmod", "+x", "/usr/local/bin/goose"])
         # Baseline of what's *already* untracked before the harness runs --
         # e.g. `build/` from the image's own `pip install .` step at build
         # time. collect_prediction_container() diffs against this so those
@@ -186,8 +222,9 @@ class SWEBench(Benchmark):
                 }) + "\n")
 
         dataset = self.config.get("dataset", DEFAULT_DATASET)
+        swebench_python = _ensure_swebench_venv()
         cmd = [
-            sys.executable, "-m", "swebench.harness.run_evaluation",
+            str(swebench_python), "-m", "swebench.harness.run_evaluation",
             "--dataset_name", dataset,
             "--predictions_path", str(preds_path),
             "--run_id", run_id,
@@ -195,7 +232,6 @@ class SWEBench(Benchmark):
         ]
         if self.config.get("namespace") is not None:
             cmd += ["--namespace", str(self.config["namespace"])]
-        swebench_dir = Path(__file__).resolve().parents[2] / "SWE-bench"
         # route the docker SDK at the configured backend (Docker or Podman)
         env = container_env(self.config)
 
@@ -203,7 +239,7 @@ class SWEBench(Benchmark):
         # (see _tail_file docstring) -- tail those files live so the console
         # shows what's actually happening instead of going silent until the
         # whole subprocess exits.
-        log_dir_base = swebench_dir / "logs" / "run_evaluation" / run_id
+        log_dir_base = _SWEBENCH_DIR / "logs" / "run_evaluation" / run_id
         stop_event = threading.Event()
         tailers: list[threading.Thread] = []
         for p in predictions:
@@ -218,7 +254,7 @@ class SWEBench(Benchmark):
 
         print(f"[eval] starting SWE-bench evaluation for {len(predictions)} "
               f"instance(s) (run_id={run_id})...", flush=True)
-        proc = subprocess.Popen(cmd, cwd=str(swebench_dir), env=env)
+        proc = subprocess.Popen(cmd, cwd=str(_SWEBENCH_DIR), env=env)
         try:
             proc.wait()
         finally:
@@ -229,7 +265,7 @@ class SWEBench(Benchmark):
 
         # run_evaluation writes <model>.<run_id>.json in cwd
         resolved: dict[str, bool] = {}
-        for report in swebench_dir.glob(f"*.{run_id}.json"):
+        for report in _SWEBENCH_DIR.glob(f"*.{run_id}.json"):
             data = json.loads(report.read_text())
             for iid in data.get("resolved_ids", []):
                 resolved[iid] = True

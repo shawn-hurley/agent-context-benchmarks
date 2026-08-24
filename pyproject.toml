@@ -5,6 +5,7 @@ description = "Measure context/token usage across agent harnesses on coding benc
 requires-python = ">=3.10"
 dependencies = [
     "pyyaml>=6.0",
+    "google-auth>=2.0",
 ]
 
 [project.optional-dependencies]

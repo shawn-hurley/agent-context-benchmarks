@@ -1,0 +1,82 @@
+# Harness registry. Each entry configures one CLI agent adapter.
+# The `api` a harness speaks is defined in code (HarnessAdapter.api); these are
+# runtime knobs. All harnesses are pointed at the proxy by the runner.
+#
+# `_shared` isn't a harness -- it's not looked up by name anywhere
+# (Registries.harnesses.get(cfg.harness, {}) only ever fetches a real
+# harness key) -- just a place for YAML anchors both harness/system-prompt
+# entries below reference, so they stay identical without copy-pasting the
+# same paragraph twice. Must come first: YAML anchors have to be defined
+# before their first `*alias` use in document order.
+_shared:
+  # v1 of this prompt ("don't rely on memorized GitHub history, verify
+  # against the actual files") was observably partially effective: a real
+  # transcript (goose) showed the model literally quoting the instruction
+  # back mid-reasoning, then immediately continuing to spend ~15 minutes
+  # trying to recall exact historical version numbers, changelog entries,
+  # and PR details anyway before ever writing a fix. Acknowledging an
+  # instruction isn't the same as acting on it. v2 below is more directive:
+  # it names the exact failure mode as a stop condition ("if you notice
+  # yourself doing X, stop"), gives an explicit trigger for when to switch
+  # from analysis to action, and redefines "correct" away from "matches
+  # what I remember the real fix looked like" (the thing actually driving
+  # the recall spiral).
+  no_internet_prompt: &no_internet_prompt >-
+    You are fixing a bug in a real open-source repository, using only the
+    code checked out in this container. This checkout is a historical
+    snapshot -- it predates and will not match your memory of this project's
+    later versions, changelog, commit messages, or GitHub issue/PR numbers.
+    Trying to recall that history is a waste of time and often wrong. If you
+    notice yourself trying to remember a specific version number, changelog
+    entry, commit message, or PR number for this project, stop -- that
+    information is irrelevant here and you should discard it. Work only from
+    what you can observe: read the relevant source, reproduce the failure
+    (e.g. run the failing test or a small script), and identify the root
+    cause in the code in front of you. As soon as you can state the bug and
+    its fix in one sentence, write the fix immediately -- do not keep
+    re-deriving or re-confirming it once you understand it. Being correct
+    means the failing test passes after your change, not that your fix
+    matches what you recall the real upstream fix looking like. Do not
+    modify test files.
+
+    IMPORTANT: You do not have internet access. Do not attempt to use web
+    search, internet fetch, or any external network tools. All information
+    you need is available in the local repository files.
+
+claude-code:
+  binary: claude
+  timeout: 1800
+  # Pinned exact npm package version (see acb/harnesses/claude_code.py's
+  # DEFAULT_VERSION -- this key isn't read by code yet, it's the intended
+  # future override hook; bump both together if you change it).
+  version: "2.1.241"
+  # No --max-turns flag exists in this CLI version (checked --help against
+  # the real 2.1.224 binary) -- `timeout` above (client-side subprocess
+  # kill, see acb/harnesses/_streaming.py) is the only cutoff. `--max-budget-
+  # usd <amount>` is available as a cost-based cutoff instead, wired up via
+  # an optional `max_budget_usd` key here if you want one (see
+  # ClaudeCode.run_container()).
+  system_prompt: *no_internet_prompt
+
+goose:
+  binary: goose
+  timeout: 1800
+  # Cuts off a stuck retry loop (repeating the same failing tool call) rather
+  # than burning the full timeout on it.
+  max_tool_repetitions: 3
+  # Passed via goose's own `--system` flag (separate from the per-instance
+  # task prompt).
+  system_prompt: *no_internet_prompt
+
+opencode:
+  binary: opencode
+  timeout: 1800
+  # Delivered via ~/.config/opencode/AGENTS.md (opencode's global rules file)
+  # rather than a CLI flag -- opencode run has no --append-system-prompt flag
+  # (verified against 1.18.22 --help). See opencode.py run_container().
+  system_prompt: *no_internet_prompt
+
+pi:
+  binary: pi
+  timeout: 1800
+  system_prompt: *no_internet_prompt

@@ -3,8 +3,10 @@
     acb run   --config config/run.requests-1142.yaml
     acb run   --benchmark swebench --harness goose --model mlx-community/Qwen3.8-27B-4bit \
               --run-id demo --limit 1 --proxy praxis
-    acb report runs/<run_id>            # re-aggregate metrics from usage.jsonl
-    acb compare runs/<a> runs/<b> ...   # side-by-side rollups
+    acb report runs/<run_id>                     # re-aggregate metrics from usage.jsonl
+    acb report runs/<run_id> --html              # also write runs/<run_id>/report.html
+    acb report runs/<a> runs/<b> --html          # combined multi-run HTML comparison
+    acb compare runs/<a> runs/<b> ...            # side-by-side rollups (text table)
 """
 
 from __future__ import annotations
@@ -32,10 +34,27 @@ def _cmd_run(args):
 
 
 def _cmd_report(args):
-    from acb.report import build_report
-    run_dir = Path(args.run_dir)
-    report = json.loads((run_dir / "report.json").read_text())
-    print(json.dumps(report, indent=2))
+    run_dirs = [Path(d) for d in args.run_dirs]
+
+    reports = []
+    for run_dir in run_dirs:
+        p = run_dir / "report.json"
+        if p.exists():
+            reports.append(json.loads(p.read_text()))
+
+    if len(reports) == 1:
+        print(json.dumps(reports[0], indent=2))
+    else:
+        print(json.dumps(reports, indent=2))
+
+    if args.html is not None:
+        from acb.html_report import build_html_report
+        if args.html:
+            out_path = Path(args.html)
+        else:
+            out_path = run_dirs[0] / "report.html"
+        out_path.write_text(build_html_report(run_dirs))
+        print(f"html report: {out_path}")
 
 
 def _cmd_compare(args):
@@ -67,8 +86,11 @@ def main(argv=None):
     r.add_argument("--max-workers", type=int, default=4)
     r.set_defaults(func=_cmd_run)
 
-    rp = sub.add_parser("report", help="show a run's report")
-    rp.add_argument("run_dir")
+    rp = sub.add_parser("report", help="show a run's report (one or more runs)")
+    rp.add_argument("run_dirs", nargs="+",
+                    help="one or more run directories; multiple dirs produce a combined report")
+    rp.add_argument("--html", nargs="?", const="", default=None,
+                     help="also write an HTML visualization (default: <first_run_dir>/report.html)")
     rp.set_defaults(func=_cmd_report)
 
     c = sub.add_parser("compare", help="compare multiple runs")

@@ -1,0 +1,138 @@
+# Proxy configuration.
+#
+# Invariant: the harness only ever talks to the proxy; the proxy is the ONLY
+# thing that connects to a model. Model backends -- cloud or local -- are
+# declared here and owned by the proxy. A run names a model (see run.yaml);
+# the proxy resolves it to one of these backends.
+
+# --- Model backends the proxy connects to -------------------------------------
+# api      : the API the *backend* speaks (anthropic | openai).
+#            If it differs from the harness's API, the proxy translates.
+# endpoint : host:port of the model server.
+# tls      : true for https upstreams, false for local http servers.
+# key_env  : env var holding the real provider key; null/omitted for keyless
+#            local servers (no credential injection).
+# reports_cache : whether the backend reports prompt-cache tokens (cloud only).
+models:
+  claude-opus-4-8:
+    api: anthropic
+    endpoint: api.anthropic.com:443
+    tls: true
+    key_env: ANTHROPIC_API_KEY
+    reports_cache: true
+
+  claude-sonnet-4-5:
+    api: anthropic
+    endpoint: api.anthropic.com:443
+    tls: true
+    key_env: ANTHROPIC_API_KEY
+    reports_cache: true
+
+  gpt-4o:
+    api: openai
+    endpoint: api.openai.com:443
+    tls: true
+    key_env: OPENAI_API_KEY
+    reports_cache: false
+
+  # Local model served OpenAI-compatible (vLLM / Ollama / LM Studio).
+  # Keyless, http, no cache reporting -> cache fields recorded as 0.
+  local-qwen:
+    api: openai
+    endpoint: 127.0.0.1:11434
+    tls: false
+    key_env: null
+    reports_cache: false
+
+  # Local vLLM server on localhost:8000. Key must match the model id the
+  # server actually serves (sent verbatim in the request body's "model"
+  # field) -- check with `curl localhost:8000/v1/models`.
+  # Keyless, http, no cache reporting -> cache fields recorded as 0.
+  mlx-community/Qwen3.8-27B-4bit:
+    api: openai
+    endpoint: 127.0.0.1:8000
+    tls: false
+    key_env: null
+    reports_cache: false
+
+  # Same local vLLM server, swapped to a coder/agent-tuned MoE model (30B
+  # total / ~3B active params -- faster per-turn than the dense 27B model
+  # above) that actually matches the `qwen3_coder` tool-call parser the
+  # server is started with. Serve with:
+  #   vllm serve mlx-community/Qwen3-Coder-30B-A3B-Instruct-4bit-dwq-v2 \
+  #     --enable-auto-tool-choice --tool-call-parser qwen3_coder \
+  #     --max-model-len 65536
+  # (--max-model-len caps KV cache to what actually fits in unified memory;
+  # the model's native 262144 context needs more KV cache than this machine
+  # has available at default gpu_memory_utilization.)
+  mlx-community/Qwen3-Coder-30B-A3B-Instruct-4bit-dwq-v2:
+    api: openai
+    endpoint: 127.0.0.1:8000
+    tls: false
+    key_env: null
+    reports_cache: false
+  # FreeToken run model locally.
+  Qwen3.6-35B-A3B-NVFP4:
+    api: openai
+    endpoint: 100.97.130.25:1919
+    tls: false
+    key_env: null
+    reports_cache: false
+
+  # Google Vertex AI Anthropic endpoint.
+  # api: anthropic -- harnesses speak Anthropic Messages; the proxy translates
+  #   the request body (removes `model`, injects `anthropic_version`) and
+  #   rewrites the path to Vertex's rawPredict URL via vertex_anthropic_prepare
+  #   + path_rewrite filters (see acb/proxy/praxis.py build_config()).
+  # key_env: VERTEX_AUTH_TOKEN -- a short-lived GCP OAuth2 Bearer token;
+  #   acb/runner.py fetches it from GOOGLE_APPLICATION_CREDENTIALS before each
+  #   instance and passes it to the praxis container via extra_env.
+  # vertex_model: the Vertex AI model path segment (differs from the proxy
+  #   model key and from the Anthropic API model ID).
+  # Region is read from CLOUD_ML_REGION at build_config() time.
+  # Project is read from GOOGLE_CLOUD_PROJECT at build_config() time.
+  google-vertex-anthropic/claude-haiku-4-5:
+    api: anthropic
+    endpoint: aiplatform.googleapis.com:443
+    tls: true
+    key_env: VERTEX_AUTH_TOKEN
+    reports_cache: true
+    vertex_model: claude-haiku-4-5@20251001
+
+  # From the 4.6 generation onward Anthropic uses dateless IDs on Vertex
+  # (no @YYYYMMDD suffix) -- see Anthropic's model IDs and versioning docs.
+  # vertex_model here is the literal Vertex model path segment sent in the
+  # rawPredict URL; the proxy model key suffix (@default) is our own
+  # convention indicating the Vertex "default version" alias is in use.
+  google-vertex-anthropic/claude-sonnet-4-6@default:
+    api: anthropic
+    endpoint: aiplatform.googleapis.com:443
+    tls: true
+    key_env: VERTEX_AUTH_TOKEN
+    reports_cache: true
+    vertex_model: claude-sonnet-4-6
+
+
+# --- Proxy backends (how usage is captured) -----------------------------------
+backends:
+  praxis:
+    # Container-mode generation (the only mode -- see acb/runner.py) always
+    # runs praxis-ai (https://github.com/praxis-proxy/ai), not this `binary`
+    # -- see acb/proxy/praxis.py's PraxisContainerBackend and
+    # config/benchmarks.yaml's `praxis_ai_repo`. `binary` here only matters
+    # for the host-mode PraxisBackend, which the runner never instantiates
+    # today (dead code path kept for potential future host-mode use).
+    #
+    # access_log + token_count (praxis-ai only; core praxis has no
+    # token_count) lines are parsed into usage records, correlated by
+    # request_id -- see acb/proxy/praxis.py's module docstring for the
+    # live-verified specifics (both harness/backend same-API and, for
+    # claude-code specifically, translated anthropic-harness ->
+    # openai-backend via praxis-ai's anthropic_to_openai chain).
+    binary: /path/to/praxis/binary
+
+  recording:
+    # Zero-dependency stdlib fallback / cross-check. Same-API only
+    # (anthropic harness -> anthropic backend, or openai -> openai);
+    # cross-API translation is Praxis-only.
+    {}

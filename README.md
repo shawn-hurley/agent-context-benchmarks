@@ -33,6 +33,14 @@ literal `docker` binary still works against Podman.
 
 ## Configure
 
+Copy the example configuration files and customize them:
+
+```bash
+cp -r config.example config
+```
+
+Then edit the configuration files:
+
 - `config/proxy.yaml`  — model backends the proxy owns (cloud + local) and proxy backends.
 - `config/harnesses.yaml` — per-harness CLI knobs.
 - `config/benchmarks.yaml` — dataset selection + container-mode settings (image arch, task repo, praxis image source).
@@ -52,17 +60,19 @@ Per instance, a Podman **pod** (shared network namespace) holds two sibling
 containers:
 
 ```
-┌─ pod ──────────────────────────────────────────────┐
-│  testbed container            praxis container      │
-│  (SWE-bench eval image,  ──►  (built from praxis's   │
-│   goose copied in,             own Containerfile)    │
-│   /testbed checkout)                                 │
-│        │                            │                │
-└────────┼────────────────────────────┼────────────────┘
-         │ podman exec                │ host.containers.internal
-         ▼                            ▼
-   goose runs headless          your local model server
-                                 (e.g. vLLM on :8000)
+┌─ pod ──────────────────────────────────────────────────┐
+│  testbed container              praxis-ai container     │
+│  (SWE-bench eval image,   ──►   (built from praxis-ai's  │
+│   harness binary copied in,      own Containerfile)      │
+│   /testbed checkout)                                     │
+│        │                              │                  │
+└────────┼──────────────────────────────┼──────────────────┘
+         │ podman exec                  │ host.containers.internal
+         ▼                              ▼
+   goose or claude-code            your local model server
+   runs headless                   (e.g. vLLM on :8000) --
+                                    or api.anthropic.com,
+                                    translated if needed
 ```
 
 - **Testbed container** — the SWE-bench eval image for that instance, built
@@ -70,26 +80,38 @@ containers:
   Dockerfile per instance) — see `acb/benchmarks/image_builder.py`. Already
   contains a single-branch, future-history-pruned `/testbed` checkout at
   `base_commit` (baked in at image-build time, same anti-leakage guarantee a
-  host-mode clone would need to construct itself). The harness's binary is
-  `podman cp`'d in and run via `podman exec`.
-- **Praxis container** — built once from a checkout of
-  [praxis-proxy/praxis](https://github.com/praxis-proxy/praxis)'s own
-  `Containerfile`, tagged `acb-praxis:latest`, and reused across every
-  instance/run after that.
-- The two containers share a network namespace, so the harness reaches Praxis
-  on plain `127.0.0.1`; Praxis reaches your host's model server via Podman's
-  `host.containers.internal` gateway (gvproxy).
+  host-mode clone would need to construct itself). The harness's own binary
+  is staged in separately by `HarnessAdapter.setup_container()` (each
+  harness's own hook, called after this container starts) and run via
+  `podman exec`.
+- **Praxis-ai container** — built once from a checkout of
+  [praxis-proxy/ai](https://github.com/praxis-proxy/ai)'s own
+  `Containerfile`, tagged `acb-praxis-ai:latest`, and reused across every
+  instance/run after that. Not the core
+  [praxis-proxy/praxis](https://github.com/praxis-proxy/praxis) gateway --
+  praxis-ai is a superset that adds the `token_count` filter (real per-
+  request token accounting) and, for claude-code specifically, an
+  Anthropic↔OpenAI translation chain (`anthropic_messages_format` /
+  `anthropic_to_openai` / `anthropic_stream_events`) that lets an Anthropic-
+  speaking harness target an OpenAI-compatible local model -- see
+  `acb/proxy/praxis.py`'s module docstring for what's actually verified
+  live about both.
+- The two containers share a network namespace, so the harness reaches
+  praxis-ai on plain `127.0.0.1`; praxis-ai reaches your host's model server
+  via Podman's `host.containers.internal` gateway (gvproxy), or the real
+  Anthropic/OpenAI API directly for cloud models.
 - Files move in/out via `podman cp`, not bind mounts: Podman-machine-on-macOS
   doesn't share arbitrary host directories into the VM by default (verified:
   `-v <hostpath>:...` silently fails inside the VM even for paths that exist
   on the Mac host).
 
-Only the `goose` harness supports this today
-(`HarnessAdapter.run_container()`) — it ships a single static-ish Linux
-binary that's trivial to copy into a container. `claude-code`/`opencode`/`pi`
-are stubs (`acb/harnesses/stubs.py`) pending their own port; claude-code's
-`claude` CLI is a Node.js package rather than a standalone binary, so it
-needs more than a binary copy.
+All four harnesses support container-mode today (`HarnessAdapter.run_container()`):
+goose (static release binary), claude-code (standalone native executable in the
+`@anthropic-ai/claude-code-linux-{arm64,x64}` npm package -- *not* a Node.js
+package needing a runtime; see `acb/harnesses/claude_code.py`'s module
+docstring), opencode (standalone binary from GitHub Releases), and pi (same
+pattern). Each binary is downloaded once, cached under `runs/<run_id>/.cache/`,
+and `podman cp`'d into every container for that run.
 
 ## Building the containers
 
@@ -99,18 +121,23 @@ Both images are built automatically the first time they're needed
 that. This section is the manual/by-hand equivalent, useful for
 understanding what's happening or troubleshooting a build failure.
 
-**1. The Praxis image** (`acb-praxis:latest`) — built from a checkout of
-[praxis-proxy/praxis](https://github.com/praxis-proxy/praxis), which ships
-its own multi-stage `Containerfile` (Rust build stage + a minimal Alpine
-runtime stage):
+**1. The praxis-ai image** (`acb-praxis-ai:latest`) — built from a checkout of
+[praxis-proxy/ai](https://github.com/praxis-proxy/ai) (not the core
+[praxis-proxy/praxis](https://github.com/praxis-proxy/praxis) gateway --
+praxis-ai is a superset that also registers core praxis's own filters, plus
+the AI-specific ones this project actually needs: `token_count` for real
+token accounting, and the Anthropic↔OpenAI translation chain for
+claude-code against local models), which ships its own multi-stage
+`Containerfile` (Rust build stage + a minimal Alpine runtime stage
+producing a `praxis-ai` binary, not `praxis`):
 
 ```bash
-git clone https://github.com/praxis-proxy/praxis /path/to/praxis
-podman build --tag acb-praxis:latest --file /path/to/praxis/Containerfile /path/to/praxis
+git clone https://github.com/praxis-proxy/ai /path/to/praxis-ai
+podman build --tag acb-praxis-ai:latest --file /path/to/praxis-ai/Containerfile /path/to/praxis-ai
 ```
 
-Point `config/benchmarks.yaml`'s `swebench.praxis_repo` at that checkout so
-`acb` can (re)build it automatically if the tag is ever missing.
+Point `config/benchmarks.yaml`'s `swebench.praxis_ai_repo` at that checkout
+so `acb` can (re)build it automatically if the tag is ever missing.
 
 **2. A per-instance testbed image** (e.g. `sweb.eval.arm64.psf_1776_requests-1142:latest`)
 — built from that instance's Dockerfile in the public task repo. On
@@ -157,17 +184,21 @@ since some exact pins may have no aarch64 build at all.
 # config/benchmarks.yaml
 swebench:
   image_arch: auto          # auto | amd64 | arm64  (auto = your machine's arch)
-  praxis_repo: /path/to/praxis    # checkout of https://github.com/praxis-proxy/praxis
+  praxis_ai_repo: /path/to/praxis-ai   # checkout of https://github.com/praxis-proxy/ai
 ```
 
-The first run also downloads a Linux `goose` binary into
-`runs/<run_id>/.cache/` (reused across instances in that run).
+The first run for a given harness also downloads that harness's Linux
+binary into `runs/<run_id>/.cache/` (goose's static release binary, or
+claude-code's standalone `@anthropic-ai/claude-code-linux-{arch}` npm
+package -- ~340MB, no `npm`/`node` needed on the host to fetch it) --
+reused across instances in that run.
 
 ## Run
 
 ```bash
 # from a config file
-acb run --config config/run.requests-1142.yaml
+acb run --config config/run.requests-1142.yaml               # goose, local model
+acb run --config config/run.claude-code-requests-1142.yaml   # claude-code, local model (translated)
 
 # or inline
 acb run --benchmark swebench --harness goose \
@@ -176,6 +207,13 @@ acb run --benchmark swebench --harness goose \
 acb report runs/demo                  # show the rollup
 acb compare runs/a runs/b runs/c      # side-by-side across runs
 ```
+
+Note: claude-code only speaks the Anthropic Messages API. Pairing it with an
+`api: openai` model in `proxy.yaml` (like the local vLLM one above) works
+*only* through praxis-ai's translation chain (see "How generation works"
+above) -- pairing it with a real `api: anthropic` model
+(`claude-opus-4-8`/`claude-sonnet-4-5`) needs no translation but does make
+real, billed API calls (`ANTHROPIC_API_KEY` must be set).
 
 A run config can override benchmark/harness/proxy settings without editing
 the shared registry YAMLs, via `overrides` (merged over the registry config
@@ -198,18 +236,25 @@ overrides:
 
 ## Status
 
+- ✅ End-to-end (arm64/Podman, manually verified): SWE-bench × **all four
+  harnesses** (goose, claude-code, opencode, pi) × container-mode generation ×
+  Google Vertex AI Anthropic (`google-vertex-anthropic/claude-haiku-4-5`).
+  `psf__requests-1142` resolves for every harness; per-turn cache token
+  accounting confirmed working (`avg_cache_efficiency` 91–95% across
+  harnesses).
 - ✅ End-to-end (arm64/Podman, manually verified): SWE-bench × goose ×
   container-mode generation, real local vLLM model through a containerized
-  Praxis. `config/run.requests-1142.yaml`.
-- 🚧 `claude-code` / `opencode` / `pi` are stubs -- no container-mode support
-  yet (`run_container()` raises `NotImplementedError`); LiveCodeBench /
-  ScarfBench benchmarks are also stubs.
+  praxis-ai. `config/run.requests-1142.yaml`.
+- ✅ End-to-end (arm64/Podman, manually verified): SWE-bench × claude-code ×
+  container-mode generation, real local vLLM model through praxis-ai's
+  Anthropic↔OpenAI translation chain -- a full real multi-turn tool-calling
+  session (real `Bash`/`Read` calls and results), correct per-turn token
+  accounting throughout. `config/run.claude-code-requests-1142.yaml`.
+- 🚧 LiveCodeBench / ScarfBench benchmarks are stubs.
 - 🚧 The `recording` proxy backend has no container-mode implementation
-  (it's a host subprocess); only `praxis` can be used for real runs today.
+  (it's a host subprocess); only `praxis` (really: praxis-ai, see "How
+  generation works" above) can be used for real runs today.
 - ⚠️ Dataset: use `SWE-bench/SWE-bench_Verified` (the default), not
   `princeton-nlp/SWE-bench_Verified` — the vendored harness (v5.0.2) requires
   per-instance `image`/`eval_script`/`log_parser`/`eval_type` fields the
   princeton-nlp dataset predates and doesn't have.
-- ⚠️ Verify Praxis access-log token field names on a first real run
-  (`TOKEN_FIELD_CANDIDATES` in `acb/proxy/praxis.py`); cross-check against the
-  recording proxy.

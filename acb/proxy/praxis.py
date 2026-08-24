@@ -13,11 +13,12 @@ Praxis writes access-log lines to stdout, which we capture and parse into
 
 NOTE: verified against praxis 0.5.3 (real binary, not just docs):
 
-* Praxis has no built-in Anthropic<->OpenAI translation filter (no
-  ``anthropic_to_openai`` filter exists). Cross-API runs (harness speaks one
-  API, model backend speaks the other) are therefore rejected up front by
-  ``build_config`` -- pick a harness/model pair with matching APIs, or use the
-  ``recording`` backend (also same-API only).
+* Core praxis has no built-in Anthropic<->OpenAI translation filter (no
+  ``anthropic_to_openai`` filter exists there). Cross-API runs (harness
+  speaks one API, model backend speaks the other) are therefore rejected up
+  front by ``build_config`` unless praxis-ai's translation chain applies --
+  see "Anthropic<->OpenAI translation" below. The ``recording`` backend has
+  no translation at all (same-API only, always).
 * There is no ``token_usage_headers`` filter either; token counts are parsed
   straight out of whatever fields real ``access_log`` lines contain (see
   ``TOKEN_FIELD_CANDIDATES`` / ``_extract_tokens`` below -- returns None, i.e.
@@ -52,13 +53,78 @@ binary (not just docs), both real gaps in this alpha software:
   exactly) -- it's just never exposed via headers. Filed upstream; worked
   around here by parsing that DEBUG-level log line directly instead of
   relying on header injection (see ``PraxisContainerBackend`` and
-  ``_TOKEN_USAGE_LOG_RE`` below).
+  ``_TOKEN_USAGE_TARGET`` below).
+* Getting ``token_count``'s DEBUG line to appear at all needs
+  ``runtime.log_overrides`` in the config, not a ``RUST_LOG`` env var:
+  ``RUST_LOG=<target>=debug`` *replaces* the whole filter (no implicit
+  ``info`` fallback for unlisted targets), which silently suppressed
+  ``access_log``'s own normal ``INFO`` output as a side effect (confirmed:
+  0 access_log lines captured with that approach). ``runtime.log_overrides``
+  merges with the default ``info`` base instead of replacing it.
+* Real per-request correlation between ``access_log`` and ``token_count``
+  *is* possible via ``request_id`` -- but only once the ``request_id``
+  filter is actually in the chain (it always is in ``build_config()``'s
+  ``observability`` chain here). Confirmed live, in JSON format:
+  ``access_log``'s own ``fields.request_id`` and ``token_count``'s
+  ``span.request_id`` carry the identical value for the same request.
+
+Anthropic<->OpenAI translation (praxis-ai only, one direction):
+
+praxis-ai (https://github.com/praxis-proxy/ai) ships
+``anthropic_messages_format`` + ``anthropic_to_openai`` + a path rewrite to
+translate an Anthropic Messages-speaking harness onto an OpenAI Chat
+Completions-speaking backend (e.g. claude-code against a local vLLM/Ollama
+server) -- see its own ``examples/configs/anthropic/messages-to-openai.yaml``.
+Only that one direction (``harness_api="anthropic"``, ``model_spec.api=
+"openai"``) is wired up here; the reverse (an OpenAI-speaking harness like
+goose against a real Anthropic backend) isn't implemented since no current
+harness needs it -- ``build_config`` still raises for every other mismatch.
+
+Getting ``token_count`` to see the *untranslated* bytes took care: it must
+run, in response order, *before* ``anthropic_to_openai``/
+``anthropic_stream_events`` rewrite the body into the client's wire shape --
+otherwise it parses the wrong format (configured ``provider`` matches the
+backend's native shape, i.e. ``model_spec.api``) and silently extracts
+nothing. Response-phase hooks run in reverse *declared* order, so this means
+declaring ``token_count`` *after* the translation filters. The non-translated
+path's ``token_count``/``access_log`` pair normally lives in a separate
+``observability`` filter chain that's always declared (and therefore always
+*runs*, response-wise) before ``ai-routing`` -- which would put them on the
+wrong side of the translation filters. For the translated case only,
+``build_config`` instead appends them to the end of ``ai_filters`` itself
+(after the translation filters, before ``load_balancer``), keeping their
+relative order (``token_count`` before ``access_log``, declared-order) that
+avoids the crash bug documented above.
+
+Verified live against the real ``acb-praxis-ai:latest`` image and a real
+local vLLM backend (not just docs): a real ``POST /v1/messages`` (both
+``stream: false`` and ``stream: true``) round-tripped correctly -- real
+Anthropic Messages request in, correctly-shaped Anthropic response
+(non-streaming JSON and ``message_start``/``content_block_delta``/
+``message_stop`` SSE events for streaming) out, with the actual completion
+text intact end to end. ``token_count`` extracted the correct, matching
+counts in both cases (confirmed via its own DEBUG line, correlated to
+``access_log`` by ``request_id``), and ``acb``'s real
+``PraxisContainerBackend._parse_usage_log()`` turned that into correct
+``UsageRecord`` rows.
+
+One real bug found and fixed by this manual test: without scoping the
+translation filters to ``/v1/messages`` via ``conditions``,
+``anthropic_to_openai`` unconditionally wrapped *every* response --
+including a plain ``GET /v1/models`` model-list, which the router also
+sends to the same cluster -- into a bogus, empty Anthropic "message" shape,
+corrupting a response it was never meant to touch. All four translation
+filters (``anthropic_messages_format``, ``anthropic_to_openai``,
+``anthropic_stream_events``, ``path_rewrite``) are scoped to
+``path_prefix: /v1/messages`` in ``build_config`` accordingly; ``GET
+/v1/models`` now passes through untouched, confirmed live.
 """
 
 from __future__ import annotations
 
 import ipaddress
 import json
+import os
 import socket
 import subprocess
 import time
@@ -69,6 +135,7 @@ import yaml
 
 from acb.container import (
     container_cp_in,
+    container_cp_out,
     container_create,
     container_exec_capture,
     container_logs,
@@ -92,26 +159,23 @@ TOKEN_FIELD_CANDIDATES = {
     "cache_creation_tokens": ["cache_creation_input_tokens", "praxis_token_cache_write"],
 }
 
-# The token_count filter's own DEBUG-level lines (only emitted with RUST_LOG
-# including this target; see PraxisContainerBackend.start()) are the one
-# place its extracted counts are actually observable, since
-# token_usage_headers never fires for non-streaming responses (verified
-# live -- see module docstring). PRAXIS_LOG_FORMAT=json (also set in
-# start()) gets this as real JSON instead of the human-readable `tracing`
-# console format (ANSI color codes) core praxis/praxis-ai use by default --
-# confirmed live: `{"level":"DEBUG","fields":{"message":"extracted token
-# usage from JSON response","input":13,"output":2,"total":15},
-# "target":"praxis_ai_filters::token_usage::count"}`.
+# The token_count filter's own DEBUG-level lines (only emitted with
+# `runtime.log_overrides` including this target at debug; see
+# build_container_config()) are the one place its extracted counts are
+# actually observable, since token_usage_headers never fires for
+# non-streaming responses (verified live -- see module docstring).
+# PRAXIS_LOG_FORMAT=json (set in PraxisContainerBackend.start()) gets this
+# as real JSON instead of the human-readable `tracing` console format (ANSI
+# color codes) core praxis/praxis-ai use by default -- confirmed live:
+# `{"level":"DEBUG","fields":{"message":"extracted token usage from JSON
+# response","input":13,"output":2,"total":15},
+# "target":"praxis_ai_filters::token_usage::count","span":{...,
+# "request_id":"..."}}`.
 #
-# No request_id correlation: checked the `http_request` tracing span's own
-# recorded fields directly (otel.name, http.request.method, url.path, ...)
-# -- request_id genuinely isn't one of them, so it can't propagate via span
-# context onto token_count's log line the way it does onto access_log's
-# (which must read it from somewhere else, e.g. filter_metadata, not the
-# span). Correlation here is therefore sequential (turn_index = arrival
-# order), same assumption the rest of this file already makes for CLI
-# harnesses that can't inject correlation headers -- see acb/proxy/base.py.
-_TOKEN_USAGE_TARGET = "praxis_ai_filters::token_usage::count"
+# request_id correlation with access_log's own `fields.request_id` *is*
+# possible via this line's `span.request_id` (confirmed live, identical
+# value for the same request) -- but only because `request_id` is always in
+# build_config()'s `observability` chain here.
 
 
 def _free_port() -> int:
@@ -149,65 +213,210 @@ def build_config(port: int, model_spec, harness_api: str, include_token_count: b
     The proxy exposes the harness's API surface inbound, connects to the single
     model backend outbound, and injects the backend's key (if any).
 
-    Praxis (verified against 0.5.3) has no Anthropic<->OpenAI translation
-    filter, so the harness and backend must speak the same API -- raise early
-    with a clear message instead of generating a config Praxis will reject.
+    Vertex AI Anthropic backends (``model_spec.is_vertex``) use a single
+    filter chain with Vertex-specific filters: ``vertex_anthropic_prepare``
+    (body rewrite), ``headers`` (Host header), path rewrites for rawPredict,
+    and GCP OAuth2 credential injection.
+
+    For all other backends, only one cross-API direction is translatable: an
+    Anthropic-speaking harness (claude-code) against an OpenAI-speaking backend
+    (a local vLLM/Ollama server), via praxis-ai's ``anthropic_messages_format``
+    / ``anthropic_to_openai`` / ``anthropic_stream_events`` filters -- see the
+    module docstring's "Anthropic<->OpenAI translation" section. Every other
+    mismatch (including the reverse direction) still raises early with a
+    clear message instead of generating a config Praxis will reject.
 
     ``include_token_count`` only makes sense for a praxis-ai build (core
     praxis has no such filter and would fail to start on an unknown filter
     name) -- see ``build_container_config()``.
     """
-    if harness_api != model_spec.api:
+    # Fresh list per use -- sharing the same object causes yaml.safe_dump to
+    # emit YAML anchors/aliases (&id001/*id001) which praxis rejects at parse time.
+    def _messages_only() -> list[dict]:
+        return [{"when": {"path_prefix": "/v1/messages"}}]
+
+    if model_spec.is_vertex:
+        # ===== Vertex AI path: single combined filter chain =====
+        project = os.environ.get("GOOGLE_CLOUD_PROJECT", "")
+        region = os.environ.get("CLOUD_ML_REGION", "us-central1")
+        vertex_path = (
+            f"/v1/projects/{project}/locations/{region}"
+            f"/publishers/anthropic/models/{model_spec.vertex_model}:rawPredict"
+        )
+        vertex_models_path = f"/v1/projects/{project}/locations/{region}/models"
+        upstream_host = model_spec.endpoint.rsplit(":", 1)[0]  # aiplatform.googleapis.com
+
+        filters: list[dict] = [
+            {"filter": "access_log", "sample_rate": 1.0},
+            {"filter": "request_id"},
+            # Classify request format and promote routing facts to headers.
+            {"filter": "anthropic_messages_format", "on_invalid": "continue"},
+            # Promote model name to X-Model header for logging/metrics.
+            # Must come BEFORE vertex_anthropic_prepare strips the model field.
+            {"filter": "json_body_field", "field": "model", "header": "X-Model"},
+            {"filter": "model_to_header"},
+            # Body rewrite: remove `model` field and inject anthropic_version.
+            {"filter": "vertex_anthropic_prepare", "conditions": _messages_only()},
+            # Explicitly set the Host header to the upstream hostname.
+            # Without this praxis forwards the client's original Host
+            # (e.g. "127.0.0.1:8080") and Google returns a generic 404.
+            {"filter": "headers", "request_set": [
+                {"name": "Host", "value": upstream_host},
+                # Prevent gzip compression so our SSE filter can parse and
+                # strip vertex_event events from the plain-text response body.
+                # Without this Vertex sends Content-Encoding: gzip and the
+                # filter receives binary bytes it cannot process as UTF-8 SSE.
+                {"name": "Accept-Encoding", "value": "identity"},
+            ]},
+            # Rewrite /v1/messages to the Vertex rawPredict path.
+            {"filter": "path_rewrite", "replace": {
+                "pattern": "^/v1/messages$", "replacement": vertex_path
+            }},
+            {"filter": "path_rewrite", "replace": {
+                "pattern": "^/v1/models$", "replacement": vertex_models_path
+            }, "allow_rewrite_override": True},
+            {"filter": "router", "routes": [
+                {"path_prefix": "/v1/", "cluster": "vertex_ai_global"},
+            ]},
+            # Inject the GCP Bearer token AFTER router selects the cluster.
+            {"filter": "credential_injection", "clusters": [{
+                "name": "vertex_ai_global", "header": "Authorization",
+                "env_var": "GCP_ACCESS_TOKEN", "header_prefix": "Bearer ",
+                "strip_client_credential": True
+            }]},
+        ]
+
+        # Collect comprehensive metrics including all token types, timing, and sizes.
+        # Writes to /tmp/benchmark_metrics.jsonl for direct consumption (no log parsing).
+        # Also strips vertex_event from SSE streams to prevent SDK validation errors.
+        filters.append({"filter": "benchmark_metrics", "conditions": _messages_only()})
+
+        # Create separate cluster dicts to avoid YAML aliases (&id001/*id001)
+        # when yaml.safe_dump sees the same object reused multiple times.
+        filters.append({"filter": "load_balancer", "clusters": [{
+            "name": "vertex_ai_global",
+            "endpoints": ["aiplatform.googleapis.com:443"],
+            "tls": {"sni": "aiplatform.googleapis.com"}
+        }]})
+
+        return {
+            "listeners": [
+                {"name": "acb", "address": f"127.0.0.1:{port}",
+                 "filter_chains": ["vertex_pipeline"]}
+            ],
+            "clusters": [{
+                "name": "vertex_ai_global",
+                "endpoints": ["aiplatform.googleapis.com:443"],
+                "tls": {"sni": "aiplatform.googleapis.com"}
+            }],
+            "filter_chains": [
+                {"name": "vertex_pipeline", "filters": filters}
+            ],
+            "insecure_options": {"allow_private_endpoints": True},
+        }
+
+    # ===== Local model path: separate observability + ai-routing chains =====
+    translate = harness_api != model_spec.api
+    if translate and not (harness_api == "anthropic" and model_spec.api == "openai"):
         raise ValueError(
             f"praxis backend cannot translate {harness_api!r} (harness) <-> "
-            f"{model_spec.api!r} (model {model_spec.name!r}): this Praxis build has "
-            "no anthropic<->openai translation filter. Pick a model whose `api` in "
-            "proxy.yaml matches the harness, or use a harness that speaks the "
-            "model's API."
+            f"{model_spec.api!r} (model {model_spec.name!r}): only "
+            "anthropic-harness -> openai-backend translation is wired up "
+            "(see build_config()'s docstring / the module docstring's "
+            "'Anthropic<->OpenAI translation' section). Pick a model whose "
+            "`api` in proxy.yaml matches the harness, use a harness that "
+            "speaks the model's API, or add the reverse direction."
         )
-    ai_filters: list[dict] = [
-        {"filter": "json_body_field", "field": "model", "header": "X-Model"},
-    ]
+
+    ai_filters: list[dict] = []
+    if translate:
+        # Classifies the incoming Anthropic Messages request and promotes
+        # its `stream` flag to metadata that anthropic_stream_events below
+        # arms itself from later (see that filter's own docs: it activates
+        # automatically off this metadata + a text/event-stream response,
+        # no `response_conditions` needed).
+        ai_filters.append({"filter": "anthropic_messages_format", "on_invalid": "continue",
+                            "conditions": _messages_only()})
+
+    ai_filters.append({"filter": "json_body_field", "field": "model", "header": "X-Model"})
+
+    if translate:
+        # Request-phase: rewrites the Anthropic Messages body into a Chat
+        # Completions-shaped body. Response-phase: transforms a compatible
+        # non-streaming JSON response back; streaming responses are instead
+        # handled chunk-by-chunk by anthropic_stream_events (declared next,
+        # so it runs *before* this filter's own on_response in reverse
+        # order -- matching praxis-ai's own reference example).
+        ai_filters.append({"filter": "anthropic_to_openai", "conditions": _messages_only()})
+        ai_filters.append({"filter": "anthropic_stream_events", "conditions": _messages_only()})
+        # Only rewrite the Anthropic-shaped endpoint -- leave anything else
+        # under /v1/ (there shouldn't be anything else claude-code calls,
+        # but no reason to rewrite a path anthropic_to_openai didn't touch).
+        ai_filters.append({
+            "filter": "path_rewrite",
+            "replace": {"pattern": "^/v1/messages$", "replacement": "/v1/chat/completions"},
+            "conditions": _messages_only(),
+        })
+
+    # Route the whole /v1/ surface to the single backend cluster, not just the
+    # one chat/completions-style endpoint -- harnesses also hit e.g. GET
+    # /v1/models (goose does this at startup for model metadata) which used to
+    # 404 with a narrower single-path route. Router checks the rewritten path
+    # first when path_rewrite set one, which still matches this prefix.
+    ai_filters.append({
+        "filter": "router",
+        "routes": [{"path_prefix": "/v1/", "cluster": "local_model"}],
+    })
 
     # credential injection only for backends that need a key (skip local/keyless)
+    # MUST come AFTER router selects the cluster.
     if model_spec.key_env:
         if model_spec.api == "anthropic":
-            cred = {"name": "model", "header": "x-api-key",
+            cred = {"name": "local_model", "header": "x-api-key",
                     "env_var": model_spec.key_env, "strip_client_credential": True}
         else:
-            cred = {"name": "model", "header": "Authorization", "header_prefix": "Bearer ",
+            cred = {"name": "local_model", "header": "Authorization", "header_prefix": "Bearer ",
                     "env_var": model_spec.key_env, "strip_client_credential": True}
         ai_filters.append({"filter": "credential_injection", "clusters": [cred]})
     else:
         # still strip any client credential so a placeholder key never leaks upstream
         ai_filters.append({"filter": "credential_injection",
-                           "clusters": [{"name": "model", "header": "Authorization",
+                           "clusters": [{"name": "local_model", "header": "Authorization",
                                          "value": "", "strip_client_credential": True}]})
 
-    # Route the whole /v1/ surface to the single backend cluster, not just the
-    # one chat/completions-style endpoint -- harnesses also hit e.g. GET
-    # /v1/models (goose does this at startup for model metadata) which used to
-    # 404 with a narrower single-path route.
-    ai_filters.append({
-        "filter": "router",
-        "routes": [{"path_prefix": "/v1/", "cluster": "model"}],
-    })
-    cluster = {"name": "model", "endpoints": [model_spec.endpoint]}
-    if model_spec.tls:
-        cluster["tls"] = {}
-    ai_filters.append({"filter": "load_balancer", "clusters": [cluster]})
-
-    observability_filters: list[dict] = [{"filter": "request_id"}]
+    # token_count/access_log: for the non-translated case these live in the
+    # separate `observability` chain below (always declared -- and so always
+    # *running*, response-wise -- before `ai-routing`, which is fine since
+    # nothing there mutates the body). For the translated case that ordering
+    # is wrong: token_count needs to see the untranslated (backend-native)
+    # bytes, which means it must run, in response order, *before*
+    # anthropic_to_openai/anthropic_stream_events rewrite them -- i.e.
+    # declared *after* those filters (response hooks run in reverse declared
+    # order). So for `translate`, append them here instead, keeping their
+    # relative order (token_count before access_log) that avoids the
+    # declared-order crash bug documented in the module docstring.
+    trailing_filters: list[dict] = []
     if include_token_count:
-        # Must be declared *before* access_log: response-phase hooks run in
-        # reverse declared order, and token_count + access_log in the wrong
-        # order crashes every POST request (verified live -- see module
-        # docstring). Provider defaults to openai for anything we don't have
-        # a direct mapping for (token_count doesn't support "not tracking
-        # usage", only a fixed provider list).
+        # Provider must match the *backend's* native wire format (what
+        # actually arrives from load_balancer), not the harness's -- that's
+        # model_spec.api regardless of translation.
         provider = model_spec.api if model_spec.api in _TOKEN_COUNT_PROVIDERS else "openai"
-        observability_filters.append({"filter": "token_count", "provider": provider})
-    observability_filters.append({"filter": "access_log", "sample_rate": 1.0})
+        trailing_filters.append({"filter": "token_count", "provider": provider})
+    trailing_filters.append({"filter": "access_log", "sample_rate": 1.0})
+
+    if translate:
+        ai_filters.extend(trailing_filters)
+        observability_filters: list[dict] = [{"filter": "request_id"}]
+    else:
+        observability_filters = [{"filter": "request_id"}, *trailing_filters]
+
+    cluster = {"name": "local_model", "endpoints": [model_spec.endpoint]}
+    if model_spec.tls:
+        # Always set SNI explicitly to the upstream hostname so praxis uses
+        # the correct server name regardless of the incoming Host header.
+        upstream_host = model_spec.endpoint.rsplit(":", 1)[0]
+        cluster["tls"] = {"sni": upstream_host}
+    ai_filters.append({"filter": "load_balancer", "clusters": [cluster]})
 
     config: dict = {
         "listeners": [
@@ -263,6 +472,17 @@ def build_container_config(port: int, model_spec, harness_api: str) -> dict:
     # like. Container-mode always talks back to the host machine by design,
     # so this is always the intended target -- opt in unconditionally.
     config["insecure_options"] = {"allow_private_endpoints": True}
+    # Not a RUST_LOG env var: RUST_LOG=<target>=debug *replaces* the whole
+    # filter (no implicit `info` fallback for unlisted targets), which
+    # silently suppressed access_log's own normal INFO output as a side
+    # effect (confirmed live: 0 access_log lines captured that way).
+    # runtime.log_overrides merges with the default `info` base instead.
+    config["runtime"] = {
+        "log_overrides": {
+            "praxis_filter": "debug",  # All praxis filter activity
+            "praxis_vertex_anthropic::metrics_collector": "debug",  # Metrics collection filter
+        }
+    }
     return config
 
 
@@ -394,32 +614,41 @@ class PraxisContainerBackend(PraxisBackend):
     CONTAINER_PORT = 8080
     HEALTH_TIMEOUT = 20
 
-    def __init__(self, *args, pod: str, image: str, **kwargs):
+    def __init__(self, *args, pod: str, image: str,
+                 extra_env: dict[str, str] | None = None, **kwargs):
         super().__init__(*args, **kwargs)
         self.pod = pod
         self.image = image
         self.container_name = f"{pod}-praxis"
+        # Extra env vars merged into the praxis container's environment at
+        # start() time.  Used to pass Vertex auth tokens (VERTEX_AUTH_TOKEN)
+        # without touching os.environ, which would be a race condition under
+        # max_workers > 1 (multiple do_one() threads share the same process
+        # environment).
+        self._extra_env: dict[str, str] = extra_env or {}
 
     def start(self) -> str:
         workdir = self.usage_path.parent / "praxis" / self.tags.instance_id
         workdir.mkdir(parents=True, exist_ok=True)
         cfg_path = workdir / "praxis.container.yaml"
         self._log_path = workdir / "praxis.container.log"
+        self._metrics_path = workdir / "metrics.jsonl"
         with cfg_path.open("w") as f:
             yaml.safe_dump(
                 build_container_config(self.CONTAINER_PORT, self.model_spec, self.harness_api),
                 f, sort_keys=False,
             )
 
-        # token_count's own extraction only logs at DEBUG (see module
-        # docstring for why this is the only way to actually observe
-        # token counts -- token_usage_headers never fires). RUST_LOG is
-        # scoped to this one target, not a blanket `debug`, since
-        # praxis-ai's core-praxis dependency logs plenty of unrelated
-        # per-connection DEBUG/TRACE noise (mio, pingora) that would
-        # otherwise dominate this file. PRAXIS_LOG_FORMAT=json gets
-        # structured, reliably-parseable lines instead of the human-
-        # readable `tracing` console format (ANSI codes) used by default.
+        # token_count's own extraction only logs at DEBUG, turned on via
+        # `runtime.log_overrides` in the config itself (see
+        # build_container_config()) rather than a RUST_LOG env var -- the
+        # latter replaces the whole log filter (no implicit `info` fallback
+        # for unlisted targets), which would silently suppress access_log's
+        # own normal INFO output as a side effect (confirmed live). This
+        # env only needs the JSON format switch, for structured,
+        # reliably-parseable lines instead of the human-readable `tracing`
+        # console format (ANSI codes) used by default.
+        #
         # praxis-ai's own image has a bare `ENTRYPOINT ["praxis-ai"]` -- no
         # baked-in config path (unlike core praxis's image, which COPYs a
         # default config and needs no command args at all). Without this,
@@ -433,10 +662,7 @@ class PraxisContainerBackend(PraxisBackend):
         container_create(
             self.pod, self.image, self.container_name,
             command=["-c", "/etc/praxis/config.yaml"],
-            env={
-                "RUST_LOG": "praxis_ai_filters::token_usage=debug",
-                "PRAXIS_LOG_FORMAT": "json",
-            },
+            env={"PRAXIS_LOG_FORMAT": "json", **self._extra_env},
         )
         container_cp_in(self.container_name, cfg_path, "/etc/praxis/config.yaml")
         container_start(self.container_name)
@@ -450,14 +676,33 @@ class PraxisContainerBackend(PraxisBackend):
         # real routing bug unless the actual route is exercised. Polling a
         # real request through the configured route (not just the listener
         # socket) means "started" actually means "ready to route".
+        #
+        # Health check accepts any HTTP response body (including 4xx) as
+        # "ready": a response body confirms praxis is up, config is loaded,
+        # and the route is active. Only connection-level failures (refused,
+        # timeout) trigger a retry.
+        #
+        # This is necessary for Vertex AI backends: aiplatform.googleapis.com
+        # has no /v1/models endpoint and always returns HTTP 404, which is a
+        # legitimate "ready" signal (praxis connected, TLS succeeded, upstream
+        # responded). Busybox wget exits non-zero on HTTP 4xx, so the old
+        # plain-wget check would retry until timeout for every Vertex run.
+        #
+        # `wget -qO- ... 2>/dev/null | grep -q .` exits 0 when the response
+        # contains any bytes (direct Anthropic: 200 body; Vertex: 404 body;
+        # TLS error body from praxis itself) and non-zero only when there is
+        # no response at all (connection refused, TCP timeout) -- i.e. praxis
+        # isn't up yet.
         deadline = time.time() + self.HEALTH_TIMEOUT
         started = False
         while time.time() < deadline:
             try:
                 container_exec_capture(
                     self.container_name,
-                    ["wget", "-qO-", "--timeout=2",
-                     f"http://127.0.0.1:{self.CONTAINER_PORT}/v1/models"],
+                    ["sh", "-c",
+                     f"wget -qO- --timeout=2 "
+                     f"http://127.0.0.1:{self.CONTAINER_PORT}/v1/models "
+                     f"2>/dev/null | grep -q ."],
                 )
                 started = True
                 break
@@ -478,37 +723,39 @@ class PraxisContainerBackend(PraxisBackend):
 
     def stop(self) -> None:
         self._log_path.write_text(container_logs(self.container_name))
+        
+        # Copy metrics file from container
+        try:
+            container_cp_out(self.container_name, "/tmp/benchmark_metrics.jsonl", self._metrics_path)
+        except Exception as e:
+            print(f"[metrics] warning: failed to copy metrics file: {e}", flush=True)
+        
         container_stop_rm(self.container_name)
-        self._parse_token_usage_log()
+        self._read_metrics_file()
 
-    def _parse_token_usage_log(self) -> None:
-        """Parse token_count's DEBUG log lines (JSON, via PRAXIS_LOG_FORMAT)
-        into UsageRecords -- not access_log (it has no field for arbitrary
-        filter metadata) and not token_usage_headers (never fires for
-        non-streaming responses); see module docstring for both.
+    def _read_metrics_file(self) -> None:
+        """Read metrics JSONL file written by benchmark_metrics filter.
+
+        Each line is a serialized BenchmarkMetric JSON object with all token
+        types normalized and populated by the Rust filter. No log parsing needed.
+        All token types (including cache_read_tokens and cache_creation_tokens)
+        are now properly captured from Vertex responses.
         """
-        if not getattr(self, "_log_path", None) or not self._log_path.exists():
+        if not getattr(self, "_metrics_path", None) or not self._metrics_path.exists():
+            print(f"[metrics] warning: metrics file not found at {self._metrics_path}", flush=True)
             return
+
         records: list[UsageRecord] = []
-        turn = 0
-        for line in self._log_path.read_text(errors="replace").splitlines():
+        for turn, line in enumerate(self._metrics_path.read_text(errors="replace").splitlines()):
             line = line.strip()
-            if not line or not line.startswith("{"):
+            if not line:
                 continue
             try:
-                entry = json.loads(line)
-            except json.JSONDecodeError:
+                metric = json.loads(line)
+            except json.JSONDecodeError as e:
+                print(f"[metrics] warning: failed to parse metrics line: {e}", flush=True)
                 continue
-            if entry.get("target") != _TOKEN_USAGE_TARGET:
-                continue
-            fields = entry.get("fields", {})
-            if "input" not in fields and "output" not in fields:
-                continue
-            input_tokens = int(fields.get("input", 0))
-            output_tokens = int(fields.get("output", 0))
-            if "total" in fields and int(fields["total"]) != input_tokens + output_tokens:
-                print(f"[praxis-ai] warning: token_count total={fields['total']} != "
-                      f"input+output={input_tokens + output_tokens}", flush=True)
+
             records.append(
                 UsageRecord(
                     run_id=self.tags.run_id,
@@ -517,10 +764,17 @@ class PraxisContainerBackend(PraxisBackend):
                     model=self.tags.model,
                     instance_id=self.tags.instance_id,
                     turn_index=turn,
-                    input_tokens=input_tokens,
-                    output_tokens=output_tokens,
+                    input_tokens=metric.get("input_tokens", 0),
+                    output_tokens=metric.get("output_tokens", 0),
+                    cache_read_tokens=metric.get("cache_read_input_tokens", 0),
+                    cache_creation_tokens=metric.get("cache_creation_input_tokens", 0),
+                    request_id=metric.get("request_id"),
+                    endpoint=metric.get("endpoint"),
+                    status_code=metric.get("status_code"),
+                    duration_ms=metric.get("duration_ms"),
+                    ts=metric.get("timestamp_ms", 0) / 1000.0 if metric.get("timestamp_ms") else None,
                     source="praxis-ai",
                 )
             )
-            turn += 1
+
         write_records(self.usage_path, records)
