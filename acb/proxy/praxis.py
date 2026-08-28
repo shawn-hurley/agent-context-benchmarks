@@ -201,12 +201,6 @@ def _is_private_endpoint(endpoint: str) -> bool:
     return ip.is_loopback or ip.is_private
 
 
-# praxis-ai's token_count filter: openai | anthropic | google | bedrock |
-# bedrock_invoke_model | azure. Our two supported harness/model APIs map
-# directly onto its first two.
-_TOKEN_COUNT_PROVIDERS = {"openai", "anthropic"}
-
-
 def build_config(port: int, model_spec, harness_api: str, include_token_count: bool = False) -> dict:
     """Generate a Praxis config for one model backend the proxy owns.
 
@@ -226,9 +220,9 @@ def build_config(port: int, model_spec, harness_api: str, include_token_count: b
     mismatch (including the reverse direction) still raises early with a
     clear message instead of generating a config Praxis will reject.
 
-    ``include_token_count`` only makes sense for a praxis-ai build (core
-    praxis has no such filter and would fail to start on an unknown filter
-    name) -- see ``build_container_config()``.
+    ``include_token_count`` enables the ``benchmark_metrics`` filter which only
+    makes sense for a praxis-ai build (core praxis has no such filter and would
+    fail to start on an unknown filter name) -- see ``build_container_config()``.
     """
     # Fresh list per use -- sharing the same object causes yaml.safe_dump to
     # emit YAML anchors/aliases (&id001/*id001) which praxis rejects at parse time.
@@ -384,24 +378,24 @@ def build_config(port: int, model_spec, harness_api: str, include_token_count: b
                            "clusters": [{"name": "local_model", "header": "Authorization",
                                          "value": "", "strip_client_credential": True}]})
 
-    # token_count/access_log: for the non-translated case these live in the
+    # benchmark_metrics/access_log: for the non-translated case these live in the
     # separate `observability` chain below (always declared -- and so always
     # *running*, response-wise -- before `ai-routing`, which is fine since
     # nothing there mutates the body). For the translated case that ordering
-    # is wrong: token_count needs to see the untranslated (backend-native)
+    # is wrong: benchmark_metrics needs to see the untranslated (backend-native)
     # bytes, which means it must run, in response order, *before*
     # anthropic_to_openai/anthropic_stream_events rewrite them -- i.e.
     # declared *after* those filters (response hooks run in reverse declared
     # order). So for `translate`, append them here instead, keeping their
-    # relative order (token_count before access_log) that avoids the
-    # declared-order crash bug documented in the module docstring.
+    # relative order (benchmark_metrics before access_log).
     trailing_filters: list[dict] = []
     if include_token_count:
-        # Provider must match the *backend's* native wire format (what
-        # actually arrives from load_balancer), not the harness's -- that's
-        # model_spec.api regardless of translation.
-        provider = model_spec.api if model_spec.api in _TOKEN_COUNT_PROVIDERS else "openai"
-        trailing_filters.append({"filter": "token_count", "provider": provider})
+        # Use benchmark_metrics for comprehensive token tracking across all backends.
+        # Writes to /tmp/benchmark_metrics.jsonl for reliable file-based collection.
+        # Handles both OpenAI and Anthropic response formats automatically,
+        # captures all token types (input, output, cache_read, cache_creation),
+        # and includes timing/size data. Much more reliable than parsing logs.
+        trailing_filters.append({"filter": "benchmark_metrics"})
     trailing_filters.append({"filter": "access_log", "sample_rate": 1.0})
 
     if translate:
@@ -492,7 +486,9 @@ class PraxisBackend(ProxyBackend):
     def start(self) -> str:
         binary = self.config.get("binary", "praxis")
         port = _free_port()
-        workdir = self.usage_path.parent / "praxis" / self.tags.instance_id
+        # usage_path is already instances/{test_id}/usage.jsonl
+        # So usage_path.parent is the per-instance directory
+        workdir = self.usage_path.parent
         workdir.mkdir(parents=True, exist_ok=True)
         cfg_path = workdir / "praxis.yaml"
         self._log_path = workdir / "praxis.stdout.jsonl"
@@ -628,18 +624,20 @@ class PraxisContainerBackend(PraxisBackend):
         self._extra_env: dict[str, str] = extra_env or {}
 
     def start(self) -> str:
-        workdir = self.usage_path.parent / "praxis" / self.tags.instance_id
+        # usage_path is already instances/{test_id}/usage.jsonl
+        # So usage_path.parent is the per-instance directory - use it directly
+        workdir = self.usage_path.parent
         workdir.mkdir(parents=True, exist_ok=True)
         cfg_path = workdir / "praxis.container.yaml"
         self._log_path = workdir / "praxis.container.log"
-        self._metrics_path = workdir / "metrics.jsonl"
+        self._metrics_path = workdir / "benchmark_metrics.jsonl"
         with cfg_path.open("w") as f:
             yaml.safe_dump(
                 build_container_config(self.CONTAINER_PORT, self.model_spec, self.harness_api),
                 f, sort_keys=False,
             )
 
-        # token_count's own extraction only logs at DEBUG, turned on via
+        # benchmark_metrics and other debug logging is enabled via
         # `runtime.log_overrides` in the config itself (see
         # build_container_config()) rather than a RUST_LOG env var -- the
         # latter replaces the whole log filter (no implicit `info` fallback

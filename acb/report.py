@@ -19,6 +19,26 @@ from pathlib import Path
 from acb.usage import InstanceMetrics, read_records
 
 
+def aggregate_per_instance_files(harness_out_dir: Path) -> None:
+    """Aggregate per-instance usage files into combined usage.jsonl for backwards compatibility.
+    
+    Note: predictions.jsonl is aggregated by benchmark.evaluate()
+    Note: metrics.jsonl is written by build_report() after updating with resolved status
+    """
+    instances_dir = harness_out_dir / "instances"
+    if not instances_dir.exists():
+        return
+    
+    # Aggregate usage
+    usage_path = harness_out_dir / "usage.jsonl"
+    with usage_path.open("w") as f:
+        for instance_dir in sorted(instances_dir.iterdir()):
+            if instance_dir.is_dir():
+                instance_usage = instance_dir / "usage.jsonl"
+                if instance_usage.exists():
+                    f.write(instance_usage.read_text())
+
+
 def build_report(usage_path: Path, resolved: dict[str, bool], out_dir: Path, cfg) -> Path:
     by_instance: dict[str, list] = defaultdict(list)
     if Path(usage_path).exists():
@@ -42,6 +62,14 @@ def build_report(usage_path: Path, resolved: dict[str, bool], out_dir: Path, cfg
     with metrics_path.open("w") as f:
         for m in metrics:
             f.write(json.dumps(asdict(m), separators=(",", ":")) + "\n")
+    
+    # Also update per-instance metrics files with resolved status
+    instances_dir = Path(out_dir) / "instances"
+    if instances_dir.exists():
+        for m in metrics:
+            instance_metrics_path = instances_dir / m.instance_id / "metrics.json"
+            if instance_metrics_path.exists():
+                instance_metrics_path.write_text(json.dumps(asdict(m), indent=2))
 
     n = len(metrics) or 1
     resolved_n = sum(1 for m in metrics if m.resolved)

@@ -191,7 +191,8 @@ class Goose(HarnessAdapter):
             "--workdir", workdir, container,
             "bash", "-c", f"{preamble}exec {inner}",
         ]
-        transcript_path = Path(out_dir) / "goose" / instance_id / "transcript.jsonl"
+        # out_dir is now the per-instance directory (instances/{test_id}/)
+        transcript_path = Path(out_dir) / "transcript.jsonl"
         label = f"[goose:{instance_id}]"
         timeout = self.config.get("timeout", 1800)
         return execute(exec_cmd, env=None, cwd=None, transcript_path=transcript_path,

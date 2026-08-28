@@ -23,13 +23,16 @@ import traceback
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
+from dataclasses import asdict
+
 from acb.benchmarks import make_benchmark, Prediction
 from acb.config import RunConfig, Registries
 from acb.container import build_image, container_stop_rm, image_exists, pod_create, pod_remove
 from acb.harnesses import make_harness
 from acb.proxy import ProxyTags
 from acb.proxy.praxis import PraxisContainerBackend
-from acb.report import build_report
+from acb.report import aggregate_per_instance_files, build_report
+from acb.usage import InstanceMetrics, read_records
 
 # praxis-ai, not core praxis: only praxis-ai has the `token_count` filter
 # that computes real per-request token usage -- see acb/proxy/praxis.py's
@@ -43,6 +46,34 @@ PRAXIS_IMAGE_DEFAULT = "acb-praxis-ai:latest"
 _REPO_ROOT = Path(__file__).parent.parent
 
 _ARCH_MAP = {"arm64": "arm64", "aarch64": "arm64", "x86_64": "amd64", "amd64": "amd64"}
+
+
+def _write_per_instance_prediction(prediction: Prediction, instance_dir: Path) -> None:
+    """Write a single prediction to its instance directory immediately."""
+    pred_path = instance_dir / "prediction.json"
+    pred_path.write_text(json.dumps({
+        "instance_id": prediction.instance_id,
+        "model_name_or_path": prediction.model_name_or_path,
+        "model_patch": prediction.model_patch or "",
+    }, indent=2))
+
+
+def _write_per_instance_metrics(instance_dir: Path, cfg) -> None:
+    """Compute and write metrics for a single instance."""
+    usage_path = instance_dir / "usage.jsonl"
+    if not usage_path.exists():
+        return  # No usage data (test may have errored before making requests)
+    
+    records = list(read_records(usage_path))
+    if not records:
+        return
+    
+    metrics = InstanceMetrics.from_records(records)
+    # Note: resolved status not known yet (evaluation hasn't run)
+    # Will be updated later by build_report()
+    
+    metrics_path = instance_dir / "metrics.json"
+    metrics_path.write_text(json.dumps(asdict(metrics), indent=2))
 
 
 def _resolve_arch(bench_cfg: dict) -> str:
@@ -148,7 +179,8 @@ def _run_single_harness(
     """
     harness_cfg = {**registries.harnesses.get(harness_name, {}), **cfg.overrides.get("harness", {})}
     harness_out_dir.mkdir(parents=True, exist_ok=True)
-    usage_path = harness_out_dir / "usage.jsonl"
+    instances_dir = harness_out_dir / "instances"
+    instances_dir.mkdir(exist_ok=True)
 
     print(f"[acb]   {harness_name}: {len(instances)} instances")
 
@@ -160,6 +192,11 @@ def _run_single_harness(
         (Podman's gvproxy host gateway); the harness reaches Praxis via the
         pod's shared loopback. See acb/proxy/praxis.py, acb/container.py.
         """
+        # Create per-instance directory for all this instance's data
+        instance_dir = instances_dir / instance.instance_id
+        instance_dir.mkdir(exist_ok=True)
+        usage_path = instance_dir / "usage.jsonl"
+        
         arch = _resolve_arch(bench_cfg)
         build_dir = harness_out_dir / "image_build"
 
@@ -196,7 +233,7 @@ def _run_single_harness(
             # Harness-specific asset staging (e.g. goose's binary,
             # claude-code's) is the harness's own job now, not the
             # benchmark's -- see HarnessAdapter.setup_container().
-            harness.setup_container(testbed_container, arch, harness_out_dir)
+            harness.setup_container(testbed_container, arch, instance_dir)
             tags = ProxyTags(
                 run_id=cfg.run_id, benchmark=cfg.benchmark, harness=harness_name,
                 model=cfg.model, instance_id=instance.instance_id,
@@ -221,11 +258,27 @@ def _run_single_harness(
                 env = harness.build_container_env(praxis_backend.base_url, praxis_backend.api_key)
                 harness.run_container(
                     instance.prompt, testbed_container, cfg.model, env,
-                    harness_out_dir, instance.instance_id,
+                    instance_dir, instance.instance_id,
                 )
-            return benchmark.collect_prediction_container(instance, testbed_container, cfg.model)
+            prediction = benchmark.collect_prediction_container(instance, testbed_container, cfg.model)
+            
+            # Write per-instance files immediately for visibility during long runs
+            _write_per_instance_prediction(prediction, instance_dir)
+            _write_per_instance_metrics(instance_dir, cfg)
+            
+            return prediction
         except Exception as e:  # noqa: BLE001
+            tb = traceback.format_exc()
             traceback.print_exc()
+            
+            # Write error to per-instance directory for easy debugging
+            error_path = instance_dir / "error.json"
+            error_path.write_text(json.dumps({
+                "instance_id": instance.instance_id,
+                "error": str(e),
+                "traceback": tb
+            }, indent=2))
+            
             return Prediction(instance_id=instance.instance_id,
                               model_name_or_path=cfg.model, error=str(e))
         finally:
@@ -301,6 +354,9 @@ def run(cfg: RunConfig, registries: Registries | None = None) -> Path:
             harness_name, harness_out_dir, cfg, registries, benchmark, instances,
             bench_cfg, model_spec, proxy_cfg,
         )
+        
+        # Aggregate per-instance files into combined files for backwards compatibility
+        aggregate_per_instance_files(harness_out_dir)
         
         # Build per-harness report
         usage_path = harness_out_dir / "usage.jsonl"

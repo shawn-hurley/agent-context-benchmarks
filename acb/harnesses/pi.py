@@ -324,7 +324,8 @@ class Pi(HarnessAdapter):
             "--workdir", "/testbed", container,
             "bash", "-c", f"{activate} && exec {inner}",
         ]
-        transcript_path = Path(out_dir) / "pi" / instance_id / "transcript.jsonl"
+        # out_dir is now the per-instance directory (instances/{test_id}/)
+        transcript_path = Path(out_dir) / "transcript.jsonl"
         label = f"[pi:{instance_id}]"
         timeout = self.config.get("timeout", 1800)
         return execute(exec_cmd, env=None, cwd=None, transcript_path=transcript_path,

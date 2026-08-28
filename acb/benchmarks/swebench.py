@@ -214,13 +214,27 @@ class SWEBench(Benchmark):
 
     def evaluate(self, predictions, run_id, output_dir) -> dict[str, bool]:
         preds_path = Path(output_dir) / "predictions.jsonl"
-        with preds_path.open("w") as f:
-            for p in predictions:
-                f.write(json.dumps({
-                    "instance_id": p.instance_id,
-                    "model_name_or_path": p.model_name_or_path,
-                    "model_patch": p.model_patch or "",
-                }) + "\n")
+        
+        # Check if using per-instance structure
+        instances_dir = Path(output_dir) / "instances"
+        if instances_dir.exists():
+            # Aggregate from per-instance files
+            with preds_path.open("w") as f:
+                for instance_dir in sorted(instances_dir.iterdir()):
+                    if instance_dir.is_dir():
+                        pred_file = instance_dir / "prediction.json"
+                        if pred_file.exists():
+                            pred = json.loads(pred_file.read_text())
+                            f.write(json.dumps(pred) + "\n")
+        else:
+            # Legacy: write from predictions list
+            with preds_path.open("w") as f:
+                for p in predictions:
+                    f.write(json.dumps({
+                        "instance_id": p.instance_id,
+                        "model_name_or_path": p.model_name_or_path,
+                        "model_patch": p.model_patch or "",
+                    }) + "\n")
 
         dataset = self.config.get("dataset", DEFAULT_DATASET)
         swebench_python = _ensure_swebench_venv()
