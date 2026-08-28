@@ -71,7 +71,36 @@ def platform_for(arch: str) -> str:
     raise ValueError(f"unsupported arch {arch!r}")
 
 
-def fetch_dockerfile(instance_id: str, task_repo: str = TASK_REPO, ref: str = "main") -> str:
+def fetch_dockerfile(
+    instance_id: str,
+    task_repo: str = TASK_REPO,
+    ref: str = "main",
+    task_repo_cache_dir: str | None = None,
+) -> str:
+    """Fetch the Dockerfile for ``instance_id`` from the task repo.
+
+    If ``task_repo_cache_dir`` is set (swebench.task_repo_cache_dir in
+    benchmarks.yaml), reads from a local clone of the task repo first,
+    falling back to the raw.githubusercontent.com URL only if the file is
+    absent in the local clone.  This avoids per-instance GitHub fetches when
+    a local checkout is available -- useful for air-gapped environments or
+    when running many instances in batch.
+
+    ``task_repo_cache_dir`` should be the root of a checkout of
+    https://github.com/SWE-bench/swe-bench-tasks (the directory that contains
+    a ``tasks/`` subdirectory with per-instance Dockerfiles).
+    """
+    if task_repo_cache_dir:
+        local_path = (
+            Path(task_repo_cache_dir) / "tasks" / instance_id / "Dockerfile"
+        )
+        if local_path.exists():
+            return local_path.read_text(encoding="utf-8")
+        print(
+            f"[image] {local_path} not in local task repo cache; "
+            "falling back to GitHub fetch",
+            flush=True,
+        )
     url = f"https://raw.githubusercontent.com/{task_repo}/{ref}/tasks/{instance_id}/Dockerfile"
     with urllib.request.urlopen(url, timeout=30) as resp:  # noqa: S310
         return resp.read().decode("utf-8")
@@ -116,6 +145,7 @@ def ensure_instance_image(
     task_repo: str = TASK_REPO,
     force_rebuild: bool = False,
     eval_alias: str | None = None,
+    task_repo_cache_dir: str | None = None,
 ) -> str:
     """Return the local image name for ``instance_id``, building it if needed.
 
@@ -138,7 +168,8 @@ def ensure_instance_image(
         return name
 
     print(f"[image] building {name} (arch={arch}) ...", flush=True)
-    dockerfile = fetch_dockerfile(instance_id, task_repo)
+    dockerfile = fetch_dockerfile(instance_id, task_repo,
+                                  task_repo_cache_dir=task_repo_cache_dir)
     dockerfile = patch_dockerfile_for_arch(dockerfile, arch)
 
     context_dir = build_dir / instance_id

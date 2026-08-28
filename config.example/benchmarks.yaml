@@ -27,16 +27,17 @@ swebench:
   # still stubs pending their own container port (acb/harnesses/stubs.py).
   image_arch: auto                 # auto | amd64 | arm64 (auto = host arch)
   task_repo: SWE-bench/swe-bench-tasks   # source of per-instance Dockerfiles
-  # Local checkout of https://github.com/praxis-proxy/ai (has a
-  # Containerfile) -- built once into `acb-praxis-ai:latest` and reused
-  # across instances/runs. Only read if that image doesn't already exist.
+  # The praxis-ai image (acb-praxis-ai:latest) is built automatically from
+  # the Containerfile at the repo root when the image is absent.  That
+  # Containerfile is self-contained: it clones praxis-proxy/ai at a pinned
+  # commit and compiles the praxis-vertex-anthropic filter in -- no external
+  # checkout required.
   #
-  # praxis-ai, not core praxis: only praxis-ai has the `token_count` filter
-  # that computes real per-request token usage (core praxis has no such
-  # filter at all -- see acb/proxy/praxis.py's module docstring for the real,
-  # live-verified gaps in praxis-ai's own token-usage-exposure mechanisms
-  # that acb works around).
-  praxis_ai_repo: /Users/shurley/repos/research-llm-cost/ai
+  # praxis_ai_repo is an optional override for development: point it at a
+  # local checkout of https://github.com/praxis-proxy/ai (must have its own
+  # Containerfile) to build from a modified upstream tree instead.
+  #
+  # praxis_ai_repo: /path/to/praxis-proxy/ai
 
 livecodebench:
   # stub -- see acb/benchmarks/stubs.py

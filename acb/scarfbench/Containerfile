@@ -1,0 +1,31 @@
+# Base image for ScarfBench generation runs.
+#
+# ScarfBench apps are Java/Maven projects (Jakarta EE, Quarkus, Spring).
+# JDK 17 covers all three frameworks; Maven resolves per-project deps at
+# build time from pom.xml so no per-instance env management (like SWE-bench's
+# conda) is needed.
+#
+# goose is NOT baked in here -- Goose.setup_container() downloads and
+# copies the per-arch Linux binary per-instance, same as for SWE-bench.
+#
+# Built once into `scarfbench:latest` by _ensure_scarfbench_image() in
+# acb/benchmarks/scarfbench.py; reused across all instances/runs.
+
+FROM registry.fedoraproject.org/fedora:41
+
+RUN dnf install -y \
+        java-17-openjdk-devel \
+        maven \
+        git \
+        procps-ng \
+    && dnf clean all
+
+# Global git identity so `git commit` inside the container doesn't fail.
+RUN git config --global user.email "acb@bench" \
+ && git config --global user.name "acb"
+
+# goose will be copied to /usr/local/bin/goose by Goose.setup_container().
+# /work is the directory where source code lives and goose edits in place.
+WORKDIR /work
+
+CMD ["sleep", "infinity"]

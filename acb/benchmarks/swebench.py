@@ -152,6 +152,7 @@ class SWEBench(Benchmark):
         image = ensure_instance_image(
             instance.instance_id, arch, build_dir,
             eval_alias=instance.extra.get("image"),
+            task_repo_cache_dir=self.config.get("task_repo_cache_dir"),
         )
         container_name = f"{pod}-testbed"
         container_create(pod, image, container_name, command=["sleep", "infinity"])

@@ -62,8 +62,8 @@ containers:
 ```
 ┌─ pod ──────────────────────────────────────────────────┐
 │  testbed container              praxis-ai container     │
-│  (SWE-bench eval image,   ──►   (built from praxis-ai's  │
-│   harness binary copied in,      own Containerfile)      │
+│  (SWE-bench eval image,   ──►   (built from this repo's  │
+│   harness binary copied in,      Containerfile)          │
 │   /testbed checkout)                                     │
 │        │                              │                  │
 └────────┼──────────────────────────────┼──────────────────┘
@@ -84,10 +84,11 @@ containers:
   is staged in separately by `HarnessAdapter.setup_container()` (each
   harness's own hook, called after this container starts) and run via
   `podman exec`.
-- **Praxis-ai container** — built once from a checkout of
-  [praxis-proxy/ai](https://github.com/praxis-proxy/ai)'s own
-  `Containerfile`, tagged `acb-praxis-ai:latest`, and reused across every
-  instance/run after that. Not the core
+- **Praxis-ai container** — built once from the `Containerfile` at the root
+  of this repo (which clones [praxis-proxy/ai](https://github.com/praxis-proxy/ai)
+  at a pinned commit and compiles our custom filter in), tagged
+  `acb-praxis-ai:latest`, and reused across every instance/run after that.
+  Not the core
   [praxis-proxy/praxis](https://github.com/praxis-proxy/praxis) gateway --
   praxis-ai is a superset that adds the `token_count` filter (real per-
   request token accounting) and, for claude-code specifically, an
@@ -121,23 +122,24 @@ Both images are built automatically the first time they're needed
 that. This section is the manual/by-hand equivalent, useful for
 understanding what's happening or troubleshooting a build failure.
 
-**1. The praxis-ai image** (`acb-praxis-ai:latest`) — built from a checkout of
-[praxis-proxy/ai](https://github.com/praxis-proxy/ai) (not the core
-[praxis-proxy/praxis](https://github.com/praxis-proxy/praxis) gateway --
-praxis-ai is a superset that also registers core praxis's own filters, plus
-the AI-specific ones this project actually needs: `token_count` for real
-token accounting, and the Anthropic↔OpenAI translation chain for
-claude-code against local models), which ships its own multi-stage
-`Containerfile` (Rust build stage + a minimal Alpine runtime stage
-producing a `praxis-ai` binary, not `praxis`):
+**1. The praxis-ai image** (`acb-praxis-ai:latest`) — built from the
+`Containerfile` at the root of this repo.  It is self-contained: the build
+clones [praxis-proxy/ai](https://github.com/praxis-proxy/ai) at a pinned
+commit and compiles the `praxis-vertex-anthropic` filter directly into the
+binary — no separate checkout required.  praxis-ai is a superset of the core
+[praxis-proxy/praxis](https://github.com/praxis-proxy/praxis) gateway that
+adds the AI-specific filters this project needs: `token_count` for real token
+accounting, the Anthropic↔OpenAI translation chain for claude-code against
+local models, and our custom `vertex_anthropic_prepare` / `benchmark_metrics`
+filters (see `praxis-vertex-anthropic/`).
 
 ```bash
-git clone https://github.com/praxis-proxy/ai /path/to/praxis-ai
-podman build --tag acb-praxis-ai:latest --file /path/to/praxis-ai/Containerfile /path/to/praxis-ai
+podman build --tag acb-praxis-ai:latest .
 ```
 
-Point `config/benchmarks.yaml`'s `swebench.praxis_ai_repo` at that checkout
-so `acb` can (re)build it automatically if the tag is ever missing.
+`acb` builds and tags this image automatically the first time it is needed;
+the manual command above is only necessary to force a rebuild (e.g. after
+updating the filter source in `praxis-vertex-anthropic/`).
 
 **2. A per-instance testbed image** (e.g. `sweb.eval.arm64.psf_1776_requests-1142:latest`)
 — built from that instance's Dockerfile in the public task repo. On
@@ -184,7 +186,9 @@ since some exact pins may have no aarch64 build at all.
 # config/benchmarks.yaml
 swebench:
   image_arch: auto          # auto | amd64 | arm64  (auto = your machine's arch)
-  praxis_ai_repo: /path/to/praxis-ai   # checkout of https://github.com/praxis-proxy/ai
+  # praxis_ai_repo is optional -- only needed if you want to build from a
+  # local checkout of https://github.com/praxis-proxy/ai instead of the
+  # self-contained Containerfile at the repo root.
 ```
 
 The first run for a given harness also downloads that harness's Linux

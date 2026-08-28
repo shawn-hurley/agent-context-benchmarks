@@ -166,26 +166,30 @@ class Goose(HarnessAdapter):
         exec_cmd = ["podman", "exec", "-i"]
         for key, value in env.items():
             exec_cmd += ["-e", f"{key}={value}"]
-        # SWE-bench's own eval.sh activates the instance's conda env
-        # (`source /opt/miniconda3/bin/activate && conda activate testbed`)
-        # before running anything -- verified this container does not do the
-        # same for us by default: `podman exec <container> python3` resolves
-        # to the *base* conda env's Python (3.11, nothing installed) rather
-        # than testbed's (3.9, where the repo and its test deps actually
-        # live), because `podman exec` runs the given argv directly rather
-        # than through a login/interactive shell that would source
-        # `/root/.bashrc` (which the image sets up to auto-activate
-        # testbed). Sourcing the conda activation script explicitly here
-        # means goose itself -- and therefore every shell-tool child process
-        # it spawns -- inherits the correct environment, without depending
-        # on shell-invocation semantics (`-l` sources login files, not
-        # `.bashrc`; `.bashrc` itself is normally only sourced for
-        # interactive shells) that could silently stop applying.
-        activate = "source /opt/miniconda3/etc/profile.d/conda.sh && conda activate testbed"
+        # `workdir`: the directory inside the container that goose should work
+        # in.  Defaults to `/testbed` (SWE-bench layout); set to `/work` for
+        # ScarfBench via harness config overrides (`overrides.harness.workdir`
+        # in the run config).
+        #
+        # `conda_env`: name of the conda env to activate before running goose.
+        # SWE-bench images use a `testbed` conda env for the right Python
+        # version + deps (verified: `podman exec` doesn't source ~/.bashrc
+        # automatically, so the base conda Python would be used without this).
+        # ScarfBench images use plain JDK+Maven with no conda -- set to None
+        # or "" via `overrides.harness.conda_env: null` to skip activation.
+        workdir = self.config.get("workdir", "/testbed")
+        conda_env = self.config.get("conda_env", "testbed")
         inner = " ".join(shlex.quote(a) for a in goose_argv)
+        if conda_env:
+            preamble = (
+                f"source /opt/miniconda3/etc/profile.d/conda.sh "
+                f"&& conda activate {conda_env} && "
+            )
+        else:
+            preamble = ""
         exec_cmd += [
-            "--workdir", "/testbed", container,
-            "bash", "-c", f"{activate} && exec {inner}",
+            "--workdir", workdir, container,
+            "bash", "-c", f"{preamble}exec {inner}",
         ]
         transcript_path = Path(out_dir) / "goose" / instance_id / "transcript.jsonl"
         label = f"[goose:{instance_id}]"

@@ -37,6 +37,11 @@ from acb.report import build_report
 # (and how acb works around them) that make this less simple than it sounds.
 PRAXIS_IMAGE_DEFAULT = "acb-praxis-ai:latest"
 
+# Repo root: two levels up from this file (acb/runner.py → acb/ → repo root).
+# Used as the build context for the self-contained Containerfile that compiles
+# praxis-ai with the praxis-vertex-anthropic filter baked in.
+_REPO_ROOT = Path(__file__).parent.parent
+
 _ARCH_MAP = {"arm64": "arm64", "aarch64": "arm64", "x86_64": "amd64", "amd64": "amd64"}
 
 
@@ -55,20 +60,35 @@ def _ensure_praxis_image(bench_cfg: dict) -> str:
     development to keep a side tag like ``acb-praxis-ai:vertex-dev``
     separate from the stable ``acb-praxis-ai:latest``).  Falls back to
     ``PRAXIS_IMAGE_DEFAULT`` when not set.
+
+    Build source (when the image is absent):
+
+    1. ``bench_cfg["praxis_ai_repo"]`` -- optional override pointing at a
+       local checkout of https://github.com/praxis-proxy/ai that has its own
+       ``Containerfile``.  Use this when you need to test against a modified
+       upstream tree.
+
+    2. The ``Containerfile`` at the repository root (default) -- self-
+       contained: clones praxis-proxy/ai at a pinned commit and compiles the
+       praxis-vertex-anthropic filter in, all within the container build.
+       No external checkout required.
     """
     image = bench_cfg.get("praxis_image", PRAXIS_IMAGE_DEFAULT)
     if image_exists(image):
         return image
     praxis_ai_repo = bench_cfg.get("praxis_ai_repo")
-    if not praxis_ai_repo:
-        raise RuntimeError(
-            f"{image} not found and no `praxis_ai_repo` configured to build it "
-            "(benchmarks.yaml swebench.praxis_ai_repo -- path to a checkout of "
-            "https://github.com/praxis-proxy/ai with a Containerfile)."
-        )
-    praxis_ai_repo = Path(praxis_ai_repo)
-    print(f"[praxis-ai] building {image} from {praxis_ai_repo} ...", flush=True)
-    build_image(praxis_ai_repo / "Containerfile", praxis_ai_repo, image)
+    if praxis_ai_repo:
+        # Legacy / override path: build from a local checkout of
+        # https://github.com/praxis-proxy/ai (its own Containerfile).
+        praxis_ai_repo = Path(praxis_ai_repo)
+        print(f"[praxis-ai] building {image} from {praxis_ai_repo} ...", flush=True)
+        build_image(praxis_ai_repo / "Containerfile", praxis_ai_repo, image)
+    else:
+        # Default path: use the self-contained Containerfile at the repo root.
+        # Build context is the repo root so COPY praxis-vertex-anthropic/ works.
+        containerfile = _REPO_ROOT / "Containerfile"
+        print(f"[praxis-ai] building {image} from {containerfile} ...", flush=True)
+        build_image(containerfile, _REPO_ROOT, image)
     print(f"[praxis-ai] built {image}", flush=True)
     return image
 
@@ -111,24 +131,26 @@ def _fetch_vertex_token() -> str:
     return token
 
 
-def run(cfg: RunConfig, registries: Registries | None = None) -> Path:
-    registries = registries or Registries.load()
-    # Absolute: SWE-bench's evaluation subprocess runs with cwd=SWE-bench/, so
-    # any relative path derived from out_dir (predictions.jsonl etc.) would
-    # otherwise resolve against the wrong directory once passed to it.
-    out_dir = (Path(cfg.output_dir) / cfg.run_id).resolve()
-    out_dir.mkdir(parents=True, exist_ok=True)
-    usage_path = out_dir / "usage.jsonl"
+def _run_single_harness(
+    harness_name: str,
+    harness_out_dir: Path,
+    cfg: RunConfig,
+    registries: Registries,
+    benchmark,
+    instances: list,
+    bench_cfg: dict,
+    model_spec,
+    proxy_cfg: dict,
+) -> tuple[list[Prediction], dict[str, bool]]:
+    """Run a single harness against all instances and evaluate.
+    
+    Returns (predictions, resolved_dict).
+    """
+    harness_cfg = {**registries.harnesses.get(harness_name, {}), **cfg.overrides.get("harness", {})}
+    harness_out_dir.mkdir(parents=True, exist_ok=True)
+    usage_path = harness_out_dir / "usage.jsonl"
 
-    bench_cfg = {**registries.benchmarks.get(cfg.benchmark, {}), **cfg.overrides.get("benchmark", {})}
-    harness_cfg = {**registries.harnesses.get(cfg.harness, {}), **cfg.overrides.get("harness", {})}
-    proxy_cfg = {**registries.backend_config(cfg.proxy), **cfg.overrides.get("proxy", {})}
-    model_spec = registries.model_spec(cfg.model)
-
-    benchmark = make_benchmark(cfg.benchmark, bench_cfg)
-    instances = benchmark.load_instances(subset=cfg.subset, limit=cfg.limit)
-    print(f"[acb] {cfg.run_id}: {len(instances)} instances "
-          f"({cfg.harness} / {cfg.model} / {cfg.benchmark} via {cfg.proxy})")
+    print(f"[acb]   {harness_name}: {len(instances)} instances")
 
     def do_one(instance) -> Prediction:
         """One Podman pod per instance, holding two sibling containers
@@ -139,7 +161,7 @@ def run(cfg: RunConfig, registries: Registries | None = None) -> Path:
         pod's shared loopback. See acb/proxy/praxis.py, acb/container.py.
         """
         arch = _resolve_arch(bench_cfg)
-        build_dir = out_dir / "image_build"
+        build_dir = harness_out_dir / "image_build"
 
         # Podman uses the pod name as the shared hostname for its network
         # namespace, which Linux caps at 64 bytes (HOST_NAME_MAX) -- verified:
@@ -160,7 +182,7 @@ def run(cfg: RunConfig, registries: Registries | None = None) -> Path:
                     f"proxy backend {cfg.proxy!r} has no container-mode "
                     "implementation; only `praxis` does today."
                 )
-            harness = make_harness(cfg.harness, harness_cfg)
+            harness = make_harness(harness_name, harness_cfg)
             # Resolve which API the harness will speak for this model backend.
             # Stored as an instance variable so both PraxisContainerBackend
             # (which needs it to decide whether proxy translation is required)
@@ -174,9 +196,9 @@ def run(cfg: RunConfig, registries: Registries | None = None) -> Path:
             # Harness-specific asset staging (e.g. goose's binary,
             # claude-code's) is the harness's own job now, not the
             # benchmark's -- see HarnessAdapter.setup_container().
-            harness.setup_container(testbed_container, arch, out_dir)
+            harness.setup_container(testbed_container, arch, harness_out_dir)
             tags = ProxyTags(
-                run_id=cfg.run_id, benchmark=cfg.benchmark, harness=cfg.harness,
+                run_id=cfg.run_id, benchmark=cfg.benchmark, harness=harness_name,
                 model=cfg.model, instance_id=instance.instance_id,
             )
             # Fetch a fresh GCP OAuth2 token for Vertex AI backends.
@@ -199,7 +221,7 @@ def run(cfg: RunConfig, registries: Registries | None = None) -> Path:
                 env = harness.build_container_env(praxis_backend.base_url, praxis_backend.api_key)
                 harness.run_container(
                     instance.prompt, testbed_container, cfg.model, env,
-                    out_dir, instance.instance_id,
+                    harness_out_dir, instance.instance_id,
                 )
             return benchmark.collect_prediction_container(instance, testbed_container, cfg.model)
         except Exception as e:  # noqa: BLE001
@@ -225,7 +247,7 @@ def run(cfg: RunConfig, registries: Registries | None = None) -> Path:
         for fut in as_completed(futures):
             pred = fut.result()
             predictions.append(pred)
-            print(f"[acb]   done {pred.instance_id}"
+            print(f"[acb]     done {pred.instance_id}"
                   + (f" (error: {pred.error})" if pred.error else ""))
 
     # predictions.jsonl (below, via benchmark.evaluate()) only carries the
@@ -239,16 +261,81 @@ def run(cfg: RunConfig, registries: Registries | None = None) -> Path:
     # durable recorded it).
     errored = [p for p in predictions if p.error]
     if errored:
-        errors_path = out_dir / "errors.jsonl"
+        errors_path = harness_out_dir / "errors.jsonl"
         with errors_path.open("w") as f:
             for p in errored:
                 f.write(json.dumps({"instance_id": p.instance_id, "error": p.error}) + "\n")
-        print(f"[acb] {len(errored)}/{len(predictions)} instance(s) errored "
+        print(f"[acb]   {len(errored)}/{len(predictions)} instance(s) errored "
               f"during generation -- see {errors_path}", flush=True)
 
-    print("[acb] evaluating predictions ...")
-    resolved = benchmark.evaluate(predictions, cfg.run_id, out_dir)
+    print("[acb]   evaluating predictions ...")
+    resolved = benchmark.evaluate(predictions, cfg.run_id, harness_out_dir)
+    
+    return predictions, resolved
 
-    report_path = build_report(usage_path, resolved, out_dir, cfg)
-    print(f"[acb] report: {report_path}")
-    return report_path
+
+def run(cfg: RunConfig, registries: Registries | None = None) -> Path:
+    registries = registries or Registries.load()
+    # Absolute: SWE-bench's evaluation subprocess runs with cwd=SWE-bench/, so
+    # any relative path derived from out_dir (predictions.jsonl etc.) would
+    # otherwise resolve against the wrong directory once passed to it.
+    out_dir = (Path(cfg.output_dir) / cfg.run_id).resolve()
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    bench_cfg = {**registries.benchmarks.get(cfg.benchmark, {}), **cfg.overrides.get("benchmark", {})}
+    proxy_cfg = {**registries.backend_config(cfg.proxy), **cfg.overrides.get("proxy", {})}
+    model_spec = registries.model_spec(cfg.model)
+
+    benchmark = make_benchmark(cfg.benchmark, bench_cfg)
+    instances = benchmark.load_instances(subset=cfg.subset, limit=cfg.limit)
+    
+    harnesses_to_run = cfg.harnesses
+    print(f"[acb] {cfg.run_id}: {len(instances)} instances "
+          f"({', '.join(harnesses_to_run)} / {cfg.model} / {cfg.benchmark} via {cfg.proxy})")
+
+    # Run each harness, collecting reports
+    harness_reports: dict[str, dict] = {}
+    for harness_name in harnesses_to_run:
+        harness_out_dir = out_dir / harness_name
+        predictions, resolved = _run_single_harness(
+            harness_name, harness_out_dir, cfg, registries, benchmark, instances,
+            bench_cfg, model_spec, proxy_cfg,
+        )
+        
+        # Build per-harness report
+        usage_path = harness_out_dir / "usage.jsonl"
+        report_path = build_report(usage_path, resolved, harness_out_dir, cfg)
+        print(f"[acb] {harness_name} report: {report_path}")
+        
+        # Load and store report for suite aggregation
+        if report_path.exists():
+            harness_reports[harness_name] = json.loads(report_path.read_text())
+        
+        # Build per-harness HTML report
+        try:
+            from acb.html_report import build_html_report
+            html_content = build_html_report(harness_out_dir)
+            html_path = harness_out_dir / "report.html"
+            html_path.write_text(html_content)
+            print(f"[acb] {harness_name} html report: {html_path}")
+        except Exception as e:
+            print(f"[acb] warning: failed to build HTML report for {harness_name}: {e}")
+
+    # Build suite-level report (aggregate across harnesses)
+    if len(harnesses_to_run) > 1:
+        from acb.report import build_suite_report
+        suite_report_path = build_suite_report(out_dir, cfg)
+        print(f"[acb] suite report: {suite_report_path}")
+        
+        # Build suite-level HTML report
+        try:
+            from acb.html_report import build_html_report
+            html_content = build_html_report(out_dir)
+            html_path = out_dir / "report.html"
+            html_path.write_text(html_content)
+            print(f"[acb] suite html report: {html_path}")
+        except Exception as e:
+            print(f"[acb] warning: failed to build suite HTML report: {e}")
+
+    # Return the suite directory path
+    return out_dir

@@ -195,6 +195,39 @@ def image_tag(src: str, dst: str) -> None:
     _run(["podman", "tag", src, dst])
 
 
+def container_untar_in(container: str, host_dir: Path, container_path: str) -> None:
+    """Tar the *contents* of ``host_dir`` and untar them at ``container_path``.
+
+    Equivalent to ``cd host_dir && tar c . | podman exec -i container tar -xC container_path``.
+    Using a tar pipe (rather than ``podman cp dir container:dir``) avoids the
+    directory-vs-contents ambiguity in podman cp semantics: ``podman cp src
+    container:dst`` copies *src itself* (not its contents) when dst already
+    exists as a directory, so the files land at dst/src-basename/** rather than
+    dst/**.  The tar pipe always extracts the archive's root into container_path
+    directly, regardless of whether container_path already exists.
+    """
+    import io
+    import tarfile as _tarfile
+
+    buf = io.BytesIO()
+    with _tarfile.open(fileobj=buf, mode="w") as tf:
+        tf.add(host_dir, arcname=".")
+    buf.seek(0)
+
+    proc = subprocess.Popen(
+        ["podman", "exec", "-i", container, "tar", "-xC", container_path],
+        stdin=subprocess.PIPE,
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    _, stderr = proc.communicate(input=buf.read())
+    if proc.returncode != 0:
+        raise RuntimeError(
+            f"container_untar_in: tar unpack into {container}:{container_path} failed\n"
+            f"stderr: {stderr.decode(errors='replace')}"
+        )
+
+
 def build_image(dockerfile: Path, context_dir: Path, tag: str, platform: str | None = None) -> None:
     cmd = ["podman", "build", f"--tag={tag}", f"--file={dockerfile}"]
     if platform:

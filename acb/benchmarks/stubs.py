@@ -37,20 +37,4 @@ class LiveCodeBench(Benchmark):
         raise NotImplementedError("run LiveCodeBench test cases against outputs")
 
 
-class ScarfBench(Benchmark):
-    """https://scarfbench.info"""
 
-    name = "scarfbench"
-
-    def load_instances(self, subset=None, limit=None) -> list[Instance]:
-        raise NotImplementedError("wire up ScarfBench dataset loading")
-
-    def prepare_container(self, instance: Instance, pod: str, build_dir: Path,
-                          arch: str) -> str:
-        raise NotImplementedError("build/start a ScarfBench container")
-
-    def collect_prediction_container(self, instance, container, model) -> Prediction:
-        raise NotImplementedError("read the harness's output from the container")
-
-    def evaluate(self, predictions, run_id, output_dir) -> dict[str, bool]:
-        raise NotImplementedError("implement ScarfBench scoring")

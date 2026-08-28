@@ -39,6 +39,22 @@ def _color(i: int) -> str:
     return _COLORS[i % len(_COLORS)]
 
 
+def _is_suite_directory(path: Path) -> bool:
+    """Check if a directory is a suite (contains harness subdirectories with report.json)."""
+    path = Path(path)
+    if not path.is_dir():
+        return False
+    # A suite has subdirectories with report.json files and a harness name
+    # that matches known harness names or appears to be a harness directory
+    subdirs_with_reports = 0
+    for item in path.iterdir():
+        if item.is_dir() and (item / "report.json").exists():
+            # Check if it looks like a harness directory (has metrics.jsonl or usage.jsonl)
+            if (item / "metrics.jsonl").exists() or (item / "usage.jsonl").exists():
+                subdirs_with_reports += 1
+    return subdirs_with_reports > 0
+
+
 def _load_jsonl(path: Path) -> list[dict]:
     if not path.exists():
         return []
@@ -62,13 +78,17 @@ class _RunData:
     usage_rows: list[dict]
     predictions: dict[str, str] = field(default_factory=dict)  # instance_id → model_patch
     cost: ModelCost | None = field(default=None)
+    harness_name: str = ""  # for suite reports, the harness this data came from
 
     @property
     def run_id(self) -> str:
+        # For suite reports, use harness_name; for single harnesses, use report.run_id or dir name
+        if self.harness_name:
+            return self.harness_name
         return self.report.get("run_id") or self.run_dir.name
 
     @classmethod
-    def load(cls, run_dir: Path) -> "_RunData":
+    def load(cls, run_dir: Path, harness_name: str = "") -> "_RunData":
         run_dir = Path(run_dir)
         report = json.loads(p.read_text()) if (p := run_dir / "report.json").exists() else {}
         metrics = _load_jsonl(run_dir / "metrics.jsonl")
@@ -90,7 +110,8 @@ class _RunData:
         model = report.get("model")
         cost = load_cost_table().get(model) if model else None
         return cls(run_dir=run_dir, report=report, metrics=metrics,
-                   usage_rows=usage_rows, predictions=predictions, cost=cost)
+                   usage_rows=usage_rows, predictions=predictions, cost=cost,
+                   harness_name=harness_name)
 
 
 # ---------------------------------------------------------------------------
@@ -430,6 +451,8 @@ def _build_single_run_html(rd: _RunData) -> str:
         patches_html=patches_html,
         patches_data_js=patches_data_js,
         tokens_stacked=False,
+        resolve_chart_html="",
+        resolve_chart_js="",
     )
 
 
@@ -437,25 +460,43 @@ def _build_single_run_html(rd: _RunData) -> str:
 # Multi-run HTML builders
 # ---------------------------------------------------------------------------
 
-def _comparison_table(runs: list[_RunData]) -> str:
-    """Summary table with one row per run."""
-    cols = [
-        ("Run", lambda r: r.run_id),
-        ("Harness", lambda r: r.report.get("harness", "-")),
-        ("Model", lambda r: r.report.get("model", "-")),
-        ("Benchmark", lambda r: r.report.get("benchmark", "-")),
-        ("Instances", lambda r: str(r.report.get("instances", "-"))),
-        ("Resolved", lambda r: str(r.report.get("resolved", "-"))),
-        ("Resolve rate", lambda r: f"{r.report.get('resolve_rate', 0) * 100:.0f}%"),
-        ("Avg total tokens", lambda r: f"{r.report.get('avg_total_tokens', 0):,.0f}"),
-        ("Avg turns", lambda r: f"{r.report.get('avg_turns', 0):.1f}"),
-        ("Avg peak context", lambda r: f"{r.report.get('avg_peak_context', 0):,.0f}"),
-        ("Avg cache eff.", lambda r: f"{r.report.get('avg_cache_efficiency', 0) * 100:.1f}%"),
-        ("Tokens/resolved", lambda r: (
-            f"{r.report['tokens_per_resolved']:,.0f}"
-            if r.report.get("tokens_per_resolved") is not None else "n/a"
-        )),
-    ]
+def _comparison_table(runs: list[_RunData], is_suite: bool = False) -> str:
+    """Summary table with one row per run (or harness in suite mode)."""
+    if is_suite:
+        # Suite mode: focus on harness name instead of generic "Run"
+        cols = [
+            ("Harness", lambda r: r.run_id),
+            ("Instances", lambda r: str(r.report.get("instances", "-"))),
+            ("Resolved", lambda r: str(r.report.get("resolved", "-"))),
+            ("Resolve rate", lambda r: f"{r.report.get('resolve_rate', 0) * 100:.0f}%"),
+            ("Avg total tokens", lambda r: f"{r.report.get('avg_total_tokens', 0):,.0f}"),
+            ("Avg turns", lambda r: f"{r.report.get('avg_turns', 0):.1f}"),
+            ("Avg peak context", lambda r: f"{r.report.get('avg_peak_context', 0):,.0f}"),
+            ("Avg cache eff.", lambda r: f"{r.report.get('avg_cache_efficiency', 0) * 100:.1f}%"),
+            ("Tokens/resolved", lambda r: (
+                f"{r.report['tokens_per_resolved']:,.0f}"
+                if r.report.get("tokens_per_resolved") is not None else "n/a"
+            )),
+        ]
+    else:
+        # Multi-run mode: include run-specific columns
+        cols = [
+            ("Run", lambda r: r.run_id),
+            ("Harness", lambda r: r.report.get("harness", "-")),
+            ("Model", lambda r: r.report.get("model", "-")),
+            ("Benchmark", lambda r: r.report.get("benchmark", "-")),
+            ("Instances", lambda r: str(r.report.get("instances", "-"))),
+            ("Resolved", lambda r: str(r.report.get("resolved", "-"))),
+            ("Resolve rate", lambda r: f"{r.report.get('resolve_rate', 0) * 100:.0f}%"),
+            ("Avg total tokens", lambda r: f"{r.report.get('avg_total_tokens', 0):,.0f}"),
+            ("Avg turns", lambda r: f"{r.report.get('avg_turns', 0):.1f}"),
+            ("Avg peak context", lambda r: f"{r.report.get('avg_peak_context', 0):,.0f}"),
+            ("Avg cache eff.", lambda r: f"{r.report.get('avg_cache_efficiency', 0) * 100:.1f}%"),
+            ("Tokens/resolved", lambda r: (
+                f"{r.report['tokens_per_resolved']:,.0f}"
+                if r.report.get("tokens_per_resolved") is not None else "n/a"
+            )),
+        ]
     headers = "".join(f"<th>{h}</th>" for h, _ in cols)
     body_rows = "".join(
         "<tr>" + "".join(f"<td>{fn(rd)}</td>" for _, fn in cols) + "</tr>"
@@ -468,16 +509,102 @@ def _comparison_table(runs: list[_RunData]) -> str:
     </table>"""
 
 
-def _build_multi_run_html(runs: list[_RunData]) -> str:
-    """Combined report with all runs overlaid on the same charts."""
+def _resolve_rate_bar_chart(runs: list[_RunData]) -> str:
+    """Build HTML for a resolve rate bar chart (suite view)."""
+    harnesses = [r.run_id for r in runs]
+    rates = [r.report.get("resolve_rate", 0) * 100 for r in runs]
+    
+    chart_html = """
+    <h2>Resolve Rate by Harness</h2>
+    <div class="chart-wrap"><canvas id="resolveRateChart"></canvas></div>"""
+    
+    chart_js = f"""
+    new Chart(document.getElementById('resolveRateChart'), {{
+      type: 'bar',
+      data: {{
+        labels: {json.dumps(harnesses)},
+        datasets: [{{
+          label: 'resolve rate',
+          data: {json.dumps(rates)},
+          backgroundColor: {json.dumps([_color(i) for i in range(len(runs))])},
+        }}],
+      }},
+      options: {{
+        indexAxis: 'y',
+        responsive: true,
+        scales: {{
+          x: {{
+            title: {{ display: true, text: 'resolve rate (%)' }},
+            min: 0,
+            max: 100,
+            ticks: {{ callback: (v) => v + '%' }},
+          }},
+        }},
+      }},
+    }});"""
+    
+    return chart_html, chart_js
+
+
+def _unified_instance_table(runs: list[_RunData]) -> str:
+    """Build a unified table comparing all instances across all harnesses.
+    
+    Rows are instances, columns are harnesses. Each cell shows resolve status
+    and token count.
+    """
+    # Collect all instance IDs across all harnesses
+    all_instances: dict[str, None] = {}
+    for rd in runs:
+        for m in rd.metrics:
+            all_instances[m["instance_id"]] = None
+    instance_ids = list(all_instances.keys())
+    
+    if not instance_ids:
+        return "<p class='muted'>No instance metrics found.</p>"
+    
+    # Build harness columns
+    harness_headers = "".join(f"<th>{r.run_id}</th>" for r in runs)
+    
+    # Build rows
+    rows = []
+    for iid in instance_ids:
+        cells = [f"<td>{iid}</td>"]
+        for rd in runs:
+            # Find metric for this instance in this harness
+            metric = next((m for m in rd.metrics if m["instance_id"] == iid), None)
+            if metric:
+                status = "✓" if metric.get("resolved") else "✗" if metric.get("resolved") is False else "?"
+                tokens = f"{metric.get('total_tokens', 0):,}"
+                cells.append(f"<td>{status} {tokens}</td>")
+            else:
+                cells.append("<td>-</td>")
+        rows.append("<tr>" + "".join(cells) + "</tr>")
+    
+    return f"""
+    <table style="width:100%;max-width:none">
+      <thead><tr><th>Instance</th>{harness_headers}</tr></thead>
+      <tbody>{"".join(rows)}</tbody>
+    </table>"""
+
+
+def _build_multi_run_html(runs: list[_RunData], is_suite: bool = False) -> str:
+    """Combined report with all runs overlaid on the same charts.
+    
+    If is_suite=True, treats runs as harnesses in a suite and adjusts labels
+    and structure accordingly.
+    """
     # --- context growth: all per-instance lines from all runs ---
     context_datasets: list[dict] = []
     color_idx = 0
     for rd in runs:
         for m in rd.metrics:
             per_turn = m.get("per_turn_prompt") or []
+            if is_suite:
+                label = f"{rd.run_id}: {m['instance_id']}"
+            else:
+                label = f"{rd.run_id}: {m['instance_id']}"
             context_datasets.append({
-                "label": f"{rd.run_id}: {m['instance_id']}",
+                "label": label,
                 "data": per_turn,
                 "borderColor": _color(color_idx),
                 "backgroundColor": _color(color_idx),
@@ -545,20 +672,36 @@ def _build_multi_run_html(runs: list[_RunData]) -> str:
             color_idx += len(ds)
 
     # --- assemble HTML sections ---
-    run_names = " vs ".join(rd.run_id for rd in runs)
-    title = f"acb comparison: {run_names}"
-    heading = "Comparison"
-    meta = run_names
+    if is_suite:
+        # Suite mode: different heading/meta
+        benchmark = runs[0].report.get("benchmark", "?")
+        model = runs[0].report.get("model", "?")
+        title = f"acb suite: {benchmark} × {model}"
+        heading = "Suite Comparison"
+        meta = f"{benchmark} &middot; {model}"
+        summary_html_title = "Summary by Harness"
+    else:
+        run_names = " vs ".join(rd.run_id for rd in runs)
+        title = f"acb comparison: {run_names}"
+        heading = "Comparison"
+        meta = run_names
+        summary_html_title = "Summary"
 
     # summary
-    summary_html = f"<h2>Summary</h2>{_comparison_table(runs)}"
+    summary_html = f"<h2>{summary_html_title}</h2>{_comparison_table(runs, is_suite=is_suite)}"
+    
+    # resolve rate bar chart (suite view only)
+    resolve_chart_html = ""
+    resolve_chart_js = ""
+    if is_suite:
+        resolve_chart_html, resolve_chart_js = _resolve_rate_bar_chart(runs)
 
     # duration chart
     duration_chart_html = ""
     duration_chart_js = ""
     if has_duration:
         duration_chart_html = """
-    <h2>Request duration per turn (avg per run)</h2>
+    <h2>Request duration per turn (avg per harness)</h2>
     <div class="chart-wrap"><canvas id="durationChart"></canvas></div>"""
         duration_chart_js = f"""
     new Chart(document.getElementById('durationChart'), {{
@@ -602,15 +745,20 @@ def _build_multi_run_html(runs: list[_RunData]) -> str:
       }},
     }});"""
     else:
-        cost_chart_html = '<h2>Cost over time</h2><p class="muted">No cost data configured for any run.</p>'
+        cost_chart_html = '<h2>Cost over time</h2><p class="muted">No cost data configured for any harness.</p>'
         cost_chart_js = ""
 
-    # instance tables per run
-    instances_html_parts = ["<h2>Instances</h2>"]
-    for rd in runs:
-        instances_html_parts.append(f"<h3>{rd.run_id}</h3>")
-        instances_html_parts.append(_instance_table(rd.metrics))
-    instances_html = "\n".join(instances_html_parts)
+    # instance tables
+    if is_suite:
+        # Suite mode: unified table across harnesses
+        instances_html = f"<h2>Instances</h2>{_unified_instance_table(runs)}"
+    else:
+        # Multi-run mode: separate tables per run
+        instances_html_parts = ["<h2>Instances</h2>"]
+        for rd in runs:
+            instances_html_parts.append(f"<h3>{rd.run_id}</h3>")
+            instances_html_parts.append(_instance_table(rd.metrics))
+        instances_html = "\n".join(instances_html_parts)
 
     patches_html, patches_data_js = _patches_section(runs)
 
@@ -619,6 +767,8 @@ def _build_multi_run_html(runs: list[_RunData]) -> str:
         heading=heading,
         meta=meta,
         summary_html=summary_html,
+        resolve_chart_html=resolve_chart_html,
+        resolve_chart_js=resolve_chart_js,
         context_datasets=context_datasets,
         turns=turns,
         avg_input=[],          # not used — tokens_datasets handles it
@@ -658,6 +808,8 @@ def _render_html(
     patches_data_js: str = "",
     tokens_stacked: bool,
     tokens_datasets_override: list[dict] | None = None,
+    resolve_chart_html: str = "",
+    resolve_chart_js: str = "",
 ) -> str:
     max_context_len = max((len(d["data"]) for d in context_datasets), default=0)
     context_labels = list(range(max_context_len))
@@ -744,6 +896,8 @@ def _render_html(
 
   {summary_html}
 
+  {resolve_chart_html}
+
   <h2>Context growth over turns (prompt size = input + cache_read + cache_creation)</h2>
   <div class="chart-wrap"><canvas id="contextGrowthChart"></canvas></div>
 
@@ -758,6 +912,7 @@ def _render_html(
 
 {patches_data_js}
 <script>
+  {resolve_chart_js}
   new Chart(document.getElementById('contextGrowthChart'), {{
     type: 'line',
     data: {{
@@ -822,23 +977,44 @@ def _render_html(
 # ---------------------------------------------------------------------------
 
 def build_html_report(run_dirs: str | Path | list[str | Path]) -> str:
-    """Build a self-contained HTML report for one or more runs.
+    """Build a self-contained HTML report for one or more runs or a suite.
 
     Args:
         run_dirs: A single run directory path, or a list of paths.
-                  A single path produces the same output as before (backward-compatible).
-                  Multiple paths produce a combined comparison report.
-
+                  - Single suite directory (contains harness subdirs): suite comparison view
+                  - Single harness directory: single-run detail view
+                  - List of directories: multi-run comparison view
+                  
     Returns:
         HTML string ready to be written to a file.
     """
     if isinstance(run_dirs, (str, Path)):
-        run_dirs = [Path(run_dirs)]
+        run_dir = Path(run_dirs)
+        
+        # Check if this is a suite directory (contains harness subdirs with reports)
+        if _is_suite_directory(run_dir):
+            # Load each harness subdirectory as a separate run/harness
+            runs = []
+            for harness_dir in sorted(run_dir.iterdir()):
+                if harness_dir.is_dir() and (harness_dir / "report.json").exists():
+                    # Use the subdirectory name as the harness name
+                    runs.append(_RunData.load(harness_dir, harness_name=harness_dir.name))
+            
+            if len(runs) > 1:
+                return _build_multi_run_html(runs, is_suite=True)
+            elif len(runs) == 1:
+                return _build_single_run_html(runs[0])
+            else:
+                return "<p>No harness data found in suite directory.</p>"
+        else:
+            # Single harness directory
+            runs = [_RunData.load(run_dir)]
+            return _build_single_run_html(runs[0])
     else:
+        # List of directories (explicit multi-run comparison)
         run_dirs = [Path(d) for d in run_dirs]
-
-    runs = [_RunData.load(d) for d in run_dirs]
-
-    if len(runs) == 1:
-        return _build_single_run_html(runs[0])
-    return _build_multi_run_html(runs)
+        runs = [_RunData.load(d) for d in run_dirs]
+        
+        if len(runs) == 1:
+            return _build_single_run_html(runs[0])
+        return _build_multi_run_html(runs, is_suite=False)

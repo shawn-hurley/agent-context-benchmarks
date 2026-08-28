@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 from acb.benchmarks.base import Benchmark, Instance, Prediction
-from acb.benchmarks.stubs import LiveCodeBench, ScarfBench
+from acb.benchmarks.scarfbench import ScarfBench
+from acb.benchmarks.stubs import LiveCodeBench
 from acb.benchmarks.swebench import SWEBench
 
 _BENCHMARKS: dict[str, type[Benchmark]] = {

@@ -27,7 +27,7 @@ def _load_yaml(path: Path) -> dict[str, Any]:
 class RunConfig:
     run_id: str
     benchmark: str  # key into benchmarks.yaml
-    harness: str  # key into harnesses.yaml
+    harness: str | list[str]  # key(s) into harnesses.yaml; str or list of str
     model: str  # model id sent to the proxy (drives Praxis routing)
     proxy: str = "praxis"  # key into proxy.yaml
     subset: list[str] | None = None  # instance_ids; None = full split
@@ -36,6 +36,13 @@ class RunConfig:
     output_dir: str = "runs"
     # free-form overrides merged into the harness/benchmark/proxy config
     overrides: dict[str, Any] = field(default_factory=dict)
+
+    @property
+    def harnesses(self) -> list[str]:
+        """Return harnesses as a list, supporting both str and list[str] formats."""
+        if isinstance(self.harness, str):
+            return [self.harness]
+        return list(self.harness) if self.harness else []
 
     @classmethod
     def from_file(cls, path: str | Path) -> "RunConfig":
