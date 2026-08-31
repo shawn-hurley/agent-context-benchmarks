@@ -52,9 +52,7 @@ RUN sed -i '/xtask/d; /tests\//d' Cargo.toml
 # The server's build.rs auto-discovers filter crates via the
 # [package.metadata.praxis-filters] marker in praxis-vertex-anthropic/Cargo.toml
 # and registers them at compile time.
-RUN --mount=type=cache,target=/usr/local/cargo/registry \
-    --mount=type=cache,target=/src/target \
-    cargo build --release -p praxis-ai-proxy \
+RUN cargo build --release -p praxis-ai-proxy \
     && cp target/release/praxis-ai /usr/local/bin/praxis-ai
 
 # ============================================================================

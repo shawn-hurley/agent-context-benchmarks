@@ -324,6 +324,37 @@ impl BenchmarkMetricsFilter {
             }
             _ => {
                 // ping, content_block_*, message_stop, etc. — no token data
+                // Also handles vLLM/OpenAI SSE with no event: prefix (empty event_type)
+                // For empty event_type, try to extract tokens from the data JSON itself.
+                if event_type.is_empty() && !evt.is_null() {
+                    // vLLM/OpenAI streaming response with usage in the data JSON
+                    if let Some(usage) = evt.get("usage") {
+                        // Try Anthropic format first (input_tokens / output_tokens)
+                        if usage.get("input_tokens").is_some() {
+                            Self::extract_anthropic_usage(usage, data);
+                            debug!("extracted tokens from vLLM/OpenAI SSE (Anthropic-style format)");
+                        } else {
+                            // Fall back to OpenAI format (prompt_tokens / completion_tokens)
+                            if let Some(v) = usage.get("prompt_tokens").and_then(|v| v.as_u64()) {
+                                if v > 0 || data.input_tokens == 0 {
+                                    data.input_tokens = v;
+                                }
+                            }
+                            if let Some(v) = usage.get("completion_tokens").and_then(|v| v.as_u64()) {
+                                if v > 0 || data.output_tokens == 0 {
+                                    data.output_tokens = v;
+                                }
+                            }
+                            if data.input_tokens > 0 || data.output_tokens > 0 {
+                                debug!(
+                                    input_tokens = data.input_tokens,
+                                    output_tokens = data.output_tokens,
+                                    "extracted tokens from vLLM/OpenAI SSE (prompt_tokens/completion_tokens)"
+                                );
+                            }
+                        }
+                    }
+                }
             }
         }
     }
