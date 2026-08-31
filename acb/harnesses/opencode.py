@@ -45,6 +45,7 @@ import json
 import shlex
 import tarfile
 import tempfile
+import threading
 import urllib.request
 from pathlib import Path
 
@@ -65,26 +66,44 @@ _RELEASE_URL = (
     "opencode-linux-{arch}.tar.gz"
 )
 
+# Lock to ensure thread-safe binary downloads; prevents race conditions when
+# multiple instances try to download the same binary concurrently.
+_DOWNLOAD_LOCK = threading.Lock()
+
 
 def ensure_linux_binary(arch: str, cache_dir: Path,
                          version: str = DEFAULT_VERSION) -> Path:
-    """Download (once, cached) a Linux `opencode` binary for ``arch``."""
+    """Download (once, cached) a Linux `opencode` binary for ``arch``.
+    
+    Thread-safe: uses a lock to prevent concurrent download race conditions when
+    multiple instances try to download the same binary simultaneously. The first
+    thread to acquire the lock downloads; others wait and reuse the result.
+    """
     oc_arch = _ARCH_ALIASES.get(arch, arch)
     dest_dir = cache_dir / f"opencode-linux-{oc_arch}-{version}"
     dest = dest_dir / "opencode"
+    
+    # Quick check without lock (common case: already cached)
     if dest.exists():
         return dest
-    dest_dir.mkdir(parents=True, exist_ok=True)
-    url = _RELEASE_URL.format(version=version, arch=oc_arch)
-    print(f"[opencode] downloading Linux binary for {oc_arch} from {url} ...", flush=True)
-    archive_path = dest_dir / "opencode.tar.gz"
-    urllib.request.urlretrieve(url, archive_path)  # noqa: S310
-    with tarfile.open(archive_path) as tf:
-        member = tf.getmember("opencode")   # single file at tarball root
-        tf.extract(member, dest_dir, filter="data")  # noqa: S202
-    archive_path.unlink()
-    dest.chmod(0o755)
-    return dest
+    
+    # Acquire lock for download to prevent concurrent race conditions
+    with _DOWNLOAD_LOCK:
+        # Double-check after acquiring lock: another thread may have finished download
+        if dest.exists():
+            return dest
+        
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        url = _RELEASE_URL.format(version=version, arch=oc_arch)
+        print(f"[opencode] downloading Linux binary for {oc_arch} from {url} ...", flush=True)
+        archive_path = dest_dir / "opencode.tar.gz"
+        urllib.request.urlretrieve(url, archive_path)  # noqa: S310
+        with tarfile.open(archive_path) as tf:
+            member = tf.getmember("opencode")   # single file at tarball root
+            tf.extract(member, dest_dir, filter="data")  # noqa: S202
+        archive_path.unlink()
+        dest.chmod(0o755)
+        return dest
 
 
 def _describe_event(obj: dict) -> tuple[str | None, bool]:

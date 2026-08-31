@@ -42,6 +42,7 @@ from __future__ import annotations
 import shlex
 import subprocess
 import tarfile
+import threading
 import urllib.request
 from pathlib import Path
 
@@ -58,24 +59,42 @@ _LINUX_RELEASE_URL = (
 )
 _ARCH_ALIASES = {"arm64": "aarch64", "aarch64": "aarch64", "amd64": "x86_64", "x86_64": "x86_64"}
 
+# Lock to ensure thread-safe binary downloads; prevents race conditions when
+# multiple instances try to download the same binary concurrently.
+_DOWNLOAD_LOCK = threading.Lock()
+
 
 def ensure_linux_binary(arch: str, cache_dir: Path) -> Path:
-    """Download (once, cached) a Linux goose binary for ``arch``; return its path."""
+    """Download (once, cached) a Linux goose binary for ``arch``; return its path.
+    
+    Thread-safe: uses a lock to prevent concurrent download race conditions when
+    multiple instances try to download the same binary simultaneously. The first
+    thread to acquire the lock downloads; others wait and reuse the result.
+    """
     goose_arch = _ARCH_ALIASES.get(arch, arch)
     dest_dir = cache_dir / f"goose-{goose_arch}-unknown-linux-gnu"
     dest = dest_dir / "goose"
+    
+    # Quick check without lock (common case: already cached)
     if dest.exists():
         return dest
-    dest_dir.mkdir(parents=True, exist_ok=True)
-    url = _LINUX_RELEASE_URL.format(arch=goose_arch)
-    print(f"[goose] downloading Linux binary for {goose_arch} from {url} ...", flush=True)
-    archive_path = dest_dir / "goose.tar.bz2"
-    urllib.request.urlretrieve(url, archive_path)  # noqa: S310
-    with tarfile.open(archive_path) as tf:
-        tf.extractall(dest_dir)  # noqa: S202
-    archive_path.unlink()
-    dest.chmod(0o755)
-    return dest
+    
+    # Acquire lock for download to prevent concurrent race conditions
+    with _DOWNLOAD_LOCK:
+        # Double-check after acquiring lock: another thread may have finished download
+        if dest.exists():
+            return dest
+        
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        url = _LINUX_RELEASE_URL.format(arch=goose_arch)
+        print(f"[goose] downloading Linux binary for {goose_arch} from {url} ...", flush=True)
+        archive_path = dest_dir / "goose.tar.bz2"
+        urllib.request.urlretrieve(url, archive_path)  # noqa: S310
+        with tarfile.open(archive_path) as tf:
+            tf.extractall(dest_dir)  # noqa: S202
+        archive_path.unlink()
+        dest.chmod(0o755)
+        return dest
 
 
 def _describe_event(obj: dict) -> tuple[str | None, bool]:

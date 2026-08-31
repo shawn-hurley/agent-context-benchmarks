@@ -128,6 +128,7 @@ from __future__ import annotations
 
 import shlex
 import tarfile
+import threading
 import urllib.request
 from pathlib import Path
 
@@ -156,6 +157,10 @@ _REGISTRY_TARBALL_URL = (
     "claude-code-linux-{npm_arch}-{version}.tgz"
 )
 
+# Lock to ensure thread-safe binary downloads; prevents race conditions when
+# multiple instances try to download the same binary concurrently.
+_DOWNLOAD_LOCK = threading.Lock()
+
 
 def ensure_linux_binary(arch: str, cache_dir: Path, version: str = DEFAULT_VERSION) -> Path:
     """Download (once, cached) a Linux `claude` binary for ``arch``; return its path.
@@ -168,24 +173,37 @@ def ensure_linux_binary(arch: str, cache_dir: Path, version: str = DEFAULT_VERSI
     `package/package.json`, `package/LICENSE.md`, `package/README.md`) --
     no `npm install`/extraction-via-npm needed, just untar and take the one
     binary.
+    
+    Thread-safe: uses a lock to prevent concurrent download race conditions when
+    multiple instances try to download the same binary simultaneously. The first
+    thread to acquire the lock downloads; others wait and reuse the result.
     """
     npm_arch = _ARCH_ALIASES.get(arch, arch)
     dest_dir = cache_dir / f"claude-code-linux-{npm_arch}-{version}"
     dest = dest_dir / "claude"
+    
+    # Quick check without lock (common case: already cached)
     if dest.exists():
         return dest
-    dest_dir.mkdir(parents=True, exist_ok=True)
-    url = _REGISTRY_TARBALL_URL.format(npm_arch=npm_arch, version=version)
-    print(f"[claude-code] downloading Linux binary for {npm_arch} from {url} ...", flush=True)
-    archive_path = dest_dir / "claude-code.tgz"
-    urllib.request.urlretrieve(url, archive_path)  # noqa: S310
-    with tarfile.open(archive_path) as tf:
-        member = tf.getmember("package/claude")
-        member.name = "claude"  # extract flat into dest_dir, not package/claude
-        tf.extract(member, dest_dir, filter="data")  # noqa: S202
-    archive_path.unlink()
-    dest.chmod(0o755)
-    return dest
+    
+    # Acquire lock for download to prevent concurrent race conditions
+    with _DOWNLOAD_LOCK:
+        # Double-check after acquiring lock: another thread may have finished download
+        if dest.exists():
+            return dest
+        
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        url = _REGISTRY_TARBALL_URL.format(npm_arch=npm_arch, version=version)
+        print(f"[claude-code] downloading Linux binary for {npm_arch} from {url} ...", flush=True)
+        archive_path = dest_dir / "claude-code.tgz"
+        urllib.request.urlretrieve(url, archive_path)  # noqa: S310
+        with tarfile.open(archive_path) as tf:
+            member = tf.getmember("package/claude")
+            member.name = "claude"  # extract flat into dest_dir, not package/claude
+            tf.extract(member, dest_dir, filter="data")  # noqa: S202
+        archive_path.unlink()
+        dest.chmod(0o755)
+        return dest
 
 
 def _describe_event(obj: dict) -> tuple[str | None, bool]:

@@ -1,0 +1,15 @@
+# SWE-bench Lite run with goose harness
+#
+# Lite variant: 534 curated instances for faster iteration
+# Use this as a template: copy to config/swebench-lite/ and customize model/proxy
+#
+# Run with:  acb run --config config/swebench-lite/run.goose-lite.yaml
+
+run_id: swebench-lite-goose
+benchmark: swebench-lite                    # key in benchmarks.yaml (534 instances)
+harness: goose                              # key in harnesses.yaml
+model: mlx-community/Qwen3-Coder-30B-A3B-Instruct-4bit-dwq-v2  # key in proxy.yaml `models` (local, localhost:8000)
+proxy: praxis                               # key in proxy.yaml `backends`
+limit: 20                                   # optional: run first 20 instances (remove or adjust as needed)
+max_workers: 2                              # optional: parallel workers
+output_dir: runs

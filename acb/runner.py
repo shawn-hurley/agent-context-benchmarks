@@ -233,7 +233,9 @@ def _run_single_harness(
             # Harness-specific asset staging (e.g. goose's binary,
             # claude-code's) is the harness's own job now, not the
             # benchmark's -- see HarnessAdapter.setup_container().
-            harness.setup_container(testbed_container, arch, instance_dir)
+            # Pass harness_out_dir (not instance_dir) so binary caching is shared
+            # across all instances, avoiding concurrent download race conditions.
+            harness.setup_container(testbed_container, arch, harness_out_dir)
             tags = ProxyTags(
                 run_id=cfg.run_id, benchmark=cfg.benchmark, harness=harness_name,
                 model=cfg.model, instance_id=instance.instance_id,

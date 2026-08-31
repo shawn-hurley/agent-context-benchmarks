@@ -64,6 +64,7 @@ import json
 import shlex
 import tarfile
 import tempfile
+import threading
 import urllib.request
 from pathlib import Path
 
@@ -88,30 +89,47 @@ _CONTAINER_DIR = "/opt/pi"
 _CONTAINER_BINARY = f"{_CONTAINER_DIR}/pi"
 _CONTAINER_AGENT_DIR = "/tmp/pi-agent"
 
+# Lock to ensure thread-safe binary downloads; prevents race conditions when
+# multiple instances try to download the same binary concurrently.
+_DOWNLOAD_LOCK = threading.Lock()
+
 
 def ensure_linux_files(arch: str, cache_dir: Path,
-                        version: str = DEFAULT_VERSION) -> Path:
+                         version: str = DEFAULT_VERSION) -> Path:
     """Download (once, cached) the pi Linux release directory for ``arch``.
 
     Returns the path to the extracted `pi/` directory (which contains the
     `pi` binary and `node_modules/`). The whole directory is needed because
     the binary loads native addons from node_modules/ at runtime.
+    
+    Thread-safe: uses a lock to prevent concurrent download race conditions when
+    multiple instances try to download the same binary simultaneously. The first
+    thread to acquire the lock downloads; others wait and reuse the result.
     """
     pi_arch = _ARCH_ALIASES.get(arch, arch)
     dest_dir = cache_dir / f"pi-linux-{pi_arch}-{version}"
     pi_subdir = dest_dir / "pi"  # tarball extracts to pi/ subdirectory
+    
+    # Quick check without lock (common case: already cached)
     if pi_subdir.exists() and (pi_subdir / "pi").exists():
         return pi_subdir
-    dest_dir.mkdir(parents=True, exist_ok=True)
-    url = _RELEASE_URL.format(version=version, arch=pi_arch)
-    print(f"[pi] downloading Linux release for {pi_arch} from {url} ...", flush=True)
-    archive_path = dest_dir / "pi.tar.gz"
-    urllib.request.urlretrieve(url, archive_path)  # noqa: S310
-    with tarfile.open(archive_path) as tf:
-        tf.extractall(dest_dir, filter="data")  # extracts pi/ subdirectory
-    archive_path.unlink()
-    (pi_subdir / "pi").chmod(0o755)
-    return pi_subdir
+    
+    # Acquire lock for download to prevent concurrent race conditions
+    with _DOWNLOAD_LOCK:
+        # Double-check after acquiring lock: another thread may have finished download
+        if pi_subdir.exists() and (pi_subdir / "pi").exists():
+            return pi_subdir
+        
+        dest_dir.mkdir(parents=True, exist_ok=True)
+        url = _RELEASE_URL.format(version=version, arch=pi_arch)
+        print(f"[pi] downloading Linux release for {pi_arch} from {url} ...", flush=True)
+        archive_path = dest_dir / "pi.tar.gz"
+        urllib.request.urlretrieve(url, archive_path)  # noqa: S310
+        with tarfile.open(archive_path) as tf:
+            tf.extractall(dest_dir, filter="data")  # extracts pi/ subdirectory
+        archive_path.unlink()
+        (pi_subdir / "pi").chmod(0o755)
+        return pi_subdir
 
 
 def _describe_event(obj: dict) -> tuple[str | None, bool]:

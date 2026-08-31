@@ -1,0 +1,51 @@
+# SWE-bench Lite run with multiple harnesses (comparison mode)
+#
+# This example demonstrates running multiple harnesses in a single benchmark run.
+# Harnesses execute sequentially, each producing isolated results that are
+# compared in an aggregated suite-level report.
+#
+# Use case: Compare different agents/harnesses before committing to long runs.
+# Benefits: Identify which harness performs best on your benchmark before
+# scaling up with larger instance limits.
+#
+# Output structure:
+#   runs/<run_id>/
+#   ├── report.json              # Suite-level aggregated results
+#   ├── report.html              # Suite-level comparison report
+#   ├── goose/
+#   │   ├── instances/
+#   │   ├── report.json
+#   │   └── report.html
+#   ├── claude-code/
+#   │   ├── instances/
+#   │   ├── report.json
+#   │   └── report.html
+#   ├── opencode/
+#   │   ├── instances/
+#   │   ├── report.json
+#   │   └── report.html
+#   └── pi/
+#       ├── instances/
+#       ├── report.json
+#       └── report.html
+#
+# Run with:  acb run --config config/swebench-lite/run.multi-harness-comparison.yaml
+
+run_id: swebench-lite-multi-harness                # descriptive ID for this comparison run
+benchmark: swebench-lite                            # key in benchmarks.yaml (534 instances)
+harness:                                            # Multiple harnesses as YAML list
+  - goose                                           # key in harnesses.yaml
+  - claude-code                                     # key in harnesses.yaml
+  - opencode                                        # key in harnesses.yaml
+  - pi                                              # key in harnesses.yaml
+model: mlx-community/Qwen3-Coder-30B-A3B-Instruct-4bit-dwq-v2  # key in proxy.yaml `models` (local, localhost:8000)
+proxy: praxis                                       # key in proxy.yaml `backends`
+limit: 10                                           # keep this low for multi-harness (10 instances × 4 harnesses = reasonable runtime)
+max_workers: 2                                      # optional: parallel workers per harness
+output_dir: runs                                    # optional: output directory (default: runs)
+
+# Notes:
+# - Harnesses run sequentially, not in parallel (each waits for the previous to complete)
+# - Each harness gets independent timeout and resource management
+# - Suite-level report aggregates results from all harnesses for easy comparison
+# - To run a single harness instead, change `harness` to a string (e.g., `harness: goose`)
