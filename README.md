@@ -90,8 +90,9 @@ containers:
   `acb-praxis-ai:latest`, and reused across every instance/run after that.
   Not the core
   [praxis-proxy/praxis](https://github.com/praxis-proxy/praxis) gateway --
-  praxis-ai is a superset that adds the `token_count` filter (real per-
-  request token accounting) and, for claude-code specifically, an
+  praxis-ai is a superset that adds the `benchmark_metrics` filter
+  (comprehensive token tracking including cache_read and cache_creation
+  tokens) and, for claude-code specifically, an
   Anthropic↔OpenAI translation chain (`anthropic_messages_format` /
   `anthropic_to_openai` / `anthropic_stream_events`) that lets an Anthropic-
   speaking harness target an OpenAI-compatible local model -- see
@@ -140,6 +141,30 @@ podman build --tag acb-praxis-ai:latest .
 `acb` builds and tags this image automatically the first time it is needed;
 the manual command above is only necessary to force a rebuild (e.g. after
 updating the filter source in `praxis-vertex-anthropic/`).
+
+### When to Rebuild the Praxis-AI Image
+
+The `acb-praxis-ai:latest` image is built once and cached in `podman images`. 
+**Python code changes** (`acb/*.py`) take effect immediately, but **Rust filter 
+changes** in `praxis-vertex-anthropic/` require rebuilding the image because 
+they're compiled into the binary.
+
+Rebuild when you:
+- Pull code updates that modify custom filters in `praxis-vertex-anthropic/`
+- Check out an older commit (image may have newer filters than code expects)
+- See error: `fatal: unknown filter type: 'benchmark_metrics'`
+
+```bash
+# Quick rebuild: remove image, next run rebuilds automatically
+podman rmi acb-praxis-ai:latest
+
+# Or rebuild immediately
+podman build --tag acb-praxis-ai:latest .
+```
+
+**Custom filters included:**
+- `vertex_anthropic_prepare` — Rewrites Anthropic requests for Vertex AI compatibility
+- `benchmark_metrics` — Comprehensive token tracking (all token types, all backends)
 
 **2. A per-instance testbed image** (e.g. `sweb.eval.arm64.psf_1776_requests-1142:latest`)
 — built from that instance's Dockerfile in the public task repo. On
@@ -262,3 +287,237 @@ overrides:
   `princeton-nlp/SWE-bench_Verified` — the vendored harness (v5.0.2) requires
   per-instance `image`/`eval_script`/`log_parser`/`eval_type` fields the
   princeton-nlp dataset predates and doesn't have.
+
+## Troubleshooting
+
+### Error: `fatal: unknown filter type: 'benchmark_metrics'`
+
+**Symptom:** Benchmark run fails immediately when starting praxis-ai with:
+```
+fatal: unknown filter type: 'benchmark_metrics'
+```
+or similar error for `vertex_anthropic_prepare`.
+
+**Root Cause:** The `acb-praxis-ai:latest` container image was built before 
+custom filters were added (commit `d0cd5fe`, Aug 26 2026), or you pulled code 
+updates but didn't rebuild the image. The image contains a compiled Rust 
+binary; code changes to filters in `praxis-vertex-anthropic/` require 
+recompiling.
+
+**Quick Fix:**
+
+```bash
+podman rmi acb-praxis-ai:latest
+# Next acb run will rebuild automatically with current filters
+```
+
+**Detailed Diagnosis:**
+
+If the quick fix doesn't resolve it, verify your environment:
+
+```bash
+# 1. Check your code is up to date
+git log --oneline -1
+# Should show commit 0f6c41d or later (has benchmark_metrics)
+
+# 2. Verify filter source exists in your checkout
+ls -la praxis-vertex-anthropic/src/metrics_collector.rs
+# Should exist (this implements benchmark_metrics filter)
+
+# 3. Check current image age
+podman images | grep acb-praxis-ai
+# If created before your last git pull, rebuild needed
+
+# 4. Detailed image inspection
+podman inspect acb-praxis-ai:latest | grep Created
+```
+
+**Manual Rebuild Process:**
+
+```bash
+# 1. Remove outdated image
+podman rmi acb-praxis-ai:latest
+
+# 2. Rebuild from current code
+podman build --tag acb-praxis-ai:latest .
+# Build takes ~5-10 minutes (compiles Rust dependencies)
+# Uses podman's build cache on subsequent rebuilds
+
+# 3. Verify new image
+podman images | grep acb-praxis-ai
+# Should show recently created image (~40MB)
+```
+
+**Prevention:** After `git pull`, check for filter changes and proactively rebuild:
+
+```bash
+git pull origin main
+git diff HEAD@{1} HEAD -- praxis-vertex-anthropic/
+# If you see changes, rebuild:
+podman rmi acb-praxis-ai:latest
+```
+
+### Slow Container Builds
+
+**Symptom:** `podman build` takes 10+ minutes or seems stuck during Rust compilation.
+
+**Cause:** First build compiles the entire praxis-ai Rust project from scratch, 
+including all dependencies. This is normal. Subsequent builds use podman's 
+layer cache and complete much faster.
+
+**Solutions:**
+
+1. **Be patient on first build** — 5-10 minutes is normal
+2. **Increase VM resources** (Podman machine on macOS):
+   ```bash
+   podman machine stop
+   podman machine set --cpus 4 --memory 8192
+   podman machine start
+   ```
+
+3. **Check available disk space:**
+   ```bash
+   podman system df
+   # If low on space, clean up old images:
+   podman image prune -a
+   ```
+
+4. **View build progress** — If it seems stuck, watch for Rust compilation output:
+   ```bash
+   podman build --tag acb-praxis-ai:latest . 2>&1 | grep -E "Compiling|Finished"
+   ```
+
+### Rust Compilation Errors During Build
+
+**Symptom:** `podman build` fails with Rust compiler errors like:
+```
+error[E0425]: cannot find value `foo` in this scope
+```
+
+**Cause:** The `praxis-vertex-anthropic/` filter code has syntax errors or 
+incompatible changes.
+
+**Solutions:**
+
+1. **If you didn't modify filter code:**
+   ```bash
+   # Reset to clean state
+   git status
+   git diff praxis-vertex-anthropic/
+   # If unexpected changes, restore:
+   git checkout HEAD -- praxis-vertex-anthropic/
+   ```
+
+2. **If you're developing filters:**
+   ```bash
+   # Test compilation locally first
+   cd praxis-vertex-anthropic
+   cargo check
+   # Fix errors before rebuilding image
+   ```
+
+3. **Check Containerfile is unmodified:**
+   ```bash
+   git diff Containerfile
+   # Should show no changes unless intentional
+   ```
+
+### Container Image Cleanup
+
+**Symptom:** Multiple old `acb-praxis-ai` images accumulating disk space.
+
+**Cause:** Each rebuild creates a new image; old images aren't auto-deleted.
+
+**Solution:**
+
+```bash
+# List all praxis images
+podman images | grep praxis
+
+# Remove specific old image by ID
+podman rmi <IMAGE_ID>
+
+# Remove all unused images (including old praxis-ai versions)
+podman image prune -a
+
+# Check disk usage
+podman system df
+```
+
+### Harness Binary Download Failures
+
+**Symptom:** Run fails with:
+```
+Failed to download goose binary
+```
+or similar for claude-code/opencode/pi.
+
+**Cause:** Network issues, GitHub/npm rate limits, or temporary service outage.
+
+**Solutions:**
+
+```bash
+# 1. Check network connectivity
+curl -I https://github.com
+
+# 2. Check if .cache directory is writable
+ls -la runs/<run_id>/.cache/
+# Should exist and be writable
+
+# 3. Manual download (example for goose):
+cd runs/<run_id>/.cache/
+curl -L https://github.com/aaif-goose/goose/releases/download/stable/goose-x86_64-unknown-linux-gnu.tar.bz2 | tar xj
+
+# 4. Retry the run
+# Harness checks .cache/ first before downloading
+```
+
+### Per-Instance Cache Directories (Known Issue)
+
+**Current Behavior:** Harness binaries are downloaded once per instance rather 
+than once per harness. You may see multiple copies:
+```
+runs/my-run/goose/instances/instance1/.cache/goose-x86_64
+runs/my-run/goose/instances/instance2/.cache/goose-x86_64
+```
+
+**Impact:** Redundant downloads and disk usage (each binary ~50-340MB depending 
+on harness).
+
+**Status:** Known issue, fix planned. Workaround is to tolerate the extra disk 
+usage; the downloads are still cached per-instance so don't slow down subsequent 
+runs on the same instances.
+
+### Podman Machine Won't Start (macOS)
+
+**Symptom:**
+```bash
+podman machine start
+Error: unable to start host networking: ...
+```
+
+**Common Causes:**
+
+1. **Port conflict:** Another VM or service using podman's ports
+   ```bash
+   podman machine stop
+   podman machine rm
+   podman machine init --cpus 4 --memory 8192
+   podman machine start
+   ```
+
+2. **Stale VM state:**
+   ```bash
+   # Clean restart
+   podman machine stop
+   podman machine rm
+   podman machine init
+   podman machine start
+   ```
+
+3. **Check podman version:**
+   ```bash
+   podman --version
+   # Ensure 4.0+ for best macOS support
+   brew upgrade podman
+   ```
