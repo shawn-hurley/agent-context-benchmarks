@@ -79,6 +79,11 @@ const VERTEX_OUTPUT_TOKENS_HEADER: &str = "internal-output-tokens";
 const VERTEX_CACHE_READ_HEADER: &str = "x-vertex-ai-cache-read-input-tokens";
 const VERTEX_CACHE_CREATION_HEADER: &str = "x-vertex-ai-cache-creation-input-tokens";
 
+/// OpenAI-compatible (vLLM, Ollama) response headers — token counts.
+/// vLLM and compatible servers may include these headers alongside SSE streams.
+const OPENAI_USAGE_PROMPT_TOKENS_HEADER: &str = "x-openai-usage-prompt-tokens";
+const OPENAI_USAGE_COMPLETION_TOKENS_HEADER: &str = "x-openai-usage-completion-tokens";
+
 lazy_static! {
     static ref METRICS_FILE: Mutex<BufWriter<File>> = {
         let file = OpenOptions::new()
@@ -322,39 +327,40 @@ impl BenchmarkMetricsFilter {
                     }
                 }
             }
-            _ => {
-                // ping, content_block_*, message_stop, etc. — no token data
-                // Also handles vLLM/OpenAI SSE with no event: prefix (empty event_type)
-                // For empty event_type, try to extract tokens from the data JSON itself.
-                if event_type.is_empty() && !evt.is_null() {
-                    // vLLM/OpenAI streaming response with usage in the data JSON
-                    if let Some(usage) = evt.get("usage") {
+            // OpenAI/vLLM compatible streaming responses (ChatCompletionChunk).
+            // For OpenAI-compatible servers (vLLM, Ollama, etc.), streaming responses
+            // include a `usage` field that may be null except for the final chunk.
+            // The event_type is typically missing or contains the event name, but we
+            // don't rely on it — we check if usage data is present and non-null.
+            "chunk" | "openai-chunk" | "" => {
+                if let Some(usage) = evt.get("usage") {
+                    if !usage.is_null() {
                         // Try Anthropic format first (input_tokens / output_tokens)
                         if usage.get("input_tokens").is_some() {
                             Self::extract_anthropic_usage(usage, data);
-                            debug!("extracted tokens from vLLM/OpenAI SSE (Anthropic-style format)");
+                            debug!("extracted tokens from OpenAI SSE (Anthropic-style usage)");
                         } else {
-                            // Fall back to OpenAI format (prompt_tokens / completion_tokens)
+                            // OpenAI format (prompt_tokens / completion_tokens)
                             if let Some(v) = usage.get("prompt_tokens").and_then(|v| v.as_u64()) {
-                                if v > 0 || data.input_tokens == 0 {
-                                    data.input_tokens = v;
-                                }
+                                data.input_tokens = v;
                             }
                             if let Some(v) = usage.get("completion_tokens").and_then(|v| v.as_u64()) {
-                                if v > 0 || data.output_tokens == 0 {
-                                    data.output_tokens = v;
-                                }
+                                data.output_tokens = v;
                             }
                             if data.input_tokens > 0 || data.output_tokens > 0 {
                                 debug!(
                                     input_tokens = data.input_tokens,
                                     output_tokens = data.output_tokens,
-                                    "extracted tokens from vLLM/OpenAI SSE (prompt_tokens/completion_tokens)"
+                                    "extracted tokens from OpenAI SSE (prompt_tokens/completion_tokens)"
                                 );
                             }
                         }
                     }
                 }
+            }
+            _ => {
+                // Other event types: ping, content_block_*, message_stop, etc.
+                // No token extraction for these.
             }
         }
     }
@@ -595,6 +601,26 @@ impl HttpFilter for BenchmarkMetricsFilter {
                 if let Some(count) = Self::extract_token_count(s) {
                     data.cache_creation_input_tokens = count;
                     debug!(cache_creation_input_tokens = count, "extracted from Vertex header");
+                }
+            }
+        }
+
+        // Extract tokens from OpenAI-compatible response headers (vLLM, Ollama, etc.)
+        // These headers may be present for streaming responses.
+        if let Some(val) = response_headers.get(OPENAI_USAGE_PROMPT_TOKENS_HEADER) {
+            if let Ok(s) = val.to_str() {
+                if let Some(count) = Self::extract_token_count(s) {
+                    data.input_tokens = count;
+                    debug!(input_tokens = count, "extracted from OpenAI header");
+                }
+            }
+        }
+
+        if let Some(val) = response_headers.get(OPENAI_USAGE_COMPLETION_TOKENS_HEADER) {
+            if let Ok(s) = val.to_str() {
+                if let Some(count) = Self::extract_token_count(s) {
+                    data.output_tokens = count;
+                    debug!(output_tokens = count, "extracted from OpenAI header");
                 }
             }
         }
