@@ -280,19 +280,22 @@ def build_config(port: int, model_spec, harness_api: str, include_token_count: b
             }]},
         ]
 
+        # --- Metrics filter ordering ---
+        # Response-phase hooks run in *reverse* declared order, so
+        # token_usage_to_metrics must be declared FIRST so it runs LAST
+        # in response phase — after token_count and benchmark_metrics
+        # have populated filter_metadata with extracted token counts.
+        filters.append({"filter": "token_usage_to_metrics", "conditions": _messages_only()})
+
         # Extract tokens from Anthropic SSE responses.
-        # Must come BEFORE benchmark_metrics so benchmark_metrics can read from metadata.
+        # Writes to filter_metadata (token.input, token.output, token.total).
         filters.append({"filter": "token_count", "provider": "anthropic", "conditions": _messages_only()})
 
         # Collect comprehensive metrics including all token types, timing, and sizes.
-        # Writes to /tmp/benchmark_metrics.jsonl for direct consumption (no log parsing).
         # Also strips vertex_event from SSE streams to prevent SDK validation errors.
-        # Stores extracted tokens to metadata for downstream token_usage_to_metrics filter.
+        # Writes to filter_metadata (token.input/output/total/cache_read/cache_creation),
+        # only if not already set by token_count above.
         filters.append({"filter": "benchmark_metrics", "conditions": _messages_only()})
-
-        # Write metrics to file with deduplication by request_id.
-        # Reads token counts from filter_metadata (written by token_count filter above or benchmark_metrics).
-        filters.append({"filter": "token_usage_to_metrics", "conditions": _messages_only()})
 
         # Create separate cluster dicts to avoid YAML aliases (&id001/*id001)
         # when yaml.safe_dump sees the same object reused multiple times.
@@ -399,6 +402,13 @@ def build_config(port: int, model_spec, harness_api: str, include_token_count: b
     # relative order (benchmark_metrics before access_log).
     trailing_filters: list[dict] = []
     if include_token_count:
+        # --- Metrics filter ordering ---
+        # Response-phase hooks run in *reverse* declared order, so
+        # token_usage_to_metrics must be declared FIRST so it runs LAST
+        # in response phase — after token_count and benchmark_metrics
+        # have populated filter_metadata with extracted token counts.
+        trailing_filters.append({"filter": "token_usage_to_metrics"})
+
         # Extract tokens from OpenAI-compatible (vLLM/Ollama) responses.
         # For non-translated Anthropic->OpenAI requests, the backend is native Anthropic,
         # so token_count: anthropic is used. For translated requests, the backend is OpenAI,
@@ -411,17 +421,13 @@ def build_config(port: int, model_spec, harness_api: str, include_token_count: b
         elif model_spec.api == "anthropic":
             trailing_filters.append({"filter": "token_count", "provider": "anthropic"})
 
-        # Use benchmark_metrics for comprehensive token tracking across all backends.
-        # Writes to /tmp/benchmark_metrics.jsonl for reliable file-based collection.
+        # Comprehensive token tracking across all backends.
         # Handles both OpenAI and Anthropic response formats automatically,
         # captures all token types (input, output, cache_read, cache_creation),
-        # and includes timing/size data. Much more reliable than parsing logs.
-        # Stores extracted tokens to metadata for downstream token_usage_to_metrics filter.
+        # and includes timing/size data.
+        # Writes to filter_metadata (token.input/output/total/cache_read/cache_creation),
+        # only if not already set by token_count above.
         trailing_filters.append({"filter": "benchmark_metrics"})
-
-        # Write metrics to file with deduplication by request_id.
-        # Reads token counts from filter_metadata (written by token_count filter above or benchmark_metrics).
-        trailing_filters.append({"filter": "token_usage_to_metrics"})
     trailing_filters.append({"filter": "access_log", "sample_rate": 1.0})
 
     if translate:

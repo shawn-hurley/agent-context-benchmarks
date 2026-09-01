@@ -19,6 +19,7 @@ import hashlib
 import json
 import os
 import platform as _platform
+import re
 import traceback
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
@@ -331,12 +332,46 @@ def _run_single_harness(
     return predictions, resolved
 
 
+def _resolve_run_dir(output_dir: str, run_id: str) -> tuple[Path, str]:
+    """Pick a unique output directory for this run, appending ``-N`` on collision.
+
+    First run:  ``runs/<run_id>/``        (no suffix)
+    Second run: ``runs/<run_id>-1/``
+    Third run:  ``runs/<run_id>-2/``
+    …and so on.
+
+    Returns ``(out_dir, effective_run_id)`` — the caller should use
+    ``effective_run_id`` everywhere (reports, usage records, pod names)
+    so metadata stays consistent with the on-disk path.
+    """
+    base = Path(output_dir).resolve()
+    candidate = base / run_id
+    if not candidate.exists():
+        return candidate, run_id
+
+    # Scan for existing <run_id>-N directories to find the next number.
+    pattern = re.compile(rf"^{re.escape(run_id)}-(\d+)$")
+    max_n = 0  # 0 means only the unsuffixed dir exists → next is -1
+    for entry in base.iterdir():
+        if entry.is_dir():
+            m = pattern.match(entry.name)
+            if m:
+                max_n = max(max_n, int(m.group(1)))
+
+    next_n = max_n + 1
+    effective_id = f"{run_id}-{next_n}"
+    return base / effective_id, effective_id
+
+
 def run(cfg: RunConfig, registries: Registries | None = None) -> Path:
     registries = registries or Registries.load()
     # Absolute: SWE-bench's evaluation subprocess runs with cwd=SWE-bench/, so
     # any relative path derived from out_dir (predictions.jsonl etc.) would
     # otherwise resolve against the wrong directory once passed to it.
-    out_dir = (Path(cfg.output_dir) / cfg.run_id).resolve()
+    out_dir, effective_run_id = _resolve_run_dir(cfg.output_dir, cfg.run_id)
+    if effective_run_id != cfg.run_id:
+        print(f"[acb] previous run exists, using {effective_run_id}")
+        cfg = RunConfig(**{**cfg.__dict__, "run_id": effective_run_id})
     out_dir.mkdir(parents=True, exist_ok=True)
 
     bench_cfg = {**registries.benchmarks.get(cfg.benchmark, {}), **cfg.overrides.get("benchmark", {})}

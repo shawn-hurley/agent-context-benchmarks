@@ -669,11 +669,19 @@ impl HttpFilter for BenchmarkMetricsFilter {
             if ctx.get_metadata("token.total").is_none() {
                 ctx.set_metadata("token.total", metric.total_tokens.to_string());
             }
+            if ctx.get_metadata("token.cache_read").is_none() {
+                ctx.set_metadata("token.cache_read", metric.cache_read_input_tokens.to_string());
+            }
+            if ctx.get_metadata("token.cache_creation").is_none() {
+                ctx.set_metadata("token.cache_creation", metric.cache_creation_input_tokens.to_string());
+            }
 
             debug!(
                 token_input = metric.input_tokens,
                 token_output = metric.output_tokens,
                 token_total = metric.total_tokens,
+                token_cache_read = metric.cache_read_input_tokens,
+                token_cache_creation = metric.cache_creation_input_tokens,
                 "wrote tokens to filter metadata (only if not already set by token_count filter)"
             );
         }

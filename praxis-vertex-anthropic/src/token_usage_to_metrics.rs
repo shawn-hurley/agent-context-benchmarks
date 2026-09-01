@@ -8,8 +8,9 @@
 //! like status, duration, etc.
 
 use async_trait::async_trait;
+use bytes::Bytes;
 use lazy_static::lazy_static;
-use praxis_filter::{FilterAction, FilterError, HttpFilter, HttpFilterContext};
+use praxis_filter::{BodyAccess, BodyMode, FilterAction, FilterError, HttpFilter, HttpFilterContext};
 use serde::{Deserialize, Serialize};
 use std::fs::{File, OpenOptions};
 use std::io::{BufRead, BufReader, BufWriter, Write};
@@ -19,10 +20,13 @@ use tracing::{debug, trace, warn};
 
 const METRICS_FILE_PATH: &str = "/tmp/benchmark_metrics.jsonl";
 
-/// Metadata keys written by the token_count filter from research-llm-cost.
+/// Metadata keys written by the token_count filter from research-llm-cost
+/// and by the benchmark_metrics filter.
 const META_TOKEN_INPUT: &str = "token.input";
 const META_TOKEN_OUTPUT: &str = "token.output";
 const META_TOKEN_TOTAL: &str = "token.total";
+const META_TOKEN_CACHE_READ: &str = "token.cache_read";
+const META_TOKEN_CACHE_CREATION: &str = "token.cache_creation";
 
 lazy_static! {
     static ref METRICS_FILE: Mutex<BufWriter<File>> = {
@@ -82,8 +86,8 @@ impl TokenUsageToMetricsFilter {
     }
 
     /// Extract token counts from filter_metadata.
-    /// Returns (input_tokens, output_tokens, total_tokens).
-    fn extract_tokens_from_metadata(ctx: &HttpFilterContext<'_>) -> (u64, u64, u64) {
+    /// Returns (input_tokens, output_tokens, total_tokens, cache_read_tokens, cache_creation_tokens).
+    fn extract_tokens_from_metadata(ctx: &HttpFilterContext<'_>) -> (u64, u64, u64, u64, u64) {
         let input = ctx
             .get_metadata(META_TOKEN_INPUT)
             .and_then(|s| s.parse::<u64>().ok())
@@ -99,7 +103,17 @@ impl TokenUsageToMetricsFilter {
             .and_then(|s| s.parse::<u64>().ok())
             .unwrap_or_else(|| input.saturating_add(output));
 
-        (input, output, total)
+        let cache_read = ctx
+            .get_metadata(META_TOKEN_CACHE_READ)
+            .and_then(|s| s.parse::<u64>().ok())
+            .unwrap_or(0);
+
+        let cache_creation = ctx
+            .get_metadata(META_TOKEN_CACHE_CREATION)
+            .and_then(|s| s.parse::<u64>().ok())
+            .unwrap_or(0);
+
+        (input, output, total, cache_read, cache_creation)
     }
 
     /// Write metric to file if request_id is not already present.
@@ -125,11 +139,36 @@ impl HttpFilter for TokenUsageToMetricsFilter {
         "token_usage_to_metrics"
     }
 
+    fn response_body_access(&self) -> BodyAccess {
+        BodyAccess::ReadOnly
+    }
+
+    fn response_body_mode(&self) -> BodyMode {
+        BodyMode::Stream
+    }
+
     async fn on_request(&self, _ctx: &mut HttpFilterContext<'_>) -> Result<FilterAction, FilterError> {
         Ok(FilterAction::Continue)
     }
 
-    async fn on_response(&self, ctx: &mut HttpFilterContext<'_>) -> Result<FilterAction, FilterError> {
+    async fn on_response(&self, _ctx: &mut HttpFilterContext<'_>) -> Result<FilterAction, FilterError> {
+        // Defer all metric writing to on_response_body at end_of_stream,
+        // when token metadata has been populated by benchmark_metrics or token_count.
+        Ok(FilterAction::Continue)
+    }
+
+    fn on_response_body(
+        &self,
+        ctx: &mut HttpFilterContext<'_>,
+        _body: &mut Option<Bytes>,
+        end_of_stream: bool,
+    ) -> Result<FilterAction, FilterError> {
+        // Only write the metric once the entire response body has streamed and
+        // all metadata (token counts, cache info) has been populated by upstream filters.
+        if !end_of_stream {
+            return Ok(FilterAction::Continue);
+        }
+
         // Extract all available data from context
         let request_id = ctx.request_id().unwrap_or("-").to_string();
         let endpoint = ctx.request.uri.path().to_string();
@@ -146,8 +185,9 @@ impl HttpFilter for TokenUsageToMetricsFilter {
             .map(|d| d.as_millis() as u64)
             .unwrap_or(0);
 
-        // Extract tokens from metadata (written by token_count filter)
-        let (input_tokens, output_tokens, total_tokens) = Self::extract_tokens_from_metadata(ctx);
+        // Extract tokens and cache info from metadata (written by token_count filter or benchmark_metrics)
+        let (input_tokens, output_tokens, total_tokens, cache_read_input_tokens, cache_creation_input_tokens) =
+            Self::extract_tokens_from_metadata(ctx);
 
         // Build metric record
         let metric = BenchmarkMetric {
@@ -155,8 +195,8 @@ impl HttpFilter for TokenUsageToMetricsFilter {
             timestamp_ms,
             input_tokens,
             output_tokens,
-            cache_read_input_tokens: 0, // Not in token_count metadata; would need separate tracking
-            cache_creation_input_tokens: 0, // Not in token_count metadata; would need separate tracking
+            cache_read_input_tokens,
+            cache_creation_input_tokens,
             total_tokens,
             duration_ms,
             status_code,
