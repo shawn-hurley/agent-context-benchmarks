@@ -163,6 +163,25 @@ def _fetch_vertex_token() -> str:
     return token
 
 
+def _praxis_extra_env(model_spec) -> dict[str, str]:
+    """Return real provider credentials to inject into the Praxis container.
+
+    Harness containers only receive placeholder keys; Praxis owns upstream
+    authentication and injects the real credential selected by proxy.yaml.
+    """
+    if model_spec.is_vertex:
+        return {"GCP_ACCESS_TOKEN": _fetch_vertex_token()}
+    if not model_spec.key_env:
+        return {}
+    value = os.environ.get(model_spec.key_env)
+    if not value:
+        raise RuntimeError(
+            f"{model_spec.key_env} is required for model {model_spec.name!r}; "
+            "set it in the host environment before running ACB"
+        )
+    return {model_spec.key_env: value}
+
+
 def _run_single_harness(
     harness_name: str,
     harness_out_dir: Path,
@@ -243,21 +262,11 @@ def _run_single_harness(
                 run_id=cfg.run_id, benchmark=cfg.benchmark, harness=harness_name,
                 model=cfg.model, instance_id=instance.instance_id,
             )
-            # Fetch a fresh GCP OAuth2 token for Vertex AI backends.
-            # Done here (per-instance, inside do_one) rather than once at
-            # run() level so a long multi-instance run never uses an expired
-            # token (tokens live ~1 hour). Passed explicitly via extra_env
-            # rather than os.environ to avoid races between concurrent
-            # do_one() threads sharing the same process environment.
-            praxis_extra_env: dict[str, str] = {}
-            if model_spec.is_vertex:
-                praxis_extra_env["GCP_ACCESS_TOKEN"] = _fetch_vertex_token()
-
             praxis_backend = PraxisContainerBackend(
                 tags=tags, usage_path=usage_path, config=proxy_cfg,
                 model_spec=model_spec, harness_api=harness.api,
                 pod=pod_name, image=_ensure_praxis_image(bench_cfg),
-                extra_env=praxis_extra_env,
+                extra_env=_praxis_extra_env(model_spec),
             )
             with praxis_backend:
                 env = harness.build_container_env(praxis_backend.base_url, praxis_backend.api_key)
