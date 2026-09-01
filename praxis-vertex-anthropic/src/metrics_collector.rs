@@ -54,20 +54,15 @@
 
 use async_trait::async_trait;
 use bytes::{Bytes, BytesMut};
-use lazy_static::lazy_static;
 use praxis_filter::{
     BodyAccess, BodyMode, FilterAction, FilterError, HttpFilter, HttpFilterContext,
 };
 use serde::{Deserialize, Serialize};
 use serde_yaml;
-use std::fs::{File, OpenOptions};
-use std::io::{BufWriter, Write};
-use std::sync::Mutex;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::{debug, info, warn};
 
 const DEFAULT_MAX_BODY_BYTES: usize = 4 * 1024 * 1024; // 4 MiB (kept for config compat)
-const METRICS_FILE_PATH: &str = "/tmp/benchmark_metrics.jsonl";
 
 /// Vertex AI `internal-*` response headers — input/output token counts.
 const VERTEX_INPUT_TOKENS_HEADER: &str = "internal-input-tokens";
@@ -84,16 +79,7 @@ const VERTEX_CACHE_CREATION_HEADER: &str = "x-vertex-ai-cache-creation-input-tok
 const OPENAI_USAGE_PROMPT_TOKENS_HEADER: &str = "x-openai-usage-prompt-tokens";
 const OPENAI_USAGE_COMPLETION_TOKENS_HEADER: &str = "x-openai-usage-completion-tokens";
 
-lazy_static! {
-    static ref METRICS_FILE: Mutex<BufWriter<File>> = {
-        let file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(METRICS_FILE_PATH)
-            .expect("failed to open metrics file");
-        Mutex::new(BufWriter::new(file))
-    };
-}
+
 
 /// Benchmark metric record written to JSONL file.
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
@@ -185,25 +171,6 @@ impl BenchmarkMetricsFilter {
     /// Extract a token count from a header value string.
     fn extract_token_count(value: &str) -> Option<u64> {
         value.trim().parse::<u64>().ok()
-    }
-
-    /// Write metric to JSONL file (thread-safe).
-    fn write_metric(metric: &BenchmarkMetric) -> Result<(), FilterError> {
-        let json = serde_json::to_string(metric)
-            .map_err(|e| FilterError::from(format!("metrics serialize failed: {e}")))?;
-
-        let mut file = METRICS_FILE
-            .lock()
-            .map_err(|e| FilterError::from(format!("metrics lock failed: {e}")))?;
-
-        writeln!(file, "{}", json)
-            .map_err(|e| FilterError::from(format!("metrics write failed: {e}")))?;
-
-        file.flush()
-            .map_err(|e| FilterError::from(format!("metrics flush failed: {e}")))?;
-
-        debug!(request_id = metric.request_id, "wrote metric to file");
-        Ok(())
     }
 
     /// Extract tokens from an Anthropic-style usage object.
@@ -688,10 +655,27 @@ impl HttpFilter for BenchmarkMetricsFilter {
                 total_tokens = metric.total_tokens,
                 duration_ms = metric.duration_ms,
                 response_bytes = metric.response_body_bytes,
-                "writing benchmark metric"
+                "completed benchmark metric collection (writing deferred to token_usage_to_metrics filter)"
             );
 
-            Self::write_metric(&metric)?;
+            // Write extracted tokens to filter_metadata for downstream token_usage_to_metrics filter.
+            // Use Option A priority: only write if not already set (token_count filter may have already extracted).
+            if ctx.get_metadata("token.input").is_none() {
+                ctx.set_metadata("token.input", metric.input_tokens.to_string());
+            }
+            if ctx.get_metadata("token.output").is_none() {
+                ctx.set_metadata("token.output", metric.output_tokens.to_string());
+            }
+            if ctx.get_metadata("token.total").is_none() {
+                ctx.set_metadata("token.total", metric.total_tokens.to_string());
+            }
+
+            debug!(
+                token_input = metric.input_tokens,
+                token_output = metric.output_tokens,
+                token_total = metric.total_tokens,
+                "wrote tokens to filter metadata (only if not already set by token_count filter)"
+            );
         }
 
         Ok(FilterAction::Continue)

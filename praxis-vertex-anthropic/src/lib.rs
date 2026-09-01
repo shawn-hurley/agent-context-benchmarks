@@ -23,8 +23,15 @@
 //!
 //! Collects token usage metrics and strips `vertex_event` SSE events.
 //! See `metrics_collector.rs` for full documentation.
+//!
+//! ## `token_usage_to_metrics`
+//!
+//! Reads token usage from filter_metadata (written by the `token_count` filter)
+//! and writes benchmark metrics to JSONL file with request_id deduplication.
+//! See `token_usage_to_metrics.rs` for full documentation.
 
 mod metrics_collector;
+mod token_usage_to_metrics;
 
 use async_trait::async_trait;
 use bytes::Bytes;
@@ -33,6 +40,7 @@ use praxis_filter::{
 };
 
 use metrics_collector::BenchmarkMetricsFilter;
+use token_usage_to_metrics::TokenUsageToMetricsFilter;
 
 const DEFAULT_MAX_BODY_BYTES: usize = 4 * 1024 * 1024; // 4 MiB
 const ANTHROPIC_VERSION_FIELD: &str = "anthropic_version";
@@ -86,9 +94,10 @@ impl HttpFilter for VertexAnthropicPrepareFilter {
     ) -> Result<FilterAction, FilterError> {
         // Remove the anthropic-version header that the Anthropic SDK sends.
         // Vertex does not accept it as a header; the body field is required.
-        ctx.request_headers_to_remove.push(
-            http::header::HeaderName::from_static(ANTHROPIC_VERSION_HEADER),
-        );
+        ctx.request_headers_to_remove
+            .push(http::header::HeaderName::from_static(
+                ANTHROPIC_VERSION_HEADER,
+            ));
         Ok(FilterAction::Continue)
     }
 
@@ -150,5 +159,9 @@ pub fn register_filters(registry: &mut FilterRegistry) {
     praxis_filter::register_filters!(
         @register registry,
         http "benchmark_metrics" => BenchmarkMetricsFilter::from_config
+    );
+    praxis_filter::register_filters!(
+        @register registry,
+        http "token_usage_to_metrics" => TokenUsageToMetricsFilter::from_config
     );
 }

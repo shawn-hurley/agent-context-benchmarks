@@ -20,7 +20,7 @@
 # Stage 1: Build
 # ============================================================================
 
-FROM rust:1.82-alpine AS builder
+FROM rust:1.98-alpine AS builder
 
 ENV OPENSSL_STATIC=1
 
@@ -44,6 +44,9 @@ RUN sed -i '/^members = \[/a \    "praxis-vertex-anthropic",' Cargo.toml
 # Strip workspace members not needed for the binary (tests, xtask).
 RUN sed -i '/xtask/d; /tests\//d' Cargo.toml
 
+# add a direct runtime dependency of server/Cargo.toml,
+RUN sed -i '/^\[dependencies\]$/a praxis_vertex_anthropic = { package = "praxis-vertex-anthropic", path = "../praxis-vertex-anthropic"}' server/Cargo.toml
+
 # ============================================================================
 # Build
 # ============================================================================
@@ -52,7 +55,7 @@ RUN sed -i '/xtask/d; /tests\//d' Cargo.toml
 # The server's build.rs auto-discovers filter crates via the
 # [package.metadata.praxis-filters] marker in praxis-vertex-anthropic/Cargo.toml
 # and registers them at compile time.
-RUN cargo build --release -p praxis-ai-proxy \
+RUN cargo clean && cargo build --release \
     && cp target/release/praxis-ai /usr/local/bin/praxis-ai
 
 # ============================================================================

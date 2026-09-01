@@ -144,14 +144,17 @@ class Goose(HarnessAdapter):
         """
         return model_api
 
-    def setup_container(self, container: str, arch: str, out_dir: Path) -> None:
+    def setup_container(self, container: str, arch: str, cache_dir: Path) -> None:
         """Download (once, cached) this arch's goose Linux binary and copy it
         into `container` at /usr/local/bin/goose, before run_container()
         execs it. Previously done inline in SWEBench.prepare_container() --
         moved here so benchmark code stays harness-agnostic (see
         HarnessAdapter.setup_container()); behavior is unchanged.
+        
+        cache_dir is the run-level cache directory, shared across all harnesses
+        and instances to avoid redundant binary downloads.
         """
-        binary = ensure_linux_binary(arch, out_dir / ".cache")
+        binary = ensure_linux_binary(arch, cache_dir)
         container_cp_in(container, binary, "/usr/local/bin/goose")
         container_exec_capture(container, ["chmod", "+x", "/usr/local/bin/goose"])
 

@@ -151,10 +151,14 @@ class OpenCode(HarnessAdapter):
         """OpenCode supports both anthropic and openai providers natively."""
         return model_api
 
-    def setup_container(self, container: str, arch: str, out_dir: Path) -> None:
+    def setup_container(self, container: str, arch: str, cache_dir: Path) -> None:
         """Download (once, cached) this arch's opencode Linux binary and copy
-        it into `container` at /usr/local/bin/opencode."""
-        binary = ensure_linux_binary(arch, out_dir / ".cache")
+        it into `container` at /usr/local/bin/opencode.
+        
+        cache_dir is the run-level cache directory, shared across all harnesses
+        and instances to avoid redundant binary downloads.
+        """
+        binary = ensure_linux_binary(arch, cache_dir)
         container_cp_in(container, binary, "/usr/local/bin/opencode")
         container_exec_capture(container, ["chmod", "+x", "/usr/local/bin/opencode"])
 

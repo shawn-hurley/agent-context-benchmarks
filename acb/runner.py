@@ -172,6 +172,7 @@ def _run_single_harness(
     bench_cfg: dict,
     model_spec,
     proxy_cfg: dict,
+    cache_dir: Path,
 ) -> tuple[list[Prediction], dict[str, bool]]:
     """Run a single harness against all instances and evaluate.
     
@@ -233,9 +234,10 @@ def _run_single_harness(
             # Harness-specific asset staging (e.g. goose's binary,
             # claude-code's) is the harness's own job now, not the
             # benchmark's -- see HarnessAdapter.setup_container().
-            # Pass harness_out_dir (not instance_dir) so binary caching is shared
-            # across all instances, avoiding concurrent download race conditions.
-            harness.setup_container(testbed_container, arch, harness_out_dir)
+            # Pass cache_dir (run-level, shared across all harnesses and instances)
+            # so binary caching is shared across all instances, avoiding concurrent
+            # download race conditions.
+            harness.setup_container(testbed_container, arch, cache_dir)
             tags = ProxyTags(
                 run_id=cfg.run_id, benchmark=cfg.benchmark, harness=harness_name,
                 model=cfg.model, instance_id=instance.instance_id,
@@ -348,13 +350,17 @@ def run(cfg: RunConfig, registries: Registries | None = None) -> Path:
     print(f"[acb] {cfg.run_id}: {len(instances)} instances "
           f"({', '.join(harnesses_to_run)} / {cfg.model} / {cfg.benchmark} via {cfg.proxy})")
 
+    # Create run-level cache directory for all harnesses and instances
+    cache_dir = (out_dir / ".cache").resolve()
+    cache_dir.mkdir(parents=True, exist_ok=True)
+
     # Run each harness, collecting reports
     harness_reports: dict[str, dict] = {}
     for harness_name in harnesses_to_run:
         harness_out_dir = out_dir / harness_name
         predictions, resolved = _run_single_harness(
             harness_name, harness_out_dir, cfg, registries, benchmark, instances,
-            bench_cfg, model_spec, proxy_cfg,
+            bench_cfg, model_spec, proxy_cfg, cache_dir,
         )
         
         # Aggregate per-instance files into combined files for backwards compatibility

@@ -280,10 +280,19 @@ def build_config(port: int, model_spec, harness_api: str, include_token_count: b
             }]},
         ]
 
+        # Extract tokens from Anthropic SSE responses.
+        # Must come BEFORE benchmark_metrics so benchmark_metrics can read from metadata.
+        filters.append({"filter": "token_count", "provider": "anthropic", "conditions": _messages_only()})
+
         # Collect comprehensive metrics including all token types, timing, and sizes.
         # Writes to /tmp/benchmark_metrics.jsonl for direct consumption (no log parsing).
         # Also strips vertex_event from SSE streams to prevent SDK validation errors.
+        # Stores extracted tokens to metadata for downstream token_usage_to_metrics filter.
         filters.append({"filter": "benchmark_metrics", "conditions": _messages_only()})
+
+        # Write metrics to file with deduplication by request_id.
+        # Reads token counts from filter_metadata (written by token_count filter above or benchmark_metrics).
+        filters.append({"filter": "token_usage_to_metrics", "conditions": _messages_only()})
 
         # Create separate cluster dicts to avoid YAML aliases (&id001/*id001)
         # when yaml.safe_dump sees the same object reused multiple times.
@@ -390,12 +399,29 @@ def build_config(port: int, model_spec, harness_api: str, include_token_count: b
     # relative order (benchmark_metrics before access_log).
     trailing_filters: list[dict] = []
     if include_token_count:
+        # Extract tokens from OpenAI-compatible (vLLM/Ollama) responses.
+        # For non-translated Anthropic->OpenAI requests, the backend is native Anthropic,
+        # so token_count: anthropic is used. For translated requests, the backend is OpenAI,
+        # so token_count: openai is used. The router has already selected the cluster by
+        # this point, so we have no way to conditionally apply the right provider.
+        # Instead, we add both and let token_count be silent (graceful fallback) if the
+        # response format doesn't match the provider.
+        if model_spec.api == "openai":
+            trailing_filters.append({"filter": "token_count", "provider": "openai"})
+        elif model_spec.api == "anthropic":
+            trailing_filters.append({"filter": "token_count", "provider": "anthropic"})
+
         # Use benchmark_metrics for comprehensive token tracking across all backends.
         # Writes to /tmp/benchmark_metrics.jsonl for reliable file-based collection.
         # Handles both OpenAI and Anthropic response formats automatically,
         # captures all token types (input, output, cache_read, cache_creation),
         # and includes timing/size data. Much more reliable than parsing logs.
+        # Stores extracted tokens to metadata for downstream token_usage_to_metrics filter.
         trailing_filters.append({"filter": "benchmark_metrics"})
+
+        # Write metrics to file with deduplication by request_id.
+        # Reads token counts from filter_metadata (written by token_count filter above or benchmark_metrics).
+        trailing_filters.append({"filter": "token_usage_to_metrics"})
     trailing_filters.append({"filter": "access_log", "sample_rate": 1.0})
 
     if translate:

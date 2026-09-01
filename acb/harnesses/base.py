@@ -78,12 +78,16 @@ class HarnessAdapter(ABC):
         """
         return model_api
 
-    def setup_container(self, container: str, arch: str, out_dir: Path) -> None:
+    def setup_container(self, container: str, arch: str, cache_dir: Path) -> None:
         """Stage anything this harness needs into `container` before
         `run_container()` execs it (e.g. `podman cp`-ing in a per-arch
         binary this harness ships as). Called once per instance, after the
         benchmark's own `prepare_container()` returns the container name and
         before `run_container()` runs.
+
+        `cache_dir` is the run-level cache directory (runs/<run_id>/.cache) shared
+        across all harnesses and instances in the run. Binary downloads are cached
+        here to avoid concurrent download race conditions when max_workers > 1.
 
         Default no-op: a harness with nothing beyond what the benchmark's
         image already provides doesn't need to override this. See
