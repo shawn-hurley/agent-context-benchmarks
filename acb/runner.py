@@ -33,6 +33,7 @@ from acb.harnesses import make_harness
 from acb.proxy import ProxyTags
 from acb.proxy.praxis import PraxisContainerBackend
 from acb.report import aggregate_per_instance_files, build_report
+from acb.ui import ProgressTracker, setup_interrupt_handler, LiveTrackerDisplay
 from acb.usage import InstanceMetrics, read_records
 
 # praxis-ai, not core praxis: only praxis-ai has the `token_count` filter
@@ -182,162 +183,207 @@ def _praxis_extra_env(model_spec) -> dict[str, str]:
     return {model_spec.key_env: value}
 
 
-def _run_single_harness(
+def _setup_harness_directories(
+    harness_names: list[str],
+    out_dir: Path,
+    instances: list,
+) -> None:
+    """Pre-create harness and instance directories before running work queue.
+    
+    This ensures all directories exist before any worker threads try to
+    write files, avoiding race conditions and making directory structure
+    visible immediately.
+    
+    Args:
+        harness_names: List of harness names to set up
+        out_dir: Run output directory
+        instances: List of benchmark instances
+    """
+    for harness_name in harness_names:
+        harness_out_dir = out_dir / harness_name
+        instances_dir = harness_out_dir / "instances"
+        instances_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Pre-create per-instance directories
+        for inst in instances:
+            inst_dir = instances_dir / inst.instance_id
+            inst_dir.mkdir(parents=True, exist_ok=True)
+
+
+def _run_instance_pipeline(
+    instance,
     harness_name: str,
     harness_out_dir: Path,
     cfg: RunConfig,
     registries: Registries,
     benchmark,
-    instances: list,
     bench_cfg: dict,
     model_spec,
     proxy_cfg: dict,
     cache_dir: Path,
-) -> tuple[list[Prediction], dict[str, bool]]:
-    """Run a single harness against all instances and evaluate.
+    tracker: ProgressTracker | None = None,
+) -> tuple[Prediction, dict[str, bool]]:
+    """Execute per-instance pipeline: generation → verification.
     
-    Returns (predictions, resolved_dict).
+    This function runs one atomic unit of work: generates a prediction
+    for one instance with one harness, then immediately evaluates it.
+    
+    Args:
+        instance: Benchmark instance to process
+        harness_name: Name of harness to use
+        harness_out_dir: Harness output directory
+        cfg: Run configuration
+        registries: Loaded registries
+        benchmark: Benchmark instance
+        bench_cfg: Benchmark configuration
+        model_spec: Model specification
+        proxy_cfg: Proxy configuration
+        cache_dir: Cache directory for shared assets
+        tracker: Optional progress tracker
+    
+    Returns:
+        (prediction, {instance_id: resolved_bool})
     """
     harness_cfg = {**registries.harnesses.get(harness_name, {}), **cfg.overrides.get("harness", {})}
-    harness_out_dir.mkdir(parents=True, exist_ok=True)
     instances_dir = harness_out_dir / "instances"
-    instances_dir.mkdir(exist_ok=True)
-
-    print(f"[acb]   {harness_name}: {len(instances)} instances")
-
-    def do_one(instance) -> Prediction:
-        """One Podman pod per instance, holding two sibling containers
-        sharing a network namespace -- the testbed (built/reused via
-        `benchmark.prepare_container`) and a Praxis proxy instance. Praxis
-        reaches the host's model server via `host.containers.internal`
-        (Podman's gvproxy host gateway); the harness reaches Praxis via the
-        pod's shared loopback. See acb/proxy/praxis.py, acb/container.py.
-        """
-        # Create per-instance directory for all this instance's data
-        instance_dir = instances_dir / instance.instance_id
-        instance_dir.mkdir(exist_ok=True)
-        usage_path = instance_dir / "usage.jsonl"
-        
-        arch = _resolve_arch(bench_cfg)
-        build_dir = harness_out_dir / "image_build"
-
-        # Podman uses the pod name as the shared hostname for its network
-        # namespace, which Linux caps at 64 bytes (HOST_NAME_MAX) -- verified:
-        # a 65-char pod name fails `podman start` on a member container with
-        # a bare "internal libpod error" and no further detail. run_id can be
-        # arbitrarily long, so it's hashed rather than embedded verbatim.
-        run_hash = hashlib.sha256(cfg.run_id.encode()).hexdigest()[:8]
-        safe_instance = instance.instance_id.replace("_", "-").replace("/", "-").lower()
-        pod_name = f"acb-{run_hash}-{safe_instance}"[:64]
-        pod_create(pod_name)
-        testbed_container = None
-        try:
-            if cfg.proxy != "praxis":
-                # RecordingProxyBackend (acb/proxy/recording.py) launches a
-                # host subprocess with no container equivalent -- only
-                # PraxisContainerBackend exists today (acb/proxy/praxis.py).
-                raise RuntimeError(
-                    f"proxy backend {cfg.proxy!r} has no container-mode "
-                    "implementation; only `praxis` does today."
-                )
-            harness = make_harness(harness_name, harness_cfg)
-            # Resolve which API the harness will speak for this model backend.
-            # Stored as an instance variable so both PraxisContainerBackend
-            # (which needs it to decide whether proxy translation is required)
-            # and build_container_env() (which uses self.api to pick env vars
-            # and CLI flags) see the same resolved value without needing a
-            # separate parameter threaded through every call.
-            harness.api = harness.effective_api(model_spec.api)
-            testbed_container = benchmark.prepare_container(
-                instance, pod_name, build_dir, arch,
-            )
-            # Harness-specific asset staging (e.g. goose's binary,
-            # claude-code's) is the harness's own job now, not the
-            # benchmark's -- see HarnessAdapter.setup_container().
-            # Pass cache_dir (shared for the whole output directory) so binary
-            # downloads are reused across run ids, harnesses, and instances.
-            harness.setup_container(testbed_container, arch, cache_dir)
-            tags = ProxyTags(
-                run_id=cfg.run_id, benchmark=cfg.benchmark, harness=harness_name,
-                model=cfg.model, instance_id=instance.instance_id,
-            )
-            praxis_backend = PraxisContainerBackend(
-                tags=tags, usage_path=usage_path, config=proxy_cfg,
-                model_spec=model_spec, harness_api=harness.api,
-                pod=pod_name, image=_ensure_praxis_image(bench_cfg),
-                extra_env=_praxis_extra_env(model_spec),
-            )
-            with praxis_backend:
-                env = harness.build_container_env(praxis_backend.base_url, praxis_backend.api_key)
-                harness.run_container(
-                    instance.prompt, testbed_container, cfg.model, env,
-                    instance_dir, instance.instance_id,
-                )
-            prediction = benchmark.collect_prediction_container(instance, testbed_container, cfg.model)
-            
-            # Write per-instance files immediately for visibility during long runs
-            _write_per_instance_prediction(prediction, instance_dir)
-            _write_per_instance_metrics(instance_dir, cfg)
-            
-            return prediction
-        except Exception as e:  # noqa: BLE001
-            tb = traceback.format_exc()
-            traceback.print_exc()
-            
-            # Write error to per-instance directory for easy debugging
-            error_path = instance_dir / "error.json"
-            error_path.write_text(json.dumps({
-                "instance_id": instance.instance_id,
-                "error": str(e),
-                "traceback": tb
-            }, indent=2))
-            
-            return Prediction(instance_id=instance.instance_id,
-                              model_name_or_path=cfg.model, error=str(e))
-        finally:
-            # ACB_DEBUG_KEEP_CONTAINERS=1 skips teardown so the pod/container
-            # can be inspected post-mortem (`podman exec ... git status`,
-            # etc.) -- how the git-add/gitignore bug below was actually
-            # root-caused, instead of guessing from transcripts alone.
-            if os.environ.get("ACB_DEBUG_KEEP_CONTAINERS"):
-                print(f"[debug] ACB_DEBUG_KEEP_CONTAINERS set -- leaving "
-                      f"pod={pod_name} container={testbed_container} running", flush=True)
-            else:
-                if testbed_container:
-                    container_stop_rm(testbed_container)
-                pod_remove(pod_name)
-
-    predictions: list[Prediction] = []
-    with ThreadPoolExecutor(max_workers=cfg.max_workers) as ex:
-        futures = {ex.submit(do_one, inst): inst for inst in instances}
-        for fut in as_completed(futures):
-            pred = fut.result()
-            predictions.append(pred)
-            print(f"[acb]     done {pred.instance_id}"
-                  + (f" (error: {pred.error})" if pred.error else ""))
-
-    # predictions.jsonl (below, via benchmark.evaluate()) only carries the
-    # fields SWE-bench's own harness expects (instance_id/model_name_or_path/
-    # model_patch) -- an exception during generation/collection is otherwise
-    # only visible in this run's console output, easy to lose in a long log
-    # and easy to misread as "no error, genuinely empty patch" when
-    # inspecting predictions.jsonl after the fact (verified: this exact
-    # confusion happened -- a real, correct patch was discarded by an
-    # exception in collect_prediction_container(), silently, since nothing
-    # durable recorded it).
-    errored = [p for p in predictions if p.error]
-    if errored:
-        errors_path = harness_out_dir / "errors.jsonl"
-        with errors_path.open("w") as f:
-            for p in errored:
-                f.write(json.dumps({"instance_id": p.instance_id, "error": p.error}) + "\n")
-        print(f"[acb]   {len(errored)}/{len(predictions)} instance(s) errored "
-              f"during generation -- see {errors_path}", flush=True)
-
-    print("[acb]   evaluating predictions ...")
-    resolved = benchmark.evaluate(predictions, cfg.run_id, harness_out_dir)
+    instance_dir = instances_dir / instance.instance_id
+    usage_path = instance_dir / "usage.jsonl"
     
-    return predictions, resolved
+    # Composite key for tracker: {harness}-{instance_id}
+    tracker_key = f"{harness_name}-{instance.instance_id}"
+    
+    # Create deterministic pod name from composite key (run_id/harness/instance)
+    pod_name_input = f"{cfg.run_id}/{harness_name}/{instance.instance_id}"
+    pod_hash = hashlib.sha256(pod_name_input.encode()).hexdigest()[:16]
+    pod_name = f"acb-{pod_hash}"
+    
+    # Generate prediction
+    prediction = None
+    if tracker:
+        tracker.start_instance(tracker_key, pod_name=pod_name)
+    
+    arch = _resolve_arch(bench_cfg)
+    build_dir = harness_out_dir / "image_build"
+    
+    # Create pod with run_id label for tracking/cleanup
+    pod_create(
+        pod_name,
+        labels={
+            "acb-run-id": cfg.run_id,
+            "acb-harness": harness_name,
+            "acb-instance": instance.instance_id,
+        }
+    )
+    testbed_container = None
+    
+    try:
+        if cfg.proxy != "praxis":
+            raise RuntimeError(
+                f"proxy backend {cfg.proxy!r} has no container-mode "
+                "implementation; only `praxis` does today."
+            )
+        
+        harness = make_harness(harness_name, harness_cfg)
+        harness.api = harness.effective_api(model_spec.api)
+        harness._tracker = tracker
+        harness._instance_id = instance.instance_id
+        
+        testbed_container = benchmark.prepare_container(
+            instance, pod_name, build_dir, arch,
+        )
+        harness.setup_container(testbed_container, arch, cache_dir)
+        
+        tags = ProxyTags(
+            run_id=cfg.run_id, benchmark=cfg.benchmark, harness=harness_name,
+            model=cfg.model, instance_id=instance.instance_id,
+        )
+        praxis_backend = PraxisContainerBackend(
+            tags=tags, usage_path=usage_path, config=proxy_cfg,
+            model_spec=model_spec, harness_api=harness.api,
+            pod=pod_name, image=_ensure_praxis_image(bench_cfg),
+            extra_env=_praxis_extra_env(model_spec),
+            instance_dir=instance_dir,
+        )
+        
+        with praxis_backend:
+            env = harness.build_container_env(praxis_backend.base_url, praxis_backend.api_key)
+            harness.run_container(
+                instance.prompt, testbed_container, cfg.model, env,
+                instance_dir, instance.instance_id,
+            )
+        
+        prediction = benchmark.collect_prediction_container(instance, testbed_container, cfg.model)
+        
+        # Write per-instance files immediately
+        _write_per_instance_prediction(prediction, instance_dir)
+        _write_per_instance_metrics(instance_dir, cfg)
+        
+        # Write pod name for debugging/inspection
+        pod_info_file = instance_dir / "pod_name.txt"
+        pod_info_file.write_text(f"{pod_name}\n# Harness: {harness_name}\n# Instance: {instance.instance_id}\n")
+        
+        # Mark generation complete
+        metrics_path = instance_dir / "metrics.json"
+        tokens = None
+        if metrics_path.exists():
+            try:
+                metrics_data = json.loads(metrics_path.read_text())
+                tokens = metrics_data.get("total_tokens")
+            except (json.JSONDecodeError, OSError):
+                pass
+        
+        if tracker:
+            tracker.complete_instance(tracker_key, success=True, tokens=tokens)
+    
+    except Exception as e:  # noqa: BLE001
+        tb = traceback.format_exc()
+        traceback.print_exc()
+        
+        error_path = instance_dir / "error.json"
+        error_path.write_text(json.dumps({
+            "instance_id": instance.instance_id,
+            "error": str(e),
+            "traceback": tb
+        }, indent=2))
+        
+        if tracker:
+            tracker.complete_instance(tracker_key, success=False, error=str(e))
+        
+        return Prediction(instance_id=instance.instance_id,
+                        model_name_or_path=cfg.model, error=str(e)), {}
+    
+    finally:
+        if os.environ.get("ACB_DEBUG_KEEP_CONTAINERS"):
+            print(f"[debug] ACB_DEBUG_KEEP_CONTAINERS set -- leaving "
+                  f"pod={pod_name} container={testbed_container} running", flush=True)
+        else:
+            if testbed_container:
+                container_stop_rm(testbed_container)
+            pod_remove(pod_name)
+    
+    if prediction is None:
+        return Prediction(instance_id=instance.instance_id,
+                        model_name_or_path=cfg.model, error="No prediction generated"), {}
+    
+    # Verify prediction
+    try:
+        if tracker:
+            tracker.start_verification(tracker_key)
+        resolved = benchmark.evaluate(
+            predictions=None,
+            run_id=cfg.run_id,
+            output_dir=harness_out_dir,
+            tracker=tracker,
+            instance_id=instance.instance_id,
+            tracker_key=tracker_key,
+        )
+        return prediction, resolved
+    except Exception as e:  # noqa: BLE001
+        error_msg = f"Evaluation failed: {str(e)}"
+        if tracker:
+            tracker.complete_verification(tracker_key, False, error=error_msg)
+        # Return empty resolved dict (instance will be marked as failed)
+        return prediction, {}
 
 
 def _resolve_run_dir(output_dir: str, run_id: str) -> tuple[Path, str]:
@@ -390,29 +436,108 @@ def run(cfg: RunConfig, registries: Registries | None = None) -> Path:
     instances = benchmark.load_instances(subset=cfg.subset, limit=cfg.limit)
     
     harnesses_to_run = cfg.harnesses
-    print(f"[acb] {cfg.run_id}: {len(instances)} instances "
-          f"({', '.join(harnesses_to_run)} / {cfg.model} / {cfg.benchmark} via {cfg.proxy})")
 
     # Create output-dir-level cache directory, shared by all runs under it.
     cache_dir = (Path(cfg.output_dir).resolve() / ".cache").resolve()
     cache_dir.mkdir(parents=True, exist_ok=True)
 
-    # Run each harness, collecting reports
+    # Create a single tracker for all harnesses (single or multi)
+    # This ensures the display shows progress across all harnesses
+    tracker = ProgressTracker(
+        total_instances=len(instances) * len(harnesses_to_run),
+        harness_names=harnesses_to_run,
+        max_workers=cfg.max_workers,
+        run_id=cfg.run_id,
+        model=cfg.model,
+        benchmark=cfg.benchmark,
+    )
+
+    # Pre-create all harness/instance directories before starting workers
+    _setup_harness_directories(harnesses_to_run, out_dir, instances)
+
+    # Pre-register all instances with tracker so they show in initial display
+    for harness_name in harnesses_to_run:
+        for instance in instances:
+            tracker.add_instance(instance.instance_id, harness_name)
+
+    # Build work queue: all (harness, instance) pairs
+    work_queue = [
+        (harness_name, instance)
+        for harness_name in harnesses_to_run
+        for instance in instances
+    ]
+
+    # Execute global work queue with per-instance pipeline
+    from rich.live import Live
+    
+    tracker.console.print(f"\n[cyan]Starting global work queue: {len(work_queue)} (harness, instance) pairs[/cyan]")
+    
+    all_results = {}  # (harness_name, instance_id) -> (prediction, resolved)
     harness_reports: dict[str, dict] = {}
+    
+    ex = None
+    try:
+        ex = ThreadPoolExecutor(max_workers=cfg.max_workers)
+        setup_interrupt_handler(tracker, ex)
+        
+        display = LiveTrackerDisplay(tracker)
+        
+        with Live(display, refresh_per_second=2, console=tracker.console) as live:
+            # Submit all work items
+            futures = {}
+            for harness_name, instance in work_queue:
+                harness_out_dir = out_dir / harness_name
+                future = ex.submit(
+                    _run_instance_pipeline,
+                    instance, harness_name, harness_out_dir,
+                    cfg, registries, benchmark, bench_cfg,
+                    model_spec, proxy_cfg, cache_dir,
+                    tracker=tracker,
+                )
+                futures[future] = (harness_name, instance.instance_id)
+            
+            # Collect results as they complete
+            for future in as_completed(futures):
+                if tracker.interrupted:
+                    break
+                harness_name, instance_id = futures[future]
+                try:
+                    prediction, resolved = future.result()
+                    all_results[(harness_name, instance_id)] = (prediction, resolved)
+                except Exception as e:  # noqa: BLE001
+                    print(f"[acb] error in pipeline {harness_name}/{instance_id}: {e}", flush=True)
+                    traceback.print_exc()
+    finally:
+        if ex:
+            ex.shutdown(wait=True)
+    
+    # Show final summary
+    tracker.console.print(tracker.summary())
+
+    # Post-process results by harness and build reports
     for harness_name in harnesses_to_run:
         harness_out_dir = out_dir / harness_name
-        predictions, resolved = _run_single_harness(
-            harness_name, harness_out_dir, cfg, registries, benchmark, instances,
-            bench_cfg, model_spec, proxy_cfg, cache_dir,
-        )
+        
+        # Aggregate predictions and resolved status for this harness
+        harness_predictions = []
+        harness_resolved = {}
+        
+        for (h_name, inst_id), (pred, resolved) in all_results.items():
+            if h_name == harness_name:
+                harness_predictions.append(pred)
+                harness_resolved.update(resolved)
         
         # Aggregate per-instance files into combined files for backwards compatibility
         aggregate_per_instance_files(harness_out_dir)
         
         # Build per-harness report
         usage_path = harness_out_dir / "usage.jsonl"
-        report_path = build_report(usage_path, resolved, harness_out_dir, cfg)
-        print(f"[acb] {harness_name} report: {report_path}")
+        report_path = build_report(usage_path, harness_resolved, harness_out_dir, cfg)
+        console = tracker.console if tracker else None
+        if console:
+            console.print(f"[green]✅ {harness_name} report:[/green] {report_path}")
+        else:
+            print(f"[acb] {harness_name} report: {report_path}")
         
         # Load and store report for suite aggregation
         if report_path.exists():
@@ -424,15 +549,25 @@ def run(cfg: RunConfig, registries: Registries | None = None) -> Path:
             html_content = build_html_report(harness_out_dir)
             html_path = harness_out_dir / "report.html"
             html_path.write_text(html_content)
-            print(f"[acb] {harness_name} html report: {html_path}")
+            if console:
+                console.print(f"[green]✅ {harness_name} HTML report:[/green] {html_path}")
+            else:
+                print(f"[acb] {harness_name} html report: {html_path}")
         except Exception as e:
-            print(f"[acb] warning: failed to build HTML report for {harness_name}: {e}")
+            if console:
+                console.print(f"[yellow]⚠️  Warning: failed to build HTML report for {harness_name}: {e}[/yellow]")
+            else:
+                print(f"[acb] warning: failed to build HTML report for {harness_name}: {e}")
 
     # Build suite-level report (aggregate across harnesses)
+    console = tracker.console if tracker else None
     if len(harnesses_to_run) > 1:
         from acb.report import build_suite_report
         suite_report_path = build_suite_report(out_dir, cfg)
-        print(f"[acb] suite report: {suite_report_path}")
+        if console:
+            console.print(f"[green]✅ Suite report:[/green] {suite_report_path}")
+        else:
+            print(f"[acb] suite report: {suite_report_path}")
         
         # Build suite-level HTML report
         try:
@@ -440,9 +575,15 @@ def run(cfg: RunConfig, registries: Registries | None = None) -> Path:
             html_content = build_html_report(out_dir)
             html_path = out_dir / "report.html"
             html_path.write_text(html_content)
-            print(f"[acb] suite html report: {html_path}")
+            if console:
+                console.print(f"[green]✅ Suite HTML report:[/green] {html_path}")
+            else:
+                print(f"[acb] suite html report: {html_path}")
         except Exception as e:
-            print(f"[acb] warning: failed to build suite HTML report: {e}")
+            if console:
+                console.print(f"[yellow]⚠️  Warning: failed to build suite HTML report: {e}[/yellow]")
+            else:
+                print(f"[acb] warning: failed to build suite HTML report: {e}")
 
     # Return the suite directory path
     return out_dir

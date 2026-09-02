@@ -512,6 +512,22 @@ def build_container_config(port: int, model_spec, harness_api: str) -> dict:
     return config
 
 
+def _log_proxy_event(log_path: Path, event_type: str, data: dict) -> None:
+    """Append a proxy event to proxy.jsonl in JSONL format."""
+    event = {
+        "timestamp": time.time(),
+        "timestamp_iso": time.strftime("%Y-%m-%dT%H:%M:%S.000Z", time.gmtime()),
+        "type": event_type,
+        "data": data,
+    }
+    try:
+        with log_path.open("a", encoding="utf-8") as f:
+            f.write(json.dumps(event) + "\n")
+    except Exception as e:
+        # Don't fail the run if logging fails
+        print(f"Warning: failed to write proxy log: {e}", file=__import__("sys").stderr)
+
+
 class PraxisBackend(ProxyBackend):
     name = "praxis"
 
@@ -643,11 +659,13 @@ class PraxisContainerBackend(PraxisBackend):
     HEALTH_TIMEOUT = 20
 
     def __init__(self, *args, pod: str, image: str,
-                 extra_env: dict[str, str] | None = None, **kwargs):
+                 extra_env: dict[str, str] | None = None,
+                 instance_dir: Path | None = None, **kwargs):
         super().__init__(*args, **kwargs)
         self.pod = pod
         self.image = image
         self.container_name = f"{pod}-praxis"
+        self.instance_dir = instance_dir  # For proxy logging
         # Extra env vars merged into the praxis container's environment at
         # start() time.  Used to pass Vertex auth tokens (VERTEX_AUTH_TOKEN)
         # without touching os.environ, which would be a race condition under
@@ -749,10 +767,50 @@ class PraxisContainerBackend(PraxisBackend):
                 f"praxis container failed to start.\n--- logs ---\n{log_tail}"
             )
         self._base_url = f"http://127.0.0.1:{self.CONTAINER_PORT}"
+        
+        # Log proxy startup
+        if self.instance_dir:
+            proxy_log_path = self.instance_dir / "proxy.jsonl"
+            _log_proxy_event(proxy_log_path, "proxy_start", {
+                "container": self.container_name,
+                "pod": self.pod,
+                "base_url": self._base_url,
+                "model": self.model_spec.name if self.model_spec else "unknown",
+                "harness_api": self.harness_api,
+                "instance_id": self.tags.instance_id,
+            })
+        
         return self._base_url
 
     def stop(self) -> None:
         self._log_path.write_text(container_logs(self.container_name))
+        
+        # Log proxy shutdown and full Praxis logs
+        if self.instance_dir:
+            proxy_log_path = self.instance_dir / "proxy.jsonl"
+            # Log all praxis access_log lines from the container
+            logs = container_logs(self.container_name)
+            for line in logs.splitlines():
+                if not line.strip():
+                    continue
+                try:
+                    # Try to parse as JSON (Praxis outputs JSON logs)
+                    entry = json.loads(line)
+                    # Log the full Praxis log entry
+                    _log_proxy_event(proxy_log_path, "praxis_log", {
+                        "raw_log": line,
+                        "parsed": entry if isinstance(entry, dict) else None,
+                    })
+                except (json.JSONDecodeError, ValueError):
+                    # Log non-JSON lines as-is
+                    _log_proxy_event(proxy_log_path, "praxis_log", {
+                        "raw_log": line,
+                    })
+            
+            # Log proxy stop
+            _log_proxy_event(proxy_log_path, "proxy_stop", {
+                "container": self.container_name,
+            })
         
         # Copy metrics file from container
         try:

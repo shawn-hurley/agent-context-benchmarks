@@ -96,10 +96,16 @@ def read_stream(proc: subprocess.Popen, transcript_path: Path,
 
 def execute(cmd: list[str], env: dict[str, str] | None, cwd: str | None,
             transcript_path: Path, label: str, timeout: int,
-            describe_event: DescribeEvent) -> HarnessResult:
+            describe_event: DescribeEvent,
+            tracker: 'ProgressTracker | None' = None,
+            instance_id: str | None = None) -> HarnessResult:
     """Run `cmd` to completion, streaming its stdout live with a heartbeat.
 
     Shared by every container-mode harness's `run_container()`.
+    
+    Args:
+        tracker: Optional ProgressTracker for updating UI with activity
+        instance_id: Instance ID for tracker updates
     """
     proc = subprocess.Popen(
         cmd, cwd=cwd, env=env,
@@ -127,8 +133,14 @@ def execute(cmd: list[str], env: dict[str, str] | None, cwd: str | None,
                 proc.wait()
                 timed_out = True
                 break
-            print(f"{label} still working ({elapsed:.0f}s elapsed) "
-                  f"-- last: {state.last_activity}", flush=True)
+            
+            # Update tracker if available
+            if tracker and instance_id:
+                tracker.update_activity(instance_id, state.last_activity)
+            else:
+                # Fallback: print only if no tracker
+                print(f"{label} still working ({elapsed:.0f}s elapsed) "
+                      f"-- last: {state.last_activity}", flush=True)
 
     reader.join(timeout=5)
     output = "".join(buffer)

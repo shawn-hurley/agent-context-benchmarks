@@ -38,6 +38,10 @@ import shutil
 import subprocess
 import tempfile
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from acb.ui import ProgressTracker
 
 from acb.benchmarks.base import Benchmark, Instance, Prediction
 from acb.container import (
@@ -448,9 +452,16 @@ class ScarfBench(Benchmark):
             output=str(run_dir),
         )
 
-    def evaluate(self, predictions: list[Prediction], run_id: str,
-                 output_dir: Path) -> dict[str, bool]:
-        """Grade all predictions by invoking `scarf validate`.
+    def evaluate(
+        self,
+        predictions: list[Prediction] | None,
+        run_id: str,
+        output_dir,
+        tracker: ProgressTracker | None = None,
+        instance_id: str | None = None,
+        tracker_key: str | None = None,
+    ) -> dict[str, bool]:
+        """Grade predictions by invoking `scarf validate`.
 
         scarf validate:
           1. Reads each run_N/metadata.json for (layer, app, target_framework).
@@ -464,7 +475,47 @@ class ScarfBench(Benchmark):
           resolved = True  iff tests_passed > 0 and tests_passed == num_smoke_tests
           (both fields set by scarf validate; num_smoke_tests comes from the
            benchmark's own smoke test metadata).
+        
+        Args:
+            predictions: Legacy parameter (ignored, reads from disk)
+            run_id: Unique identifier for this run
+            output_dir: Harness output directory containing instances/
+            tracker: Optional tracker for status updates
+            instance_id: If set, only evaluate this instance
+            tracker_key: Composite key {harness}-{instance_id} for tracker updates
+        
+        Returns:
+            Dictionary mapping instance_id to resolved status
         """
+        output_dir = Path(output_dir)
+        
+        # Collect predictions to evaluate
+        preds_to_eval = []
+        
+        if instance_id:
+            # Per-instance mode: evaluate only this instance
+            pred_file = output_dir / "instances" / instance_id / "prediction.json"
+            if pred_file.exists():
+                pred_data = json.loads(pred_file.read_text())
+                preds_to_eval.append(Prediction(
+                    instance_id=pred_data["instance_id"],
+                    model_name_or_path=pred_data["model_name_or_path"],
+                    model_patch=pred_data.get("model_patch"),
+                    output=str(output_dir / "instances" / instance_id),
+                    error=None,
+                ))
+        else:
+            # Legacy mode: use provided predictions
+            if predictions:
+                preds_to_eval = predictions
+        
+        if not preds_to_eval:
+            return {instance_id: False} if instance_id else {}
+        
+        # Update tracker: mark verification starting
+        if tracker and tracker_key:
+            tracker.start_verification(tracker_key)
+        
         scarf_binary = shutil.which(self.config.get("scarf_binary", "scarf"))
         if not scarf_binary:
             raise RuntimeError(
@@ -484,31 +535,39 @@ class ScarfBench(Benchmark):
         if timeout_min := self.config.get("validate_timeout_minutes"):
             cmd += ["--timeout", str(int(timeout_min))]
 
-        # Route docker CLI calls through the Podman shim (same as SWE-bench
-        # evaluation subprocess -- see container_env() in acb/container.py).
+        # Route docker CLI calls through the Podman shim
         env = container_env(self.config)
 
         print(
-            f"[scarfbench] running scarf validate for {len(predictions)} "
+            f"[scarfbench] running scarf validate for {len(preds_to_eval)} "
             f"prediction(s) ...",
             flush=True,
         )
-        proc = subprocess.run(cmd, env=env)
-        print(
-            f"[scarfbench] scarf validate exited with code {proc.returncode}",
-            flush=True,
-        )
+        
+        try:
+            proc = subprocess.run(cmd, env=env)
+            print(
+                f"[scarfbench] scarf validate exited with code {proc.returncode}",
+                flush=True,
+            )
+        except Exception as e:
+            error_msg = f"scarf validate failed: {str(e)}"
+            if tracker and tracker_key:
+                tracker.complete_verification(tracker_key, False, error=error_msg)
+            raise
 
         # Read back grading results from each metadata.json
         resolved: dict[str, bool] = {}
-        for pred in predictions:
+        for pred in preds_to_eval:
             if pred.error:
                 resolved[pred.instance_id] = False
                 continue
+            
             run_dir = Path(pred.output) if pred.output else None
             if run_dir is None:
                 resolved[pred.instance_id] = False
                 continue
+            
             meta_path = run_dir / "metadata.json"
             if not meta_path.exists():
                 print(
@@ -534,8 +593,6 @@ class ScarfBench(Benchmark):
             deploy_ok = meta.get("deploy_ok", "UNK")
 
             # Resolved = compiled, deployed, and all smoke tests passed.
-            # If num_smoke_tests is missing (benchmark metadata.json not found
-            # by scarf validate), fall back to tests_passed > 0.
             if (
                 compile_ok == "TRUE"
                 and deploy_ok == "TRUE"
@@ -556,6 +613,11 @@ class ScarfBench(Benchmark):
             )
 
         # Ensure every prediction has an entry
-        for pred in predictions:
+        for pred in preds_to_eval:
             resolved.setdefault(pred.instance_id, False)
+        
+        # Update tracker with results
+        if tracker and tracker_key and instance_id and instance_id in resolved:
+            tracker.complete_verification(tracker_key, resolved[instance_id])
+        
         return resolved

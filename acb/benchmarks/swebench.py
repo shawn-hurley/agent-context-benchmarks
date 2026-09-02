@@ -13,9 +13,14 @@ read back its report.
 from __future__ import annotations
 
 import json
+import os
 import subprocess
 import threading
 from pathlib import Path
+from typing import TYPE_CHECKING
+
+if TYPE_CHECKING:
+    from acb.ui import ProgressTracker
 
 # Path to the vendored SWE-bench checkout and its isolated venv.
 # The venv is created on first use by _ensure_swebench_venv() so acb's own
@@ -212,30 +217,81 @@ class SWEBench(Benchmark):
             model_patch=diff,
         )
 
-    def evaluate(self, predictions, run_id, output_dir) -> dict[str, bool]:
-        preds_path = Path(output_dir) / "predictions.jsonl"
+    def evaluate(
+        self,
+        predictions,
+        run_id: str,
+        output_dir,
+        tracker: ProgressTracker | None = None,
+        instance_id: str | None = None,
+        tracker_key: str | None = None,
+    ) -> dict[str, bool]:
+        """Evaluate predictions using SWE-bench harness.
         
-        # Check if using per-instance structure
-        instances_dir = Path(output_dir) / "instances"
-        if instances_dir.exists():
-            # Aggregate from per-instance files
-            with preds_path.open("w") as f:
-                for instance_dir in sorted(instances_dir.iterdir()):
-                    if instance_dir.is_dir():
-                        pred_file = instance_dir / "prediction.json"
+        Reads predictions from disk (per-instance or legacy format), runs
+        SWE-bench evaluation subprocess, and updates tracker if provided.
+        
+        Args:
+            predictions: Legacy parameter (ignored)
+            run_id: Unique identifier for this run
+            output_dir: Harness output directory
+            tracker: Optional tracker for status updates
+            instance_id: If set, only evaluate this instance
+            tracker_key: Composite key {harness}-{instance_id} for tracker updates
+        
+        Returns:
+            Dictionary mapping instance_id to resolved status
+        """
+        output_dir = Path(output_dir)
+        preds_path = output_dir / "predictions.jsonl"
+        instances_dir = output_dir / "instances"
+        
+        # Collect predictions to evaluate
+        preds_to_eval = []
+        
+        if instance_id:
+            # Per-instance mode: evaluate only this instance
+            pred_file = instances_dir / instance_id / "prediction.json"
+            if pred_file.exists():
+                pred = json.loads(pred_file.read_text())
+                preds_to_eval.append(Prediction(
+                    instance_id=pred["instance_id"],
+                    model_name_or_path=pred["model_name_or_path"],
+                    model_patch=pred.get("model_patch", ""),
+                ))
+        else:
+            # Legacy mode: aggregate all predictions
+            if instances_dir.exists():
+                for inst_dir in sorted(instances_dir.iterdir()):
+                    if inst_dir.is_dir():
+                        pred_file = inst_dir / "prediction.json"
                         if pred_file.exists():
                             pred = json.loads(pred_file.read_text())
-                            f.write(json.dumps(pred) + "\n")
-        else:
-            # Legacy: write from predictions list
-            with preds_path.open("w") as f:
-                for p in predictions:
-                    f.write(json.dumps({
-                        "instance_id": p.instance_id,
-                        "model_name_or_path": p.model_name_or_path,
-                        "model_patch": p.model_patch or "",
-                    }) + "\n")
-
+                            preds_to_eval.append(Prediction(
+                                instance_id=pred["instance_id"],
+                                model_name_or_path=pred["model_name_or_path"],
+                                model_patch=pred.get("model_patch", ""),
+                            ))
+            elif predictions:
+                preds_to_eval = predictions
+        
+        if not preds_to_eval:
+            return {instance_id: False} if instance_id else {}
+        
+        # Write predictions to temp file for swebench
+        with preds_path.open("w") as f:
+            for p in preds_to_eval:
+                f.write(json.dumps({
+                    "instance_id": p.instance_id,
+                    "model_name_or_path": p.model_name_or_path,
+                    "model_patch": p.model_patch or "",
+                }) + "\n")
+        
+        # Update tracker: mark verification starting
+        if tracker and tracker_key:
+            tracker.start_verification(tracker_key)
+        
+        # Run swebench evaluation
         dataset = self.config.get("dataset", DEFAULT_DATASET)
         swebench_python = _ensure_swebench_venv()
         cmd = [
@@ -247,17 +303,14 @@ class SWEBench(Benchmark):
         ]
         if self.config.get("namespace") is not None:
             cmd += ["--namespace", str(self.config["namespace"])]
-        # route the docker SDK at the configured backend (Docker or Podman)
+        
         env = container_env(self.config)
-
-        # SWE-bench logs container/test progress per-instance to a file only
-        # (see _tail_file docstring) -- tail those files live so the console
-        # shows what's actually happening instead of going silent until the
-        # whole subprocess exits.
+        
+        # Tail evaluation logs
         log_dir_base = _SWEBENCH_DIR / "logs" / "run_evaluation" / run_id
         stop_event = threading.Event()
         tailers: list[threading.Thread] = []
-        for p in predictions:
+        for p in preds_to_eval:
             log_path = log_dir_base / p.model_name_or_path / p.instance_id / "run_instance.log"
             t = threading.Thread(
                 target=_tail_file,
@@ -266,19 +319,26 @@ class SWEBench(Benchmark):
             )
             t.start()
             tailers.append(t)
-
-        print(f"[eval] starting SWE-bench evaluation for {len(predictions)} "
+        
+        print(f"[eval] starting SWE-bench evaluation for {len(preds_to_eval)} "
               f"instance(s) (run_id={run_id})...", flush=True)
-        proc = subprocess.Popen(cmd, cwd=str(_SWEBENCH_DIR), env=env)
+        
         try:
+            proc = subprocess.Popen(cmd, cwd=str(_SWEBENCH_DIR), env=env)
             proc.wait()
+        except Exception as e:
+            error_msg = f"SWE-bench evaluation failed: {str(e)}"
+            if tracker and tracker_key:
+                tracker.complete_verification(tracker_key, False, error=error_msg)
+            raise
         finally:
             stop_event.set()
             for t in tailers:
                 t.join(timeout=5)
+        
         print(f"[eval] evaluation subprocess exited with code {proc.returncode}", flush=True)
-
-        # run_evaluation writes <model>.<run_id>.json in cwd
+        
+        # Parse results
         resolved: dict[str, bool] = {}
         for report in _SWEBENCH_DIR.glob(f"*.{run_id}.json"):
             data = json.loads(report.read_text())
@@ -286,6 +346,12 @@ class SWEBench(Benchmark):
                 resolved[iid] = True
             for iid in data.get("unresolved_ids", []):
                 resolved.setdefault(iid, False)
-        for p in predictions:
+        
+        for p in preds_to_eval:
             resolved.setdefault(p.instance_id, False)
+        
+        # Update tracker with results
+        if tracker and tracker_key and instance_id and instance_id in resolved:
+            tracker.complete_verification(tracker_key, resolved[instance_id])
+        
         return resolved

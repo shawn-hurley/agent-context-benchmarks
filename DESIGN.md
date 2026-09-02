@@ -15,20 +15,58 @@ harness never receives a provider URL or a real key. Every LLM call therefore
 passes through the proxy, which records it. Model backends — including local
 ones — are declared in the proxy config and owned by the proxy.
 
-## Two phases
+## Per-Instance Pipeline (Generation + Verification)
+
+Each `(harness, instance)` pair executes as an atomic unit in parallel:
 
 ```
-                 ┌──────────────── generation (measured) ─────────────────┐
-Benchmark ─▶ Instance ─▶ container ─▶ Harness ──http──▶ Proxy ──▶ Model
-                                         │                 │       (cloud/local)
-                                         │                 └▶ usage.jsonl (per request)
-                                         ▼
-                                    git diff / output ─▶ Prediction
-                 └────────────────────────────────────────────────────────┘
-                 ┌──────────────── evaluation ────────────────────────────┐
-   predictions ─▶ Benchmark.evaluate ─▶ {instance_id: resolved}
-                 └────────────────────────────────────────────────────────┘
-   usage.jsonl + resolved ─▶ Report (metrics.jsonl + report.json)
+Work Queue: all (harness, instance) pairs
+  |
+  ├─ max_workers workers (global pool)
+  |
+  ├─ Worker 1: goose-inst1 ──────────────────┐
+  ├─ Worker 2: claude-code-inst1 ────────────┤
+  ├─ Worker 3: goose-inst2 ───────────────────┤─▶ Pipeline (each pair)
+  ├─ Worker 4: opencode-inst1 ────────────────┤
+  └─ ...                                       │
+                                              ▼
+        ┌────────────────── GENERATION ────────────────┐
+        │ Benchmark ─▶ Instance ─▶ Container ─▶ Harness
+        │   ▼
+        │ git diff / output ─▶ Prediction (written to disk)
+        │   ▼
+        │ usage.jsonl (per request) ─▶ metrics.json
+        └─────────────────────────────────────────────┘
+        ┌────────────── VERIFICATION ──────────────────┐
+        │ Read Prediction from disk ─▶ Benchmark.evaluate()
+        │   ▼
+        │ Run tests in containers (SWE-bench/ScarfBench)
+        │   ▼
+        │ {instance_id: resolved} ─▶ Update metrics.json
+        └─────────────────────────────────────────────┘
+```
+
+**Key characteristics:**
+- Each worker executes complete pipeline (generate → verify) for one pair
+- Predictions written to `{run_id}/{harness}/instances/{instance_id}/prediction.json`
+- Evaluation reads predictions from disk (filesystem is shared)
+- Each instance fully self-contained (no cross-instance contamination)
+- `max_workers` controls total concurrent pairs across ALL harnesses
+
+**Execution model (example with max_workers=4, 2 harnesses, 5 instances = 10 pairs):**
+```
+Time T0: Worker1(goose-1), Worker2(claude-1), Worker3(goose-2), Worker4(opencode-1)
+Time T1: Worker1(goose-3), Worker2(claude-2), Worker3(goose-4), Worker4(opencode-2)
+Time T2: Worker1(goose-5), Worker2(claude-3), Worker3(..idle), Worker4(..idle)
+... evaluation continues in parallel with other workers ...
+```
+
+**Verification Status Lifecycle:**
+```
+QUEUED ─▶ RUNNING ─▶ GENERATED ─▶ VERIFYING ─▶ VERIFIED_PASS
+                                            └─▶ VERIFIED_FAIL
+                                   
+FAILED (generation/evaluation crash)
 ```
 
 ## Why a per-instance proxy, tagged at launch
@@ -141,6 +179,34 @@ reports_cache}`. A run just names a model; the proxy resolves it to a backend it
 connects to. Local models are OpenAI-compatible (vLLM/Ollama/LM Studio), keyless,
 http, no cache reporting.
 
+## Benchmark Verification Contract
+
+All benchmarks implement `Benchmark.evaluate()` with the same contract:
+
+```python
+def evaluate(
+    self,
+    predictions: list[Prediction] | None,  # Legacy, ignored (reads from disk)
+    run_id: str,
+    output_dir: Path,
+    tracker: ProgressTracker | None = None,  # For live status updates
+    instance_id: str | None = None,  # If set, only evaluate this instance
+) -> dict[str, bool]:
+    """Return {instance_id: resolved} where resolved=True means issue fixed."""
+```
+
+**Implementation notes:**
+- Reads predictions from `{output_dir}/instances/{instance_id}/prediction.json`
+- Calls external evaluation subprocess (SWE-bench harness, scarf validate, etc.)
+- Subprocess creates its own containers and runs tests in parallel internally
+- Updates tracker with verification status if provided
+- Returns boolean dict: True = issue resolved, False = issue not resolved
+
+**Per-benchmark details:**
+- **SWE-bench**: Calls `swebench.harness.run_evaluation`, parses test results
+- **ScarfBench**: Calls `scarf validate`, reads `metadata.json` for test results
+- **Future benchmarks**: Same contract, can be plugged in without runner changes
+
 ## Extending
 
 - **New harness** — add an adapter in `acb/harnesses/` (implement
@@ -152,5 +218,8 @@ http, no cache reporting.
   `acb/harnesses/_streaming.py`, worth reusing for a third).
 - **New benchmark** — add an adapter in `acb/benchmarks/` implementing
   `load_instances` / `prepare_container` / `collect_prediction_container` /
-  `evaluate`. Everything else (proxy, measurement, reporting) is shared.
+  `evaluate()` (use the contract above). Everything else (proxy, measurement,
+  reporting) is shared. Each benchmark's `evaluate()` is independent; the
+  runner calls it per-instance, and benchmarks can assume filesystem isolation
+  (no cross-instance reads/writes).
 - **New metric** — re-aggregate `usage.jsonl` in `acb/report.py`; no re-runs.

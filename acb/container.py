@@ -122,9 +122,21 @@ def _run(cmd: list[str], **kwargs) -> subprocess.CompletedProcess:
         ) from e
 
 
-def pod_create(name: str) -> str:
-    """Create a pod (shared network namespace) and return its name."""
-    _run(["podman", "pod", "create", "--name", name])
+def pod_create(name: str, labels: dict[str, str] | None = None) -> str:
+    """Create a pod (shared network namespace) and return its name.
+    
+    Args:
+        name: Pod name
+        labels: Optional dict of labels to attach to the pod
+    
+    Returns:
+        Pod name
+    """
+    cmd = ["podman", "pod", "create", "--name", name]
+    if labels:
+        for key, value in labels.items():
+            cmd.extend(["--label", f"{key}={value}"])
+    _run(cmd)
     return name
 
 

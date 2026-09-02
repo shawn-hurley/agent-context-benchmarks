@@ -15,7 +15,10 @@ from __future__ import annotations
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from acb.ui import ProgressTracker
 
 
 @dataclass
@@ -77,5 +80,25 @@ class Benchmark(ABC):
         """Turn the harness's post-run container state into a Prediction."""
 
     @abstractmethod
-    def evaluate(self, predictions: list[Prediction], run_id: str, output_dir: Path) -> dict[str, bool]:
-        """Score predictions; return {instance_id: resolved}."""
+    def evaluate(
+        self,
+        predictions: list[Prediction] | None,
+        run_id: str,
+        output_dir: Path,
+        tracker: ProgressTracker | None = None,
+        instance_id: str | None = None,
+        tracker_key: str | None = None,
+    ) -> dict[str, bool]:
+        """Score predictions; return {instance_id: resolved}.
+        
+        Args:
+            predictions: Legacy parameter (ignored, reads from disk instead)
+            run_id: Unique identifier for this run
+            output_dir: Harness output directory containing instances/
+            tracker: Optional tracker to update with verification status
+            instance_id: If set, only evaluate this specific instance (filesystem path)
+            tracker_key: Composite key {harness}-{instance_id} for tracker updates
+        
+        Returns:
+            Dictionary mapping instance_id to resolved status (True/False)
+        """

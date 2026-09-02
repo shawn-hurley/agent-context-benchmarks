@@ -219,7 +219,9 @@ class Goose(HarnessAdapter):
         label = f"[goose:{instance_id}]"
         timeout = self.config.get("timeout", 1800)
         return execute(exec_cmd, env=None, cwd=None, transcript_path=transcript_path,
-                       label=label, timeout=timeout, describe_event=_describe_event)
+                       label=label, timeout=timeout, describe_event=_describe_event,
+                       tracker=getattr(self, '_tracker', None),
+                       instance_id=getattr(self, '_instance_id', None))
 
     def build_container_env(self, base_url: str, api_key: str) -> dict[str, str]:
         """Minimal env for `run_container` -- no host env inherited (irrelevant/huge).

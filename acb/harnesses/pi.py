@@ -349,4 +349,6 @@ class Pi(HarnessAdapter):
         label = f"[pi:{instance_id}]"
         timeout = self.config.get("timeout", 1800)
         return execute(exec_cmd, env=None, cwd=None, transcript_path=transcript_path,
-                       label=label, timeout=timeout, describe_event=_describe_event)
+                       label=label, timeout=timeout, describe_event=_describe_event,
+                       tracker=getattr(self, '_tracker', None),
+                       instance_id=getattr(self, '_instance_id', None))
