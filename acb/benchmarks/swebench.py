@@ -43,7 +43,7 @@ def _ensure_swebench_venv() -> Path:
     python = _SWEBENCH_VENV / "bin" / "python"
     if python.exists():
         return python
-    print("[swebench] creating isolated venv for SWE-bench evaluation ...", flush=True)
+    # Silent operation - logged to SWE-bench's own logs (only runs once)
     subprocess.run(
         ["uv", "venv", str(_SWEBENCH_VENV)],
         cwd=str(_SWEBENCH_DIR),
@@ -54,7 +54,6 @@ def _ensure_swebench_venv() -> Path:
         cwd=str(_SWEBENCH_DIR),
         check=True,
     )
-    print("[swebench] SWE-bench venv ready.", flush=True)
     return python
 
 from acb.benchmarks.base import Benchmark, Instance, Prediction
@@ -69,13 +68,18 @@ from acb.container import (
 DEFAULT_DATASET = "SWE-bench/SWE-bench_Verified"
 
 
-def _tail_file(path: Path, prefix: str, stop_event: threading.Event) -> None:
-    """Print lines appended to ``path`` as they arrive, until ``stop_event`` is set.
+def _tail_file(
+    path: Path,
+    prefix: str,
+    stop_event: threading.Event,
+    tracker: 'ProgressTracker | None' = None,
+    tracker_key: str | None = None,
+) -> None:
+    """Track progress from SWE-bench evaluation log file.
 
-    SWE-bench's own per-instance progress (container start, patch application,
-    test runtime, grading) is logged to this file only (its logger is created
-    with add_stdout=False) -- this is how we surface it live instead of it
-    being silently written to a file no one is watching during the run.
+    Updates tracker activity with evaluation progress instead of printing.
+    All detailed output is written to log files; we update the Live display
+    via tracker activity updates to avoid flickering from continuous prints.
     """
     f = None
     try:
@@ -88,13 +92,14 @@ def _tail_file(path: Path, prefix: str, stop_event: threading.Event) -> None:
                     continue
             line = f.readline()
             if line:
-                print(f"{prefix} {line.rstrip()}", flush=True)
+                # Update tracker activity instead of printing (avoids display flicker)
+                if tracker and tracker_key:
+                    status = line.strip()[:50]  # First 50 chars for activity display
+                    tracker.update_activity(tracker_key, f"eval: {status}")
+                # All detailed output goes to log file; no print needed
             else:
                 stop_event.wait(0.3)
-        if f is not None:
-            # catch any trailing lines written right before the process exited
-            for line in f:
-                print(f"{prefix} {line.rstrip()}", flush=True)
+        # Trailing lines also logged to file - no print needed
     finally:
         if f is not None:
             f.close()
@@ -207,8 +212,9 @@ class SWEBench(Benchmark):
         for path in new_untracked:
             try:
                 container_exec_capture(container, ["git", "-C", "/testbed", "add", "--", path])
-            except RuntimeError as e:
-                print(f"[swebench] warning: could not stage {path!r}, skipping: {e}", flush=True)
+            except RuntimeError:
+                # Non-critical: skip paths that can't be staged (logged in files)
+                pass
 
         diff = container_exec_capture(container, ["git", "-C", "/testbed", "diff", "--cached"])
         return Prediction(
@@ -306,26 +312,36 @@ class SWEBench(Benchmark):
         
         env = container_env(self.config)
         
-        # Tail evaluation logs
+        # Tail evaluation logs and update tracker activity
         log_dir_base = _SWEBENCH_DIR / "logs" / "run_evaluation" / run_id
         stop_event = threading.Event()
         tailers: list[threading.Thread] = []
         for p in preds_to_eval:
             log_path = log_dir_base / p.model_name_or_path / p.instance_id / "run_instance.log"
+            # Pass tracker so we can update activity instead of printing
+            eval_tracker_key = tracker_key if p.instance_id == instance_id else None
             t = threading.Thread(
                 target=_tail_file,
                 args=(log_path, f"[eval:{p.instance_id}]", stop_event),
+                kwargs={'tracker': tracker, 'tracker_key': eval_tracker_key},
                 daemon=True,
             )
             t.start()
             tailers.append(t)
         
-        print(f"[eval] starting SWE-bench evaluation for {len(preds_to_eval)} "
-              f"instance(s) (run_id={run_id})...", flush=True)
-        
+        # Redirect evaluation subprocess output to log file to prevent terminal interference
+        # This prevents SWE-bench's output from bypassing Rich's Live display and causing blanking
+        eval_log_path = output_dir / f"swebench_eval_{run_id}.log"
         try:
-            proc = subprocess.Popen(cmd, cwd=str(_SWEBENCH_DIR), env=env)
-            proc.wait()
+            with eval_log_path.open("w") as eval_log:
+                proc = subprocess.Popen(
+                    cmd,
+                    cwd=str(_SWEBENCH_DIR),
+                    env=env,
+                    stdout=eval_log,
+                    stderr=subprocess.STDOUT
+                )
+                proc.wait()
         except Exception as e:
             error_msg = f"SWE-bench evaluation failed: {str(e)}"
             if tracker and tracker_key:
@@ -336,7 +352,7 @@ class SWEBench(Benchmark):
             for t in tailers:
                 t.join(timeout=5)
         
-        print(f"[eval] evaluation subprocess exited with code {proc.returncode}", flush=True)
+        # Tracker shows verification status - no print needed
         
         # Parse results
         resolved: dict[str, bool] = {}

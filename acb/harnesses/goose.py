@@ -45,9 +45,13 @@ import tarfile
 import threading
 import urllib.request
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from acb.container import container_cp_in, container_exec_capture
 from acb.harnesses._cache import binary_cache_lock
+
+if TYPE_CHECKING:
+    from acb.ui import ProgressTracker
 from acb.harnesses._streaming import execute
 from acb.harnesses.base import HarnessAdapter, HarnessResult
 
@@ -65,12 +69,23 @@ _ARCH_ALIASES = {"arm64": "aarch64", "aarch64": "aarch64", "amd64": "x86_64", "x
 _DOWNLOAD_LOCK = threading.Lock()
 
 
-def ensure_linux_binary(arch: str, cache_dir: Path) -> Path:
+def ensure_linux_binary(
+    arch: str,
+    cache_dir: Path,
+    tracker: ProgressTracker | None = None,
+    tracker_key: str | None = None,
+) -> Path:
     """Download (once, cached) a Linux goose binary for ``arch``; return its path.
     
     Thread-safe: uses a lock to prevent concurrent download race conditions when
     multiple instances try to download the same binary simultaneously. The first
     thread to acquire the lock downloads; others wait and reuse the result.
+    
+    Args:
+        arch: Target architecture
+        cache_dir: Cache directory for binary
+        tracker: Optional progress tracker for display updates
+        tracker_key: Optional tracker key for activity updates
     """
     goose_arch = _ARCH_ALIASES.get(arch, arch)
     cache_key = f"goose-{goose_arch}-unknown-linux-gnu"
@@ -89,7 +104,8 @@ def ensure_linux_binary(arch: str, cache_dir: Path) -> Path:
         
         dest_dir.mkdir(parents=True, exist_ok=True)
         url = _LINUX_RELEASE_URL.format(arch=goose_arch)
-        print(f"[goose] downloading Linux binary for {goose_arch} from {url} ...", flush=True)
+        if tracker and tracker_key:
+            tracker.update_activity(tracker_key, f"setup: downloading goose binary ({goose_arch})")
         archive_path = dest_dir / "goose.tar.bz2"
         urllib.request.urlretrieve(url, archive_path)  # noqa: S310
         with tarfile.open(archive_path) as tf:
@@ -155,7 +171,11 @@ class Goose(HarnessAdapter):
         
         cache_dir is shared across all runs under the output directory.
         """
-        binary = ensure_linux_binary(arch, cache_dir)
+        binary = ensure_linux_binary(
+            arch, cache_dir,
+            tracker=getattr(self, '_tracker', None),
+            tracker_key=getattr(self, '_tracker_key', None)
+        )
         container_cp_in(container, binary, "/usr/local/bin/goose")
         container_exec_capture(container, ["chmod", "+x", "/usr/local/bin/goose"])
 
@@ -171,7 +191,11 @@ class Goose(HarnessAdapter):
         Injects goose configuration to disable internet search before execution.
         """
         # Inject goose config to disable fetch extension (internet search)
-        self._inject_goose_config(container)
+        self._inject_goose_config(
+            container,
+            tracker=getattr(self, '_tracker', None),
+            tracker_key=getattr(self, '_tracker_key', None)
+        )
 
         goose_argv = [
             binary, "run",
@@ -221,7 +245,7 @@ class Goose(HarnessAdapter):
         return execute(exec_cmd, env=None, cwd=None, transcript_path=transcript_path,
                        label=label, timeout=timeout, describe_event=_describe_event,
                        tracker=getattr(self, '_tracker', None),
-                       instance_id=getattr(self, '_instance_id', None))
+                       tracker_key=getattr(self, '_tracker_key', None))
 
     def build_container_env(self, base_url: str, api_key: str) -> dict[str, str]:
         """Minimal env for `run_container` -- no host env inherited (irrelevant/huge).
@@ -246,19 +270,28 @@ class Goose(HarnessAdapter):
         return env
 
     @staticmethod
-    def _inject_goose_config(container: str) -> None:
+    def _inject_goose_config(
+        container: str,
+        tracker: ProgressTracker | None = None,
+        tracker_key: str | None = None,
+    ) -> None:
         """Inject goose configuration file into container to disable internet search.
         
         Copies the goose-container-config.yaml from the harness directory into the
         container at ~/.config/goose/config.yaml to ensure the fetch extension
         (internet search) is disabled.
+        
+        Args:
+            container: Container ID to inject config into
+            tracker: Optional progress tracker for display updates
+            tracker_key: Optional tracker key for activity updates
         """
         config_src = Path(__file__).parent.parent / "goose-container-config.yaml"
         config_dst = "/root/.config/goose/config.yaml"
         
         if not config_src.exists():
-            print(f"[goose] warning: config file not found at {config_src}, skipping injection",
-                  flush=True)
+            if tracker and tracker_key:
+                tracker.update_activity(tracker_key, "setup: goose config not found, skipping")
             return
         
         try:
@@ -274,6 +307,8 @@ class Goose(HarnessAdapter):
                 check=True,
                 capture_output=True,
             )
-            print(f"[goose] injected config to {container}:{config_dst}", flush=True)
+            if tracker and tracker_key:
+                tracker.update_activity(tracker_key, "setup: injected goose config")
         except subprocess.CalledProcessError as e:
-            print(f"[goose] warning: failed to inject config: {e}", flush=True)
+            if tracker and tracker_key:
+                tracker.update_activity(tracker_key, "setup: goose config injection failed")

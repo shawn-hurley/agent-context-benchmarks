@@ -131,11 +131,15 @@ import tarfile
 import threading
 import urllib.request
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from acb.container import container_cp_in, container_exec_capture
 from acb.harnesses._cache import binary_cache_lock
 from acb.harnesses._streaming import execute
 from acb.harnesses.base import HarnessAdapter, HarnessResult
+
+if TYPE_CHECKING:
+    from acb.ui import ProgressTracker
 
 # Pinned rather than tracking "latest" -- reproducible benchmark runs
 # shouldn't silently pick up a new CLI version (different default tool
@@ -163,7 +167,13 @@ _REGISTRY_TARBALL_URL = (
 _DOWNLOAD_LOCK = threading.Lock()
 
 
-def ensure_linux_binary(arch: str, cache_dir: Path, version: str = DEFAULT_VERSION) -> Path:
+def ensure_linux_binary(
+    arch: str,
+    cache_dir: Path,
+    version: str = DEFAULT_VERSION,
+    tracker: ProgressTracker | None = None,
+    tracker_key: str | None = None,
+) -> Path:
     """Download (once, cached) a Linux `claude` binary for ``arch``; return its path.
 
     No `npm`/`node` needed on the host -- the platform package is a plain
@@ -178,6 +188,13 @@ def ensure_linux_binary(arch: str, cache_dir: Path, version: str = DEFAULT_VERSI
     Thread-safe: uses a lock to prevent concurrent download race conditions when
     multiple instances try to download the same binary simultaneously. The first
     thread to acquire the lock downloads; others wait and reuse the result.
+    
+    Args:
+        arch: Target architecture
+        cache_dir: Cache directory for binary
+        version: Binary version to download
+        tracker: Optional progress tracker for display updates
+        tracker_key: Optional tracker key for activity updates
     """
     npm_arch = _ARCH_ALIASES.get(arch, arch)
     cache_key = f"claude-code-linux-{npm_arch}-{version}"
@@ -196,7 +213,8 @@ def ensure_linux_binary(arch: str, cache_dir: Path, version: str = DEFAULT_VERSI
         
         dest_dir.mkdir(parents=True, exist_ok=True)
         url = _REGISTRY_TARBALL_URL.format(npm_arch=npm_arch, version=version)
-        print(f"[claude-code] downloading Linux binary for {npm_arch} from {url} ...", flush=True)
+        if tracker and tracker_key:
+            tracker.update_activity(tracker_key, f"setup: downloading claude-code binary ({npm_arch})")
         archive_path = dest_dir / "claude-code.tgz"
         urllib.request.urlretrieve(url, archive_path)  # noqa: S310
         with tarfile.open(archive_path) as tf:
@@ -270,7 +288,11 @@ class ClaudeCode(HarnessAdapter):
         execs it. Same pattern as Goose.setup_container().
         
         cache_dir is shared across all runs under the output directory."""
-        binary = ensure_linux_binary(arch, cache_dir)
+        binary = ensure_linux_binary(
+            arch, cache_dir,
+            tracker=getattr(self, '_tracker', None),
+            tracker_key=getattr(self, '_tracker_key', None)
+        )
         container_cp_in(container, binary, "/usr/local/bin/claude")
         container_exec_capture(container, ["chmod", "+x", "/usr/local/bin/claude"])
 
@@ -340,7 +362,7 @@ class ClaudeCode(HarnessAdapter):
         return execute(exec_cmd, env=None, cwd=None, transcript_path=transcript_path,
                        label=label, timeout=timeout, describe_event=_describe_event,
                        tracker=getattr(self, '_tracker', None),
-                       instance_id=getattr(self, '_instance_id', None))
+                       tracker_key=getattr(self, '_tracker_key', None))
 
     def build_container_env(self, base_url: str, api_key: str) -> dict[str, str]:
         """Base anthropic env (ANTHROPIC_BASE_URL/API_KEY, from

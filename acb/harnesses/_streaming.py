@@ -98,14 +98,14 @@ def execute(cmd: list[str], env: dict[str, str] | None, cwd: str | None,
             transcript_path: Path, label: str, timeout: int,
             describe_event: DescribeEvent,
             tracker: 'ProgressTracker | None' = None,
-            instance_id: str | None = None) -> HarnessResult:
+            tracker_key: str | None = None) -> HarnessResult:
     """Run `cmd` to completion, streaming its stdout live with a heartbeat.
 
     Shared by every container-mode harness's `run_container()`.
     
     Args:
         tracker: Optional ProgressTracker for updating UI with activity
-        instance_id: Instance ID for tracker updates
+        tracker_key: Composite key {harness}-{instance_id} for tracker updates
     """
     proc = subprocess.Popen(
         cmd, cwd=cwd, env=env,
@@ -134,18 +134,15 @@ def execute(cmd: list[str], env: dict[str, str] | None, cwd: str | None,
                 timed_out = True
                 break
             
-            # Update tracker if available
-            if tracker and instance_id:
-                tracker.update_activity(instance_id, state.last_activity)
-            else:
-                # Fallback: print only if no tracker
-                print(f"{label} still working ({elapsed:.0f}s elapsed) "
-                      f"-- last: {state.last_activity}", flush=True)
+            # Update tracker silently (tracker_key is composite key {harness}-{instance_id})
+            # All runs use tracker; output is in transcript.jsonl
+            if tracker and tracker_key:
+                tracker.update_activity(tracker_key, state.last_activity)
 
     reader.join(timeout=5)
     output = "".join(buffer)
     if timed_out:
-        print(f"{label} timed out after {timeout}s", flush=True)
+        # Status shown via tracker (TIMEOUT status)
         return HarnessResult(output=output, exit_code=-1, timed_out=True)
-    print(f"{label} finished (exit code {proc.returncode})", flush=True)
+    # Status shown via tracker (GENERATED/FAILED status)
     return HarnessResult(output=output, exit_code=proc.returncode)

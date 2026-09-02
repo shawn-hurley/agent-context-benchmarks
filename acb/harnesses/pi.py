@@ -67,11 +67,15 @@ import tempfile
 import threading
 import urllib.request
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from acb.container import container_cp_in, container_exec_capture
 from acb.harnesses._cache import binary_cache_lock
 from acb.harnesses._streaming import execute
 from acb.harnesses.base import HarnessAdapter, HarnessResult
+
+if TYPE_CHECKING:
+    from acb.ui import ProgressTracker
 
 # Pinned for reproducibility.
 DEFAULT_VERSION = "0.84.3"
@@ -95,8 +99,13 @@ _CONTAINER_AGENT_DIR = "/tmp/pi-agent"
 _DOWNLOAD_LOCK = threading.Lock()
 
 
-def ensure_linux_files(arch: str, cache_dir: Path,
-                         version: str = DEFAULT_VERSION) -> Path:
+def ensure_linux_files(
+    arch: str,
+    cache_dir: Path,
+    version: str = DEFAULT_VERSION,
+    tracker: ProgressTracker | None = None,
+    tracker_key: str | None = None,
+) -> Path:
     """Download (once, cached) the pi Linux release directory for ``arch``.
 
     Returns the path to the extracted `pi/` directory (which contains the
@@ -106,6 +115,13 @@ def ensure_linux_files(arch: str, cache_dir: Path,
     Thread-safe: uses a lock to prevent concurrent download race conditions when
     multiple instances try to download the same binary simultaneously. The first
     thread to acquire the lock downloads; others wait and reuse the result.
+    
+    Args:
+        arch: Target architecture
+        cache_dir: Cache directory for files
+        version: Version to download
+        tracker: Optional progress tracker for display updates
+        tracker_key: Optional tracker key for activity updates
     """
     pi_arch = _ARCH_ALIASES.get(arch, arch)
     cache_key = f"pi-linux-{pi_arch}-{version}"
@@ -124,7 +140,8 @@ def ensure_linux_files(arch: str, cache_dir: Path,
         
         dest_dir.mkdir(parents=True, exist_ok=True)
         url = _RELEASE_URL.format(version=version, arch=pi_arch)
-        print(f"[pi] downloading Linux release for {pi_arch} from {url} ...", flush=True)
+        if tracker and tracker_key:
+            tracker.update_activity(tracker_key, f"setup: downloading pi binary ({pi_arch})")
         archive_path = dest_dir / "pi.tar.gz"
         urllib.request.urlretrieve(url, archive_path)  # noqa: S310
         with tarfile.open(archive_path) as tf:
@@ -202,7 +219,11 @@ class Pi(HarnessAdapter):
         The whole directory is needed because the binary loads native addons
         from node_modules/ at runtime (e.g. @mariozechner/clipboard).
         """
-        pi_dir = ensure_linux_files(arch, cache_dir)
+        pi_dir = ensure_linux_files(
+            arch, cache_dir,
+            tracker=getattr(self, '_tracker', None),
+            tracker_key=getattr(self, '_tracker_key', None)
+        )
         # podman cp semantics: if container_path doesn't exist, creates it as
         # a copy of host_path. Each container is fresh so /opt/pi won't exist.
         container_cp_in(container, pi_dir, _CONTAINER_DIR)
@@ -351,4 +372,4 @@ class Pi(HarnessAdapter):
         return execute(exec_cmd, env=None, cwd=None, transcript_path=transcript_path,
                        label=label, timeout=timeout, describe_event=_describe_event,
                        tracker=getattr(self, '_tracker', None),
-                       instance_id=getattr(self, '_instance_id', None))
+                       tracker_key=getattr(self, '_tracker_key', None))

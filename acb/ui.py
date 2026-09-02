@@ -15,6 +15,7 @@ import os
 import signal
 import subprocess
 import sys
+import threading
 import time
 from dataclasses import dataclass, field
 from enum import Enum
@@ -106,6 +107,7 @@ class ProgressTracker:
         self.completion_order: list[str] = []  # For "Recent" display
         self.interrupted = False
         self.start_time = time.monotonic()
+        self._lock = threading.Lock()  # Thread safety for concurrent updates
 
         self.console = Console()
         self.use_unicode = self._detect_unicode_support()
@@ -147,15 +149,16 @@ class ProgressTracker:
         
         Stores using composite key: {harness}-{instance_id}
         """
-        composite_key = f"{harness}-{instance_id}"
-        self.instances[composite_key] = InstanceProgress(
-            instance_id=instance_id, harness=harness, status=InstanceStatus.QUEUED
-        )
-        
-        if os.environ.get("ACB_DEBUG_UI"):
-            import sys
-            print(f"[DEBUG] add_instance({composite_key}, harness={harness}) - now QUEUED", 
-                  file=sys.stderr, flush=True)
+        with self._lock:
+            composite_key = f"{harness}-{instance_id}"
+            self.instances[composite_key] = InstanceProgress(
+                instance_id=instance_id, harness=harness, status=InstanceStatus.QUEUED
+            )
+            
+            if os.environ.get("ACB_DEBUG_UI"):
+                import sys
+                print(f"[DEBUG] add_instance({composite_key}, harness={harness}) - now QUEUED", 
+                      file=sys.stderr, flush=True)
 
     def start_instance(self, tracker_key: str, pod_name: str | None = None) -> None:
         """Mark instance as started.
@@ -164,19 +167,20 @@ class ProgressTracker:
             tracker_key: Composite key {harness}-{instance_id}
             pod_name: Optional pod name for debugging
         """
-        if tracker_key not in self.instances:
-            return
-        inst = self.instances[tracker_key]
-        inst.status = InstanceStatus.RUNNING
-        inst.start_time = time.monotonic()
-        if pod_name:
-            inst.pod_name = pod_name
-        
-        if os.environ.get("ACB_DEBUG_UI"):
-            import sys
-            pod_info = f" pod={pod_name}" if pod_name else ""
-            print(f"[DEBUG] start_instance({tracker_key}){pod_info} - now RUNNING", 
-                  file=sys.stderr, flush=True)
+        with self._lock:
+            if tracker_key not in self.instances:
+                return
+            inst = self.instances[tracker_key]
+            inst.status = InstanceStatus.RUNNING
+            inst.start_time = time.monotonic()
+            if pod_name:
+                inst.pod_name = pod_name
+            
+            if os.environ.get("ACB_DEBUG_UI"):
+                import sys
+                pod_info = f" pod={pod_name}" if pod_name else ""
+                print(f"[DEBUG] start_instance({tracker_key}){pod_info} - now RUNNING", 
+                      file=sys.stderr, flush=True)
 
     def update_activity(
         self, tracker_key: str, activity: str, tokens: int | None = None
@@ -186,18 +190,19 @@ class ProgressTracker:
         Args:
             tracker_key: Composite key {harness}-{instance_id}
         """
-        if tracker_key not in self.instances:
-            return
-        inst = self.instances[tracker_key]
-        # Truncate to 50 chars max
-        inst.last_activity = activity[:50].strip()
-        if tokens is not None:
-            inst.tokens_used = tokens
-        
-        if os.environ.get("ACB_DEBUG_UI"):
-            import sys
-            print(f"[DEBUG] update_activity({tracker_key}) - {activity[:30]}... tokens={tokens}", 
-                  file=sys.stderr, flush=True)
+        with self._lock:
+            if tracker_key not in self.instances:
+                return
+            inst = self.instances[tracker_key]
+            # Truncate to 50 chars max
+            inst.last_activity = activity[:50].strip()
+            if tokens is not None:
+                inst.tokens_used = tokens
+            
+            if os.environ.get("ACB_DEBUG_UI"):
+                import sys
+                print(f"[DEBUG] update_activity({tracker_key}) - {activity[:30]}... tokens={tokens}", 
+                      file=sys.stderr, flush=True)
 
     def set_pod_name(self, tracker_key: str, pod_name: str) -> None:
         """Store pod name for instance.
@@ -206,16 +211,17 @@ class ProgressTracker:
             tracker_key: Composite key {harness}-{instance_id}
             pod_name: Name of the created pod
         """
-        if tracker_key not in self.instances:
-            return
-        
-        inst = self.instances[tracker_key]
-        inst.pod_name = pod_name
-        
-        if os.environ.get("ACB_DEBUG_UI"):
-            import sys
-            print(f"[DEBUG] set_pod_name({tracker_key}) - {pod_name}", 
-                  file=sys.stderr, flush=True)
+        with self._lock:
+            if tracker_key not in self.instances:
+                return
+            
+            inst = self.instances[tracker_key]
+            inst.pod_name = pod_name
+            
+            if os.environ.get("ACB_DEBUG_UI"):
+                import sys
+                print(f"[DEBUG] set_pod_name({tracker_key}) - {pod_name}", 
+                      file=sys.stderr, flush=True)
 
     def complete_instance(
         self,
@@ -229,26 +235,27 @@ class ProgressTracker:
         Args:
             tracker_key: Composite key {harness}-{instance_id}
         """
-        if tracker_key not in self.instances:
-            return
-        inst = self.instances[tracker_key]
-        inst.end_time = time.monotonic()
-        inst.status = InstanceStatus.GENERATED if success else InstanceStatus.FAILED
-        if tokens is not None:
-            inst.tokens_used = tokens
-        if error:
-            inst.error_message = error
-            inst.last_activity = f"Error: {error[:40]}"
-        else:
-            inst.last_activity = "generated"
+        with self._lock:
+            if tracker_key not in self.instances:
+                return
+            inst = self.instances[tracker_key]
+            inst.end_time = time.monotonic()
+            inst.status = InstanceStatus.GENERATED if success else InstanceStatus.FAILED
+            if tokens is not None:
+                inst.tokens_used = tokens
+            if error:
+                inst.error_message = error
+                inst.last_activity = f"Error: {error[:40]}"
+            else:
+                inst.last_activity = "generated"
 
-        self.completion_order.append(tracker_key)
-        
-        if os.environ.get("ACB_DEBUG_UI"):
-            import sys
-            status = "GENERATED" if success else "FAILED"
-            print(f"[DEBUG] complete_instance({tracker_key}) - {status} elapsed={inst.elapsed:.1f}s tokens={tokens}", 
-                  file=sys.stderr, flush=True)
+            self.completion_order.append(tracker_key)
+            
+            if os.environ.get("ACB_DEBUG_UI"):
+                import sys
+                status = "GENERATED" if success else "FAILED"
+                print(f"[DEBUG] complete_instance({tracker_key}) - {status} elapsed={inst.elapsed:.1f}s tokens={tokens}", 
+                      file=sys.stderr, flush=True)
 
     def start_verification(self, tracker_key: str) -> None:
         """Mark instance as starting verification phase.
@@ -256,18 +263,19 @@ class ProgressTracker:
         Args:
             tracker_key: Composite key {harness}-{instance_id}
         """
-        if tracker_key not in self.instances:
-            return
+        with self._lock:
+            if tracker_key not in self.instances:
+                return
+                
+            inst = self.instances[tracker_key]
+            if inst.status == InstanceStatus.GENERATED:
+                inst.status = InstanceStatus.VERIFYING
+                inst.last_activity = "verifying..."
             
-        inst = self.instances[tracker_key]
-        if inst.status == InstanceStatus.GENERATED:
-            inst.status = InstanceStatus.VERIFYING
-            inst.last_activity = "verifying..."
-        
-        if os.environ.get("ACB_DEBUG_UI"):
-            import sys
-            print(f"[DEBUG] start_verification({tracker_key})", 
-                  file=sys.stderr, flush=True)
+            if os.environ.get("ACB_DEBUG_UI"):
+                import sys
+                print(f"[DEBUG] start_verification({tracker_key})", 
+                      file=sys.stderr, flush=True)
 
     def complete_verification(self, tracker_key: str, resolved: bool, error: str | None = None) -> None:
         """Mark instance verification as completed.
@@ -275,24 +283,25 @@ class ProgressTracker:
         Args:
             tracker_key: Composite key {harness}-{instance_id}
         """
-        if tracker_key not in self.instances:
-            return
+        with self._lock:
+            if tracker_key not in self.instances:
+                return
+                
+            inst = self.instances[tracker_key]
             
-        inst = self.instances[tracker_key]
-        
-        if error:
-            inst.status = InstanceStatus.FAILED
-            inst.error_message = error
-            inst.last_activity = f"Eval error: {error[:40]}"
-        else:
-            inst.status = InstanceStatus.VERIFIED_PASS if resolved else InstanceStatus.VERIFIED_FAIL
-            inst.last_activity = "verified: pass" if resolved else "verified: fail"
-        
-        if os.environ.get("ACB_DEBUG_UI"):
-            import sys
-            status = "PASS" if resolved and not error else ("FAIL" if not error else "ERROR")
-            print(f"[DEBUG] complete_verification({tracker_key}) - {status}", 
-                  file=sys.stderr, flush=True)
+            if error:
+                inst.status = InstanceStatus.FAILED
+                inst.error_message = error
+                inst.last_activity = f"Eval error: {error[:40]}"
+            else:
+                inst.status = InstanceStatus.VERIFIED_PASS if resolved else InstanceStatus.VERIFIED_FAIL
+                inst.last_activity = "verified: pass" if resolved else "verified: fail"
+            
+            if os.environ.get("ACB_DEBUG_UI"):
+                import sys
+                status = "PASS" if resolved and not error else ("FAIL" if not error else "ERROR")
+                print(f"[DEBUG] complete_verification({tracker_key}) - {status}", 
+                      file=sys.stderr, flush=True)
 
     def _format_status_icon(self, status: InstanceStatus) -> str:
         """Return emoji or ASCII icon for status."""
@@ -346,24 +355,25 @@ class ProgressTracker:
         Shows: all running instances + last 5 completed instances.
         This keeps the table from becoming huge while showing recent activity.
         """
-        running = [i for i in self.instances.values() if i.status == InstanceStatus.RUNNING]
-        completed = [i for i in self.instances.values() if i.status in (
-            InstanceStatus.GENERATED,
-            InstanceStatus.VERIFYING,
-            InstanceStatus.VERIFIED_PASS,
-            InstanceStatus.VERIFIED_FAIL,
-            InstanceStatus.FAILED
-        )]
-        
-        # Sort completed by end_time (most recent first), take last 5
-        completed_sorted = sorted(
-            [i for i in completed if i.end_time],
-            key=lambda x: x.end_time or 0
-        )
-        recent_completed = completed_sorted[-5:]
-        
-        # Return running first, then recent completions
-        return running + recent_completed
+        with self._lock:
+            running = [i for i in self.instances.values() if i.status == InstanceStatus.RUNNING]
+            completed = [i for i in self.instances.values() if i.status in (
+                InstanceStatus.GENERATED,
+                InstanceStatus.VERIFYING,
+                InstanceStatus.VERIFIED_PASS,
+                InstanceStatus.VERIFIED_FAIL,
+                InstanceStatus.FAILED
+            )]
+            
+            # Sort completed by end_time (most recent first), take last 5
+            completed_sorted = sorted(
+                [i for i in completed if i.end_time is not None],
+                key=lambda x: x.end_time if x.end_time is not None else 0
+            )
+            recent_completed = completed_sorted[-5:]
+            
+            # Return running first, then recent completions
+            return running + recent_completed
 
     def _build_table(self) -> Table:
         """Build the instance status table."""
@@ -378,18 +388,19 @@ class ProgressTracker:
         visible = self._get_visible_instances()
         
         # Track how many completed instances we're showing for hidden count
-        completed = [i for i in self.instances.values() if i.status in (
-            InstanceStatus.GENERATED,
-            InstanceStatus.VERIFYING,
-            InstanceStatus.VERIFIED_PASS,
-            InstanceStatus.VERIFIED_FAIL,
-            InstanceStatus.FAILED
-        )]
-        completed_sorted = sorted(
-            [i for i in completed if i.end_time],
-            key=lambda x: x.end_time or 0
-        )
-        recent_completed = completed_sorted[-5:]
+        with self._lock:
+            completed = [i for i in self.instances.values() if i.status in (
+                InstanceStatus.GENERATED,
+                InstanceStatus.VERIFYING,
+                InstanceStatus.VERIFIED_PASS,
+                InstanceStatus.VERIFIED_FAIL,
+                InstanceStatus.FAILED
+            )]
+            completed_sorted = sorted(
+                [i for i in completed if i.end_time is not None],
+                key=lambda x: x.end_time if x.end_time is not None else 0
+            )
+            recent_completed = completed_sorted[-5:]
         
         # Show running first, then completed
         for inst in sorted(visible, key=lambda x: (x.status != InstanceStatus.RUNNING, x.start_time or 0)):
@@ -444,16 +455,17 @@ class ProgressTracker:
             (completed, running, failed, queued) where completed includes all
             instances that finished generation (GENERATED, VERIFYING, VERIFIED_*, FAILED)
         """
-        statuses = [i.status for i in self.instances.values()]
-        completed = sum(1 for s in statuses if s in (
-            InstanceStatus.GENERATED, InstanceStatus.VERIFYING,
-            InstanceStatus.VERIFIED_PASS, InstanceStatus.VERIFIED_FAIL,
-            InstanceStatus.FAILED
-        ))
-        running = sum(1 for s in statuses if s == InstanceStatus.RUNNING)
-        failed = sum(1 for s in statuses if s == InstanceStatus.FAILED)
-        queued = sum(1 for s in statuses if s == InstanceStatus.QUEUED)
-        return completed, running, failed, queued
+        with self._lock:
+            statuses = [i.status for i in self.instances.values()]
+            completed = sum(1 for s in statuses if s in (
+                InstanceStatus.GENERATED, InstanceStatus.VERIFYING,
+                InstanceStatus.VERIFIED_PASS, InstanceStatus.VERIFIED_FAIL,
+                InstanceStatus.FAILED
+            ))
+            running = sum(1 for s in statuses if s == InstanceStatus.RUNNING)
+            failed = sum(1 for s in statuses if s == InstanceStatus.FAILED)
+            queued = sum(1 for s in statuses if s == InstanceStatus.QUEUED)
+            return completed, running, failed, queued
 
     def _estimate_remaining(self) -> str:
         """Calculate ETA based on completed instances."""
@@ -463,7 +475,11 @@ class ProgressTracker:
             return "calculating..."
 
         # Calculate average time per instance (excluding running)
-        finished = [i for i in self.instances.values() if i.end_time and i.start_time]
+        with self._lock:
+            finished = [
+                i for i in self.instances.values() 
+                if i.end_time is not None and i.start_time is not None
+            ]
         if not finished:
             return "calculating..."
 
@@ -498,7 +514,11 @@ class ProgressTracker:
         progress_pct = (completed / self.total * 100) if self.total > 0 else 0
         
         # Calculate averages
-        finished = [i for i in self.instances.values() if i.end_time and i.start_time]
+        with self._lock:
+            finished = [
+                i for i in self.instances.values() 
+                if i.end_time is not None and i.start_time is not None
+            ]
         avg_time = sum(i.elapsed for i in finished) / len(finished) if finished else 0
         avg_time_str = f"{avg_time:.1f}s" if avg_time > 0 else "—"
 
@@ -516,6 +536,7 @@ class ProgressTracker:
 
     def render(self) -> Layout:
         """Generate Rich Layout for Live display."""
+        # Note: _build_header and _build_table handle their own locking
         layout = Layout()
         layout.split_column(
             Layout(self._build_header(), name="header", size=8),
@@ -528,26 +549,30 @@ class ProgressTracker:
         elapsed = time.monotonic() - self.start_time
         elapsed_str = f"{elapsed / 60:.1f}m" if elapsed >= 60 else f"{elapsed:.1f}s"
         
-        # Count by status
-        generated = sum(1 for i in self.instances.values() 
-                       if i.status == InstanceStatus.GENERATED)
-        verifying = sum(1 for i in self.instances.values() 
-                       if i.status == InstanceStatus.VERIFYING)
-        verified_pass = sum(1 for i in self.instances.values() 
-                           if i.status == InstanceStatus.VERIFIED_PASS)
-        verified_fail = sum(1 for i in self.instances.values() 
-                           if i.status == InstanceStatus.VERIFIED_FAIL)
-        gen_failed = sum(1 for i in self.instances.values() 
-                        if i.status == InstanceStatus.FAILED)
-        running = sum(1 for i in self.instances.values() 
-                     if i.status == InstanceStatus.RUNNING)
-        queued = sum(1 for i in self.instances.values() 
-                    if i.status == InstanceStatus.QUEUED)
-        
-        # Calculate averages from finished instances
-        finished = [i for i in self.instances.values() if i.end_time and i.start_time]
-        avg_time = sum(i.elapsed for i in finished) / len(finished) if finished else 0
-        avg_tokens = sum(i.tokens_used or 0 for i in finished) / len(finished) if finished else 0
+        # Count by status (with lock for thread safety)
+        with self._lock:
+            generated = sum(1 for i in self.instances.values() 
+                           if i.status == InstanceStatus.GENERATED)
+            verifying = sum(1 for i in self.instances.values() 
+                           if i.status == InstanceStatus.VERIFYING)
+            verified_pass = sum(1 for i in self.instances.values() 
+                               if i.status == InstanceStatus.VERIFIED_PASS)
+            verified_fail = sum(1 for i in self.instances.values() 
+                               if i.status == InstanceStatus.VERIFIED_FAIL)
+            gen_failed = sum(1 for i in self.instances.values() 
+                            if i.status == InstanceStatus.FAILED)
+            running = sum(1 for i in self.instances.values() 
+                         if i.status == InstanceStatus.RUNNING)
+            queued = sum(1 for i in self.instances.values() 
+                        if i.status == InstanceStatus.QUEUED)
+            
+            # Calculate averages from finished instances
+            finished = [
+                i for i in self.instances.values() 
+                if i.end_time is not None and i.start_time is not None
+            ]
+            avg_time = sum(i.elapsed for i in finished) / len(finished) if finished else 0
+            avg_tokens = sum(i.tokens_used or 0 for i in finished) / len(finished) if finished else 0
         
         summary_lines = [
             "",
@@ -578,12 +603,13 @@ class ProgressTracker:
         if verified_fail > 0 or gen_failed > 0:
             summary_lines.append("")
             summary_lines.append("[bold red]  Failed instances:[/]")
-            for inst in self.instances.values():
-                if inst.status == InstanceStatus.FAILED:
-                    error_short = (inst.error_message or "Unknown error")[:60]
-                    summary_lines.append(f"    [red]💥 {inst.instance_id}: {error_short}[/]")
-                elif inst.status == InstanceStatus.VERIFIED_FAIL:
-                    summary_lines.append(f"    [red]❌ {inst.instance_id}: Verification failed[/]")
+            with self._lock:
+                for inst in self.instances.values():
+                    if inst.status == InstanceStatus.FAILED:
+                        error_short = (inst.error_message or "Unknown error")[:60]
+                        summary_lines.append(f"    [red]💥 {inst.instance_id}: {error_short}[/]")
+                    elif inst.status == InstanceStatus.VERIFIED_FAIL:
+                        summary_lines.append(f"    [red]❌ {inst.instance_id}: Verification failed[/]")
 
         summary_lines.append("[bold green]═══════════════════════════════════════════════[/]")
 
@@ -636,8 +662,28 @@ class LiveTrackerDisplay:
             print(f"[DEBUG] LiveTrackerDisplay.__rich_console__ call #{self._render_count}", 
                   file=sys.stderr, flush=True)
         
-        # Yield the current layout from the tracker
-        yield self.tracker.render()
+        # Yield the current layout from the tracker with exception handling
+        # If render() fails, prevent the refresh thread from dying silently
+        try:
+            yield self.tracker.render()
+        except Exception as e:
+            import sys
+            import traceback
+            
+            # Log the error to stderr so it's visible
+            print(f"\n[ERROR] Display render failed: {e}", file=sys.stderr, flush=True)
+            if os.environ.get("ACB_DEBUG_UI"):
+                traceback.print_exc(file=sys.stderr)
+            
+            # Yield fallback error display instead of crashing
+            from rich.panel import Panel
+            error_msg = str(e)[:100]  # Truncate long error messages
+            yield Panel(
+                f"[red]Display render error:[/red]\n{error_msg}\n\n"
+                f"[dim]Check stderr for full traceback[/dim]",
+                title="[bold red]ACB Display Error[/]",
+                border_style="red"
+            )
 
 
 def cleanup_all_pods(tracker: ProgressTracker) -> None:

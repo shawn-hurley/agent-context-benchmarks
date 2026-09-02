@@ -525,7 +525,8 @@ def _log_proxy_event(log_path: Path, event_type: str, data: dict) -> None:
             f.write(json.dumps(event) + "\n")
     except Exception as e:
         # Don't fail the run if logging fails
-        print(f"Warning: failed to write proxy log: {e}", file=__import__("sys").stderr)
+        # Silently ignore to prevent stderr output during Live display
+        pass
 
 
 class PraxisBackend(ProxyBackend):
@@ -758,11 +759,9 @@ class PraxisContainerBackend(PraxisBackend):
                 time.sleep(0.3)
         if not started:
             log_tail = container_logs(self.container_name)
-            if os.environ.get("ACB_DEBUG_KEEP_CONTAINERS"):
-                print(f"[debug] ACB_DEBUG_KEEP_CONTAINERS set -- leaving failed "
-                      f"praxis container={self.container_name} running", flush=True)
-            else:
+            if not os.environ.get("ACB_DEBUG_KEEP_CONTAINERS"):
                 container_stop_rm(self.container_name)
+            # Debug: containers left running for inspection via ACB_DEBUG_KEEP_CONTAINERS
             raise RuntimeError(
                 f"praxis container failed to start.\n--- logs ---\n{log_tail}"
             )
@@ -815,8 +814,9 @@ class PraxisContainerBackend(PraxisBackend):
         # Copy metrics file from container
         try:
             container_cp_out(self.container_name, "/tmp/benchmark_metrics.jsonl", self._metrics_path)
-        except Exception as e:
-            print(f"[metrics] warning: failed to copy metrics file: {e}", flush=True)
+        except Exception:
+            # Non-critical: metrics collection is best-effort
+            pass
         
         container_stop_rm(self.container_name)
         self._read_metrics_file()
@@ -827,10 +827,10 @@ class PraxisContainerBackend(PraxisBackend):
         Each line is a serialized BenchmarkMetric JSON object with all token
         types normalized and populated by the Rust filter. No log parsing needed.
         All token types (including cache_read_tokens and cache_creation_tokens)
-        are now properly captured from Vertex responses.
-        """
+         are now properly captured from Vertex responses.
+         """
         if not getattr(self, "_metrics_path", None) or not self._metrics_path.exists():
-            print(f"[metrics] warning: metrics file not found at {self._metrics_path}", flush=True)
+            # Non-critical: metrics file may not be present
             return
 
         records: list[UsageRecord] = []
@@ -840,8 +840,8 @@ class PraxisContainerBackend(PraxisBackend):
                 continue
             try:
                 metric = json.loads(line)
-            except json.JSONDecodeError as e:
-                print(f"[metrics] warning: failed to parse metrics line: {e}", flush=True)
+            except json.JSONDecodeError:
+                # Non-critical: skip malformed lines
                 continue
 
             records.append(

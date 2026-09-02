@@ -286,7 +286,7 @@ def _run_instance_pipeline(
         harness = make_harness(harness_name, harness_cfg)
         harness.api = harness.effective_api(model_spec.api)
         harness._tracker = tracker
-        harness._instance_id = instance.instance_id
+        harness._tracker_key = tracker_key  # Composite key {harness}-{instance_id} for activity updates
         
         testbed_container = benchmark.prepare_container(
             instance, pod_name, build_dir, arch,
@@ -337,7 +337,8 @@ def _run_instance_pipeline(
     
     except Exception as e:  # noqa: BLE001
         tb = traceback.format_exc()
-        traceback.print_exc()
+        # Don't print - traceback is captured in tb and written to error.json
+        # This prevents stderr output from bypassing Live display
         
         error_path = instance_dir / "error.json"
         error_path.write_text(json.dumps({
@@ -353,13 +354,12 @@ def _run_instance_pipeline(
                         model_name_or_path=cfg.model, error=str(e)), {}
     
     finally:
-        if os.environ.get("ACB_DEBUG_KEEP_CONTAINERS"):
-            print(f"[debug] ACB_DEBUG_KEEP_CONTAINERS set -- leaving "
-                  f"pod={pod_name} container={testbed_container} running", flush=True)
-        else:
+        if not os.environ.get("ACB_DEBUG_KEEP_CONTAINERS"):
+            # Normal cleanup: remove container and pod
             if testbed_container:
                 container_stop_rm(testbed_container)
             pod_remove(pod_name)
+        # Debug: Pod info written to pod_name.txt (line 322-323) for inspection
     
     if prediction is None:
         return Prediction(instance_id=instance.instance_id,
@@ -483,6 +483,9 @@ def run(cfg: RunConfig, registries: Registries | None = None) -> Path:
         display = LiveTrackerDisplay(tracker)
         
         with Live(display, refresh_per_second=2, console=tracker.console) as live:
+            # Force initial render so display appears immediately with all queued instances
+            live.refresh()
+            
             # Submit all work items
             futures = {}
             for harness_name, instance in work_queue:
@@ -505,8 +508,13 @@ def run(cfg: RunConfig, registries: Registries | None = None) -> Path:
                     prediction, resolved = future.result()
                     all_results[(harness_name, instance_id)] = (prediction, resolved)
                 except Exception as e:  # noqa: BLE001
-                    print(f"[acb] error in pipeline {harness_name}/{instance_id}: {e}", flush=True)
-                    traceback.print_exc()
+                    # Display error via tracker.console for clean integration with Live display
+                    tracker.console.print(f"[red][acb] error in pipeline {harness_name}/{instance_id}: {e}[/]")
+                    # Show traceback via console
+                    import io
+                    tb_buffer = io.StringIO()
+                    traceback.print_exc(file=tb_buffer)
+                    tracker.console.print(f"[dim]{tb_buffer.getvalue()}[/]")
     finally:
         if ex:
             ex.shutdown(wait=True)

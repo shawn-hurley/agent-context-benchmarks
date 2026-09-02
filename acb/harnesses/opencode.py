@@ -48,11 +48,15 @@ import tempfile
 import threading
 import urllib.request
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from acb.container import container_cp_in, container_exec_capture
 from acb.harnesses._cache import binary_cache_lock
 from acb.harnesses._streaming import execute
 from acb.harnesses.base import HarnessAdapter, HarnessResult
+
+if TYPE_CHECKING:
+    from acb.ui import ProgressTracker
 
 # Pinned for reproducibility -- bump deliberately when a new version is needed.
 DEFAULT_VERSION = "1.18.22"
@@ -72,13 +76,25 @@ _RELEASE_URL = (
 _DOWNLOAD_LOCK = threading.Lock()
 
 
-def ensure_linux_binary(arch: str, cache_dir: Path,
-                         version: str = DEFAULT_VERSION) -> Path:
+def ensure_linux_binary(
+    arch: str,
+    cache_dir: Path,
+    version: str = DEFAULT_VERSION,
+    tracker: ProgressTracker | None = None,
+    tracker_key: str | None = None,
+) -> Path:
     """Download (once, cached) a Linux `opencode` binary for ``arch``.
     
     Thread-safe: uses a lock to prevent concurrent download race conditions when
     multiple instances try to download the same binary simultaneously. The first
     thread to acquire the lock downloads; others wait and reuse the result.
+    
+    Args:
+        arch: Target architecture
+        cache_dir: Cache directory for binary
+        version: Binary version to download
+        tracker: Optional progress tracker for display updates
+        tracker_key: Optional tracker key for activity updates
     """
     oc_arch = _ARCH_ALIASES.get(arch, arch)
     cache_key = f"opencode-linux-{oc_arch}-{version}"
@@ -97,7 +113,8 @@ def ensure_linux_binary(arch: str, cache_dir: Path,
         
         dest_dir.mkdir(parents=True, exist_ok=True)
         url = _RELEASE_URL.format(version=version, arch=oc_arch)
-        print(f"[opencode] downloading Linux binary for {oc_arch} from {url} ...", flush=True)
+        if tracker and tracker_key:
+            tracker.update_activity(tracker_key, f"setup: downloading opencode binary ({oc_arch})")
         archive_path = dest_dir / "opencode.tar.gz"
         urllib.request.urlretrieve(url, archive_path)  # noqa: S310
         with tarfile.open(archive_path) as tf:
@@ -159,7 +176,11 @@ class OpenCode(HarnessAdapter):
         
         cache_dir is shared across all runs under the output directory.
         """
-        binary = ensure_linux_binary(arch, cache_dir)
+        binary = ensure_linux_binary(
+            arch, cache_dir,
+            tracker=getattr(self, '_tracker', None),
+            tracker_key=getattr(self, '_tracker_key', None)
+        )
         container_cp_in(container, binary, "/usr/local/bin/opencode")
         container_exec_capture(container, ["chmod", "+x", "/usr/local/bin/opencode"])
 
@@ -295,4 +316,4 @@ class OpenCode(HarnessAdapter):
         return execute(exec_cmd, env=None, cwd=None, transcript_path=transcript_path,
                        label=label, timeout=timeout, describe_event=_describe_event,
                        tracker=getattr(self, '_tracker', None),
-                       instance_id=getattr(self, '_instance_id', None))
+                       tracker_key=getattr(self, '_tracker_key', None))
