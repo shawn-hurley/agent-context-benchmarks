@@ -47,6 +47,7 @@ import urllib.request
 from pathlib import Path
 
 from acb.container import container_cp_in, container_exec_capture
+from acb.harnesses._cache import binary_cache_lock
 from acb.harnesses._streaming import execute
 from acb.harnesses.base import HarnessAdapter, HarnessResult
 
@@ -72,7 +73,8 @@ def ensure_linux_binary(arch: str, cache_dir: Path) -> Path:
     thread to acquire the lock downloads; others wait and reuse the result.
     """
     goose_arch = _ARCH_ALIASES.get(arch, arch)
-    dest_dir = cache_dir / f"goose-{goose_arch}-unknown-linux-gnu"
+    cache_key = f"goose-{goose_arch}-unknown-linux-gnu"
+    dest_dir = cache_dir / cache_key
     dest = dest_dir / "goose"
     
     # Quick check without lock (common case: already cached)
@@ -80,7 +82,7 @@ def ensure_linux_binary(arch: str, cache_dir: Path) -> Path:
         return dest
     
     # Acquire lock for download to prevent concurrent race conditions
-    with _DOWNLOAD_LOCK:
+    with _DOWNLOAD_LOCK, binary_cache_lock(cache_dir, cache_key):
         # Double-check after acquiring lock: another thread may have finished download
         if dest.exists():
             return dest
@@ -151,8 +153,7 @@ class Goose(HarnessAdapter):
         moved here so benchmark code stays harness-agnostic (see
         HarnessAdapter.setup_container()); behavior is unchanged.
         
-        cache_dir is the run-level cache directory, shared across all harnesses
-        and instances to avoid redundant binary downloads.
+        cache_dir is shared across all runs under the output directory.
         """
         binary = ensure_linux_binary(arch, cache_dir)
         container_cp_in(container, binary, "/usr/local/bin/goose")

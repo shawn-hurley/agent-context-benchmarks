@@ -69,6 +69,7 @@ import urllib.request
 from pathlib import Path
 
 from acb.container import container_cp_in, container_exec_capture
+from acb.harnesses._cache import binary_cache_lock
 from acb.harnesses._streaming import execute
 from acb.harnesses.base import HarnessAdapter, HarnessResult
 
@@ -107,7 +108,8 @@ def ensure_linux_files(arch: str, cache_dir: Path,
     thread to acquire the lock downloads; others wait and reuse the result.
     """
     pi_arch = _ARCH_ALIASES.get(arch, arch)
-    dest_dir = cache_dir / f"pi-linux-{pi_arch}-{version}"
+    cache_key = f"pi-linux-{pi_arch}-{version}"
+    dest_dir = cache_dir / cache_key
     pi_subdir = dest_dir / "pi"  # tarball extracts to pi/ subdirectory
     
     # Quick check without lock (common case: already cached)
@@ -115,7 +117,7 @@ def ensure_linux_files(arch: str, cache_dir: Path,
         return pi_subdir
     
     # Acquire lock for download to prevent concurrent race conditions
-    with _DOWNLOAD_LOCK:
+    with _DOWNLOAD_LOCK, binary_cache_lock(cache_dir, cache_key):
         # Double-check after acquiring lock: another thread may have finished download
         if pi_subdir.exists() and (pi_subdir / "pi").exists():
             return pi_subdir
@@ -192,7 +194,7 @@ class Pi(HarnessAdapter):
         """Pi supports both anthropic and openai providers natively."""
         return model_api
 
-    def setup_container(self, container: str, arch: str, out_dir: Path) -> None:
+    def setup_container(self, container: str, arch: str, cache_dir: Path) -> None:
         """Download (once, cached) the pi release and copy into `container`.
 
         Copies the entire `pi/` directory (binary + node_modules) to
@@ -200,7 +202,7 @@ class Pi(HarnessAdapter):
         The whole directory is needed because the binary loads native addons
         from node_modules/ at runtime (e.g. @mariozechner/clipboard).
         """
-        pi_dir = ensure_linux_files(arch, out_dir / ".cache")
+        pi_dir = ensure_linux_files(arch, cache_dir)
         # podman cp semantics: if container_path doesn't exist, creates it as
         # a copy of host_path. Each container is fresh so /opt/pi won't exist.
         container_cp_in(container, pi_dir, _CONTAINER_DIR)

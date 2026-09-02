@@ -254,9 +254,8 @@ def _run_single_harness(
             # Harness-specific asset staging (e.g. goose's binary,
             # claude-code's) is the harness's own job now, not the
             # benchmark's -- see HarnessAdapter.setup_container().
-            # Pass cache_dir (run-level, shared across all harnesses and instances)
-            # so binary caching is shared across all instances, avoiding concurrent
-            # download race conditions.
+            # Pass cache_dir (shared for the whole output directory) so binary
+            # downloads are reused across run ids, harnesses, and instances.
             harness.setup_container(testbed_container, arch, cache_dir)
             tags = ProxyTags(
                 run_id=cfg.run_id, benchmark=cfg.benchmark, harness=harness_name,
@@ -394,8 +393,8 @@ def run(cfg: RunConfig, registries: Registries | None = None) -> Path:
     print(f"[acb] {cfg.run_id}: {len(instances)} instances "
           f"({', '.join(harnesses_to_run)} / {cfg.model} / {cfg.benchmark} via {cfg.proxy})")
 
-    # Create run-level cache directory for all harnesses and instances
-    cache_dir = (out_dir / ".cache").resolve()
+    # Create output-dir-level cache directory, shared by all runs under it.
+    cache_dir = (Path(cfg.output_dir).resolve() / ".cache").resolve()
     cache_dir.mkdir(parents=True, exist_ok=True)
 
     # Run each harness, collecting reports

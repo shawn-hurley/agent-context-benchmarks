@@ -123,16 +123,16 @@ used to be a `goose_binary: Path` param baked into that method's signature;
 it didn't survive a second container-mode harness needing a different
 binary entirely).
 
-`goose` and `claude-code` both have a container-mode port today
-(`HarnessAdapter.run_container()`) -- goose ships a single static-ish Linux
-binary, and claude-code -- despite this project's own earlier assumption
-otherwise -- turns out to ship a standalone per-arch native executable too
-(`@anthropic-ai/claude-code-linux-{arm64,x64}` on the public npm registry,
-not a Node.js package needing a Node runtime; see
-`acb/harnesses/claude_code.py`'s module docstring for how that was
-confirmed). Both are trivial to `podman cp` into the container the same way.
-`opencode`/`pi` are still stubs (`acb/harnesses/stubs.py`) pending the same
-investigation.
+All four harnesses (`goose`, `claude-code`, `opencode`, `pi`) have container-mode
+implementations (`HarnessAdapter.run_container()`):
+- **goose**: static-ish Linux binary from GitHub Releases
+- **claude-code**: standalone per-arch native executable (`@anthropic-ai/claude-code-linux-{arm64,x64}` 
+  on npm -- not a Node.js package, just a single ELF binary; see 
+  `acb/harnesses/claude_code.py`'s module docstring)
+- **opencode**: standalone binary from GitHub Releases
+- **pi**: standalone binary with bundled node_modules (native addons)
+
+All are downloaded once to `runs/.cache/` and `podman cp`'d into containers.
 
 ## Model registry (owned by the proxy)
 

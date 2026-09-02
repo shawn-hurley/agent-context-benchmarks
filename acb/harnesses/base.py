@@ -9,10 +9,11 @@ Generation is container-only (see acb/runner.py, acb/benchmarks/swebench.py):
 the harness runs inside the same SWE-bench eval image evaluation will grade
 the patch in, so its dev environment matches evaluation exactly, rather than
 whatever happens to be on the machine running `acb`. A harness needs a Linux
-build (or an image with its runtime baked in) to support this -- `goose`
-ships a static-ish Linux binary; `claude-code` ships a standalone per-arch
-native binary too (see acb/harnesses/claude_code.py). `opencode`/`pi` are
-still stubs in acb/harnesses/stubs.py pending their own container port.
+build (or an image with its runtime baked in) to support this. All four
+harnesses ship standalone binaries: `goose` (static-ish Linux binary),
+`claude-code` (standalone per-arch native executable), `opencode` (standalone
+binary from GitHub Releases), and `pi` (standalone binary with node_modules).
+See their respective modules in acb/harnesses/ for implementation details.
 
 Staging a harness's own runtime into the container (e.g. `podman cp`-ing in
 a binary) is the harness's job, not the benchmark's -- see
@@ -85,9 +86,9 @@ class HarnessAdapter(ABC):
         benchmark's own `prepare_container()` returns the container name and
         before `run_container()` runs.
 
-        `cache_dir` is the run-level cache directory (runs/<run_id>/.cache) shared
-        across all harnesses and instances in the run. Binary downloads are cached
-        here to avoid concurrent download race conditions when max_workers > 1.
+        `cache_dir` is the output-dir-level cache directory (runs/.cache by
+        default), shared across all run ids, harnesses, and instances. Binary
+        downloads are cached here and must be safe under concurrent runs.
 
         Default no-op: a harness with nothing beyond what the benchmark's
         image already provides doesn't need to override this. See

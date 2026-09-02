@@ -50,6 +50,7 @@ import urllib.request
 from pathlib import Path
 
 from acb.container import container_cp_in, container_exec_capture
+from acb.harnesses._cache import binary_cache_lock
 from acb.harnesses._streaming import execute
 from acb.harnesses.base import HarnessAdapter, HarnessResult
 
@@ -80,7 +81,8 @@ def ensure_linux_binary(arch: str, cache_dir: Path,
     thread to acquire the lock downloads; others wait and reuse the result.
     """
     oc_arch = _ARCH_ALIASES.get(arch, arch)
-    dest_dir = cache_dir / f"opencode-linux-{oc_arch}-{version}"
+    cache_key = f"opencode-linux-{oc_arch}-{version}"
+    dest_dir = cache_dir / cache_key
     dest = dest_dir / "opencode"
     
     # Quick check without lock (common case: already cached)
@@ -88,7 +90,7 @@ def ensure_linux_binary(arch: str, cache_dir: Path,
         return dest
     
     # Acquire lock for download to prevent concurrent race conditions
-    with _DOWNLOAD_LOCK:
+    with _DOWNLOAD_LOCK, binary_cache_lock(cache_dir, cache_key):
         # Double-check after acquiring lock: another thread may have finished download
         if dest.exists():
             return dest
@@ -155,8 +157,7 @@ class OpenCode(HarnessAdapter):
         """Download (once, cached) this arch's opencode Linux binary and copy
         it into `container` at /usr/local/bin/opencode.
         
-        cache_dir is the run-level cache directory, shared across all harnesses
-        and instances to avoid redundant binary downloads.
+        cache_dir is shared across all runs under the output directory.
         """
         binary = ensure_linux_binary(arch, cache_dir)
         container_cp_in(container, binary, "/usr/local/bin/opencode")

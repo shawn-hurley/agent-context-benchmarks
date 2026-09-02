@@ -22,9 +22,8 @@ swebench:
   # The harness runs *inside* the same SWE-bench eval image evaluation will
   # grade the patch in (built on demand from the task repo -- see
   # acb/benchmarks/image_builder.py), so its dev environment matches
-  # evaluation exactly. Requires Podman; `goose` and `claude-code` both
-  # support this today (HarnessAdapter.run_container()) -- opencode/pi are
-  # still stubs pending their own container port (acb/harnesses/stubs.py).
+  # evaluation exactly. Requires Podman. All four harnesses (goose, claude-code,
+  # opencode, pi) support container mode today (HarnessAdapter.run_container()).
   image_arch: auto                 # auto | amd64 | arm64 (auto = host arch)
   task_repo: SWE-bench/swe-bench-tasks   # source of per-instance Dockerfiles
   # The praxis-ai image (acb-praxis-ai:latest) is built automatically from
@@ -39,10 +38,29 @@ swebench:
   #
   # praxis_ai_repo: /path/to/praxis-proxy/ai
 
+swebench-lite:
+  # SWE-bench Lite: 534 curated instances for faster iteration.
+  # Uses the same SWEBench adapter as `swebench` above, just with a different dataset.
+  dataset: SWE-bench/SWE-bench_Lite
+  split: test
+  max_workers: 4
+  container_backend: auto
+  image_arch: auto
+  task_repo: SWE-bench/swe-bench-tasks
+
 livecodebench:
-  # stub -- see acb/benchmarks/stubs.py
+  # Stub - benchmark adapter not yet implemented (see acb/benchmarks/stubs.py)
   {}
 
 scarfbench:
-  # stub -- see acb/benchmarks/stubs.py
+  # Implemented - requires `scarf` CLI and `scarf bench pull` setup.
+  # See acb/benchmarks/scarfbench.py for configuration details.
+  # Example minimal config:
+  #   benchmark_cache_dir: /path/to/scarf-bench-output
+  #   scarf_binary: scarf  # or full path
+  #   instances:
+  #     - layer: business_domain
+  #       app: cart
+  #       source: jakarta
+  #       target: quarkus
   {}

@@ -15,21 +15,37 @@ anything, not just to evaluate — see below.
 
 ## Install
 
+### Prerequisites
+
+1. **Podman** (required for container-mode generation):
+   ```bash
+   # macOS (Apple Silicon or Intel)
+   brew install podman
+   podman machine init && podman machine start
+   ```
+
+2. **SWE-bench evaluation harness** (vendored dependency):
+   ```bash
+   # Clone the evaluation harness
+   git clone https://github.com/princeton-nlp/SWE-bench.git
+   ```
+
+3. **Podman shim for macOS** (SWE-bench's evaluation code shells out to `docker`):
+   ```bash
+   mkdir -p bin
+   echo '#!/bin/sh\nexec podman "$@"' > bin/docker
+   chmod +x bin/docker
+   ```
+
+### Install ACB
+
 ```bash
 pip install -e '.[datasets]'          # datasets extra needed for SWE-bench
-pip install -e ./SWE-bench            # vendored evaluation harness (needs Podman)
+pip install -e ./SWE-bench            # install the vendored evaluation harness
 ```
 
-On Apple Silicon Macs there's no Docker Desktop requirement — a [Podman
-machine](https://podman.io) works:
-
-```bash
-podman machine init && podman machine start
-```
-
-`acb` auto-detects it (`container_backend: auto` in `benchmarks.yaml`) and
-ships a `bin/docker` shim so SWE-bench's own code that shells out to a
-literal `docker` binary still works against Podman.
+`acb` auto-detects Podman (`container_backend: auto` in `benchmarks.yaml`) and
+the `bin/docker` shim makes SWE-bench's evaluation subprocess work seamlessly.
 
 ## Configure
 
@@ -44,7 +60,13 @@ Then edit the configuration files:
 - `config/proxy.yaml`  — model backends the proxy owns (cloud + local) and proxy backends.
 - `config/harnesses.yaml` — per-harness CLI knobs.
 - `config/benchmarks.yaml` — dataset selection + container-mode settings (image arch, task repo, praxis image source).
-- `config/run.requests-1142.yaml` — one run (benchmark × harness × model).
+- `config/costs.yaml` — token pricing for cost estimation (copy from `config.example/costs.yaml`).
+- `config/swebench-lite/run.*.yaml` — example run configs (benchmark × harness × model).
+
+**Important**: `acb/costs.py` expects `config/costs.yaml` to exist. Copy it from `config.example/`:
+```bash
+cp config.example/costs.yaml config/costs.yaml
+```
 
 Set the real provider key(s) in your environment; the proxy injects them so the
 harness never sees them:
@@ -112,8 +134,8 @@ goose (static release binary), claude-code (standalone native executable in the
 `@anthropic-ai/claude-code-linux-{arm64,x64}` npm package -- *not* a Node.js
 package needing a runtime; see `acb/harnesses/claude_code.py`'s module
 docstring), opencode (standalone binary from GitHub Releases), and pi (same
-pattern). Each binary is downloaded once, cached under `runs/<run_id>/.cache/`,
-and `podman cp`'d into every container for that run.
+pattern). Each binary is downloaded once, cached under `runs/.cache/`,
+and `podman cp`'d into every container for every run under that output directory.
 
 ## Building the containers
 
@@ -217,25 +239,37 @@ swebench:
 ```
 
 The first run for a given harness also downloads that harness's Linux
-binary into `runs/<run_id>/.cache/` (goose's static release binary, or
+binary into `runs/.cache/` (goose's static release binary, or
 claude-code's standalone `@anthropic-ai/claude-code-linux-{arch}` npm
 package -- ~340MB, no `npm`/`node` needed on the host to fetch it) --
-reused across instances in that run.
+reused across instances and later runs under the same output directory.
 
 ## Run
 
 ```bash
-# from a config file
-acb run --config config/run.requests-1142.yaml               # goose, local model
-acb run --config config/run.claude-code-requests-1142.yaml   # claude-code, local model (translated)
+# from a config file (SWE-bench Lite examples)
+acb run --config config/swebench-lite/run.goose-lite.yaml         # goose, local model
+acb run --config config/swebench-lite/run.claude-code-lite.yaml   # claude-code, local model (translated)
+acb run --config config/swebench-lite/run.opencode-lite.yaml      # opencode, local model
+acb run --config config/swebench-lite/run.pi-lite.yaml            # pi, local model
+
+# multi-harness comparison
+acb run --config config/swebench-lite/run.multi-harness-comparison.yaml
 
 # or inline
-acb run --benchmark swebench --harness goose \
-        --model mlx-community/Qwen3.8-27B-4bit --run-id demo --limit 1 --proxy praxis
+acb run --benchmark swebench-lite --harness goose \
+        --model mlx-community/Qwen3-Coder-30B-A3B-Instruct-4bit-dwq-v2 \
+        --run-id demo --limit 1 --proxy praxis
 
-acb report runs/demo                  # show the rollup
-acb compare runs/a runs/b runs/c      # side-by-side across runs
+# view reports
+acb report runs/demo/goose            # single-harness run report
+acb report runs/demo                  # multi-harness suite report
+acb compare runs/a/goose runs/b/goose # side-by-side comparison
 ```
+
+**Report path notes**:
+- **Single-harness runs** write to `runs/<run_id>/<harness>/report.json` → use `acb report runs/<run_id>/<harness>`
+- **Multi-harness runs** write to `runs/<run_id>/report.json` (suite-level) → use `acb report runs/<run_id>`
 
 Note: claude-code only speaks the Anthropic Messages API. Pairing it with an
 `api: openai` model in `proxy.yaml` (like the local vLLM one above) works
@@ -254,7 +288,49 @@ overrides:
     image_arch: arm64
 ```
 
-## Output (per run, under `runs/<run_id>/`)
+## Output Structure
+
+### Single-harness run: `runs/<run_id>/<harness>/`
+
+```
+runs/demo/
+├── .cache/                          # shared binary cache (all runs)
+│   ├── goose-x86_64-unknown-linux-gnu/
+│   ├── claude-code-linux-x64-2.1.241/
+│   ├── opencode-linux-x64-1.18.22/
+│   └── pi-linux-x64-0.84.3/
+└── goose/                           # harness output
+    ├── instances/                   # per-instance data
+    │   └── <instance_id>/
+    │       ├── usage.jsonl          # LLM requests
+    │       ├── transcript.jsonl     # harness output
+    │       ├── prediction.json      # patch/output
+    │       └── metrics.json         # derived metrics
+    ├── usage.jsonl                  # aggregated usage
+    ├── predictions.jsonl            # aggregated predictions
+    ├── metrics.jsonl                # aggregated metrics
+    ├── report.json                  # run-level rollup
+    └── report.html                  # visualization
+```
+
+### Multi-harness run: `runs/<run_id>/`
+
+```
+runs/demo/
+├── .cache/                          # shared binary cache
+├── goose/                           # first harness
+│   ├── instances/
+│   ├── report.json
+│   └── report.html
+├── claude-code/                     # second harness
+│   ├── instances/
+│   ├── report.json
+│   └── report.html
+├── report.json                      # suite-level rollup
+└── report.html                      # suite comparison
+```
+
+### Key files
 
 | File              | Contents                                                    |
 |-------------------|-------------------------------------------------------------|
@@ -262,24 +338,24 @@ overrides:
 | `predictions.jsonl` | harness patches in the benchmark's expected format        |
 | `metrics.jsonl`   | derived per-instance context metrics + resolved status      |
 | `report.json`     | run-level rollup (resolve rate, avg/peak tokens, cache eff.)|
+| `report.html`     | interactive visualization with charts                       |
 
 ## Status
 
-- ✅ End-to-end (arm64/Podman, manually verified): SWE-bench × **all four
-  harnesses** (goose, claude-code, opencode, pi) × container-mode generation ×
-  Google Vertex AI Anthropic (`google-vertex-anthropic/claude-haiku-4-5`).
+- ✅ **All four harnesses** (goose, claude-code, opencode, pi) support container-mode 
+  generation with SWE-bench
+- ✅ End-to-end (arm64/Podman, manually verified): SWE-bench × all four harnesses × 
+  container-mode generation × Google Vertex AI Anthropic (`google-vertex-anthropic/claude-haiku-4-5`).
   `psf__requests-1142` resolves for every harness; per-turn cache token
-  accounting confirmed working (`avg_cache_efficiency` 91–95% across
-  harnesses).
-- ✅ End-to-end (arm64/Podman, manually verified): SWE-bench × goose ×
-  container-mode generation, real local vLLM model through a containerized
-  praxis-ai. `config/run.requests-1142.yaml`.
-- ✅ End-to-end (arm64/Podman, manually verified): SWE-bench × claude-code ×
+  accounting confirmed working (`avg_cache_efficiency` 91–95% across harnesses).
+- ✅ End-to-end (arm64/Podman, manually verified): SWE-bench × goose/claude-code ×
   container-mode generation, real local vLLM model through praxis-ai's
-  Anthropic↔OpenAI translation chain -- a full real multi-turn tool-calling
-  session (real `Bash`/`Read` calls and results), correct per-turn token
-  accounting throughout. `config/run.claude-code-requests-1142.yaml`.
-- 🚧 LiveCodeBench / ScarfBench benchmarks are stubs.
+  Anthropic↔OpenAI translation chain -- full multi-turn tool-calling sessions 
+  with correct per-turn token accounting.
+- ✅ **ScarfBench** is fully implemented (`acb/benchmarks/scarfbench.py`). Requires
+  external setup: install `scarf` CLI and run `scarf bench pull`. See 
+  `config.example/benchmarks.yaml` scarfbench section for configuration.
+- 🚧 **LiveCodeBench** benchmark is a stub (not yet implemented).
 - 🚧 The `recording` proxy backend has no container-mode implementation
   (it's a host subprocess); only `praxis` (really: praxis-ai, see "How
   generation works" above) can be used for real runs today.
@@ -461,32 +537,32 @@ or similar for claude-code/opencode/pi.
 curl -I https://github.com
 
 # 2. Check if .cache directory is writable
-ls -la runs/<run_id>/.cache/
+ls -la runs/.cache/
 # Should exist and be writable
 
 # 3. Manual download (example for goose):
-cd runs/<run_id>/.cache/
+cd runs/.cache/
 curl -L https://github.com/aaif-goose/goose/releases/download/stable/goose-x86_64-unknown-linux-gnu.tar.bz2 | tar xj
 
 # 4. Retry the run
 # Harness checks .cache/ first before downloading
 ```
 
-### Per-Instance Cache Directories (Known Issue)
+### Binary Cache Location
 
-**Current Behavior:** Harness binaries are downloaded once per instance rather 
-than once per harness. You may see multiple copies:
-```
-runs/my-run/goose/instances/instance1/.cache/goose-x86_64
-runs/my-run/goose/instances/instance2/.cache/goose-x86_64
-```
+Harness binaries are cached once per output directory under `runs/.cache/` by
+default, not inside a particular `runs/<run_id>/` directory. This lets repeated
+runs and collision-suffixed runs like `runs/demo-1/` reuse the same downloaded
+goose, claude-code, opencode, or pi binary assets.
 
-**Impact:** Redundant downloads and disk usage (each binary ~50-340MB depending 
-on harness).
-
-**Status:** Known issue, fix planned. Workaround is to tolerate the extra disk 
-usage; the downloads are still cached per-instance so don't slow down subsequent 
-runs on the same instances.
+**Cache behavior**:
+- Default `output_dir: runs` → cache at `runs/.cache/`
+- Custom `output_dir: /path/to/results` → cache at `/path/to/results/.cache/`
+- Cache is shared across all `<run_id>` directories under the same `output_dir`
+- Binaries are downloaded once per (harness, arch, version) and reused across:
+  - Multiple run IDs (e.g., `demo`, `demo-1`, `demo-2`)
+  - All harnesses in multi-harness runs
+  - All instances in a single run (parallel execution safe via file locks)
 
 ### Podman Machine Won't Start (macOS)
 
