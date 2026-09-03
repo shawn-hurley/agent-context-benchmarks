@@ -11,6 +11,7 @@ Provides real-time status display with:
 from __future__ import annotations
 
 import locale
+import logging
 import os
 import signal
 import subprocess
@@ -29,6 +30,8 @@ from rich.panel import Panel
 from rich.progress import Progress, BarColumn, TextColumn, DownloadColumn, TransferSpeedColumn
 from rich.table import Table
 from rich.text import Text
+
+from acb.logging_config import log_debug, log_error
 
 
 class InstanceStatus(Enum):
@@ -108,15 +111,15 @@ class ProgressTracker:
         self.interrupted = False
         self.start_time = time.monotonic()
         self._lock = threading.Lock()  # Thread safety for concurrent updates
+        
+        # Track errors that occur during Live display (will be shown in summary)
+        self.accumulated_errors: list[tuple[str, str]] = []  # List of (tracker_key, error_msg)
 
         self.console = Console()
         self.use_unicode = self._detect_unicode_support()
         
-        if os.environ.get("ACB_DEBUG_UI"):
-            import sys
-            print(f"[DEBUG] ProgressTracker initialized: {total_instances} instances, "
-                  f"harnesses={harness_names}, unicode={self.use_unicode}", 
-                  file=sys.stderr, flush=True)
+        log_debug(f"ProgressTracker initialized: {total_instances} instances, "
+                  f"harnesses={harness_names}, unicode={self.use_unicode}")
 
     def _detect_unicode_support(self) -> bool:
         """Detect if terminal supports Unicode/emoji."""
@@ -155,10 +158,7 @@ class ProgressTracker:
                 instance_id=instance_id, harness=harness, status=InstanceStatus.QUEUED
             )
             
-            if os.environ.get("ACB_DEBUG_UI"):
-                import sys
-                print(f"[DEBUG] add_instance({composite_key}, harness={harness}) - now QUEUED", 
-                      file=sys.stderr, flush=True)
+            log_debug(f"add_instance({composite_key}, harness={harness}) - now QUEUED")
 
     def start_instance(self, tracker_key: str, pod_name: str | None = None) -> None:
         """Mark instance as started.
@@ -177,10 +177,8 @@ class ProgressTracker:
                 inst.pod_name = pod_name
             
             if os.environ.get("ACB_DEBUG_UI"):
-                import sys
                 pod_info = f" pod={pod_name}" if pod_name else ""
-                print(f"[DEBUG] start_instance({tracker_key}){pod_info} - now RUNNING", 
-                      file=sys.stderr, flush=True)
+                log_debug(f"start_instance({tracker_key}){pod_info} - now RUNNING")
 
     def update_activity(
         self, tracker_key: str, activity: str, tokens: int | None = None
@@ -200,9 +198,7 @@ class ProgressTracker:
                 inst.tokens_used = tokens
             
             if os.environ.get("ACB_DEBUG_UI"):
-                import sys
-                print(f"[DEBUG] update_activity({tracker_key}) - {activity[:30]}... tokens={tokens}", 
-                      file=sys.stderr, flush=True)
+                log_debug(f"update_activity({tracker_key}) - {activity[:30]}... tokens={tokens}")
 
     def set_pod_name(self, tracker_key: str, pod_name: str) -> None:
         """Store pod name for instance.
@@ -219,9 +215,7 @@ class ProgressTracker:
             inst.pod_name = pod_name
             
             if os.environ.get("ACB_DEBUG_UI"):
-                import sys
-                print(f"[DEBUG] set_pod_name({tracker_key}) - {pod_name}", 
-                      file=sys.stderr, flush=True)
+                log_debug(f"set_pod_name({tracker_key}) - {pod_name}")
 
     def complete_instance(
         self,
@@ -252,10 +246,8 @@ class ProgressTracker:
             self.completion_order.append(tracker_key)
             
             if os.environ.get("ACB_DEBUG_UI"):
-                import sys
                 status = "GENERATED" if success else "FAILED"
-                print(f"[DEBUG] complete_instance({tracker_key}) - {status} elapsed={inst.elapsed:.1f}s tokens={tokens}", 
-                      file=sys.stderr, flush=True)
+                log_debug(f"complete_instance({tracker_key}) - {status} elapsed={inst.elapsed:.1f}s tokens={tokens}")
 
     def start_verification(self, tracker_key: str) -> None:
         """Mark instance as starting verification phase.
@@ -273,9 +265,7 @@ class ProgressTracker:
                 inst.last_activity = "verifying..."
             
             if os.environ.get("ACB_DEBUG_UI"):
-                import sys
-                print(f"[DEBUG] start_verification({tracker_key})", 
-                      file=sys.stderr, flush=True)
+                log_debug(f"start_verification({tracker_key})")
 
     def complete_verification(self, tracker_key: str, resolved: bool, error: str | None = None) -> None:
         """Mark instance verification as completed.
@@ -298,10 +288,21 @@ class ProgressTracker:
                 inst.last_activity = "verified: pass" if resolved else "verified: fail"
             
             if os.environ.get("ACB_DEBUG_UI"):
-                import sys
                 status = "PASS" if resolved and not error else ("FAIL" if not error else "ERROR")
-                print(f"[DEBUG] complete_verification({tracker_key}) - {status}", 
-                      file=sys.stderr, flush=True)
+                log_debug(f"complete_verification({tracker_key}) - {status}")
+
+    def record_pipeline_error(self, tracker_key: str, error: str) -> None:
+        """Record a pipeline error that occurred during Live display.
+        
+        These errors are accumulated and shown in the final summary instead of
+        being printed immediately, which would blank the Live display.
+        
+        Args:
+            tracker_key: Composite key {harness}-{instance_id}
+            error: Error message or exception string
+        """
+        with self._lock:
+            self.accumulated_errors.append((tracker_key, error))
 
     def _format_status_icon(self, status: InstanceStatus) -> str:
         """Return emoji or ASCII icon for status."""
@@ -611,9 +612,43 @@ class ProgressTracker:
                     elif inst.status == InstanceStatus.VERIFIED_FAIL:
                         summary_lines.append(f"    [red]❌ {inst.instance_id}: Verification failed[/]")
 
+        # Show pipeline errors that occurred during Live display
+        if self.accumulated_errors:
+            summary_lines.append("")
+            summary_lines.append("[bold red]  Pipeline errors:[/]")
+            with self._lock:
+                for tracker_key, error_msg in self.accumulated_errors:
+                    error_short = error_msg[:60]
+                    summary_lines.append(f"    [red]💥 {tracker_key}: {error_short}[/]")
+
         summary_lines.append("[bold green]═══════════════════════════════════════════════[/]")
 
         return "\n".join(summary_lines)
+
+    def save_summary_to_file(self, output_dir: Path) -> Path:
+        """Save the final summary to a file.
+        
+        Creates a summary.txt file in the output directory with all summary info
+        in plain text format (Rich markup removed).
+        
+        Args:
+            output_dir: Directory to save summary.txt to
+            
+        Returns:
+            Path to the created summary file
+        """
+        output_dir = Path(output_dir)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        
+        summary_path = output_dir / "summary.txt"
+        summary_text = self.summary()
+        
+        # Strip Rich markup for file output
+        import re
+        clean_text = re.sub(r'\[/?[^\]]*\]', '', summary_text)
+        
+        summary_path.write_text(clean_text)
+        return summary_path
 
 
 class LiveTrackerDisplay:
@@ -656,34 +691,34 @@ class LiveTrackerDisplay:
         """
         self._render_count += 1
         
-        # Debug logging (can be disabled with env var)
-        if os.environ.get("ACB_DEBUG_UI"):
-            import sys
-            print(f"[DEBUG] LiveTrackerDisplay.__rich_console__ call #{self._render_count}", 
-                  file=sys.stderr, flush=True)
+        # Watchdog logging: proves the render thread is alive
+        if self._render_count % 10 == 0:  # Log every 10 renders to reduce noise
+            log_debug(f"Display rendering (frame #{self._render_count})")
         
-        # Yield the current layout from the tracker with exception handling
-        # If render() fails, prevent the refresh thread from dying silently
+        # Build the layout first to avoid recursion issues
+        # If render() fails, provide a fallback error display
         try:
-            yield self.tracker.render()
+            layout = self.tracker.render()
         except Exception as e:
-            import sys
             import traceback
             
-            # Log the error to stderr so it's visible
-            print(f"\n[ERROR] Display render failed: {e}", file=sys.stderr, flush=True)
+            # Log the error
+            log_error(f"Display render failed: {e}")
             if os.environ.get("ACB_DEBUG_UI"):
-                traceback.print_exc(file=sys.stderr)
+                log_debug(f"Traceback:\n{traceback.format_exc()}")
             
-            # Yield fallback error display instead of crashing
+            # Use fallback error display instead of crashing
             from rich.panel import Panel
             error_msg = str(e)[:100]  # Truncate long error messages
-            yield Panel(
+            layout = Panel(
                 f"[red]Display render error:[/red]\n{error_msg}\n\n"
-                f"[dim]Check stderr for full traceback[/dim]",
+                f"[dim]Check logs in runs/{tracker.run_id}/acb.log[/dim]",
                 title="[bold red]ACB Display Error[/]",
                 border_style="red"
             )
+        
+        # Now yield the built layout
+        yield layout
 
 
 def cleanup_all_pods(tracker: ProgressTracker) -> None:
@@ -713,11 +748,14 @@ def cleanup_all_pods(tracker: ProgressTracker) -> None:
                 text=True,
                 timeout=5
             )
-            print(f"[acb] Cleaned up pod: {pod_name}", flush=True)
+            if os.environ.get("ACB_DEBUG_UI"):
+                log_debug(f"Cleaned up pod: {pod_name}")
         except subprocess.TimeoutExpired:
-            print(f"[acb] Timeout removing pod {pod_name}", flush=True)
+            if os.environ.get("ACB_DEBUG_UI"):
+                log_debug(f"Timeout removing pod {pod_name}")
         except Exception as e:  # noqa: BLE001
-            print(f"[acb] Failed to remove pod {pod_name}: {e}", flush=True)
+            if os.environ.get("ACB_DEBUG_UI"):
+                log_debug(f"Failed to remove pod {pod_name}: {e}")
     
     # 3. Safety net: Find and remove any orphaned acb-* pods from this run
     # (in case some slipped through the tracking system)
@@ -739,7 +777,8 @@ def cleanup_all_pods(tracker: ProgressTracker) -> None:
                             text=True,
                             timeout=5
                         )
-                        print(f"[acb] Cleaned up orphaned pod: {pod_name}", flush=True)
+                        if os.environ.get("ACB_DEBUG_UI"):
+                            log_debug(f"Cleaned up orphaned pod: {pod_name}")
                     except Exception:  # noqa: BLE001
                         pass
     except Exception:  # noqa: BLE001
@@ -757,7 +796,8 @@ def setup_interrupt_handler(tracker: ProgressTracker, executor) -> None:
     5. Hard exits (bypasses normal cleanup to exit immediately)
     """
     def signal_handler(sig, frame):
-        print("\n[acb] 🛑 Interrupt received! Cleaning up pods immediately...", flush=True)
+        if os.environ.get("ACB_DEBUG_UI"):
+            log_debug("🛑 Interrupt received! Cleaning up pods immediately...")
         
         # 1. Set interrupt flag (prevents new work from starting)
         tracker.interrupted = True
@@ -768,11 +808,12 @@ def setup_interrupt_handler(tracker: ProgressTracker, executor) -> None:
         # 3. Cancel any futures that haven't started yet
         executor.shutdown(wait=False, cancel_futures=True)
         
-        # 4. Show final summary
-        try:
-            print("\n" + tracker.summary(), flush=True)
-        except Exception:  # noqa: BLE001
-            pass  # If summary fails, still exit
+        # 4. Show final summary (only in debug mode)
+        if os.environ.get("ACB_DEBUG_UI"):
+            try:
+                print("\n" + tracker.summary(), flush=True)
+            except Exception:  # noqa: BLE001
+                pass  # If summary fails, still exit
         
         # 5. Hard exit (bypasses normal Python cleanup/context managers)
         # Using os._exit() ensures immediate termination without waiting for threads

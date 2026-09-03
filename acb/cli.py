@@ -30,7 +30,7 @@ def _cmd_run(args):
             max_workers=args.max_workers,
         )
     from acb.runner import run
-    run(cfg)
+    run(cfg, verbose=args.verbose)
 
 
 def _cmd_report(args):
@@ -84,6 +84,8 @@ def main(argv=None):
     r.add_argument("--proxy", default="praxis")
     r.add_argument("--limit", type=int)
     r.add_argument("--max-workers", type=int, default=4)
+    r.add_argument("--verbose", "-v", action="store_true",
+                   help="show stderr output live during run (disables stderr redirection)")
     r.set_defaults(func=_cmd_run)
 
     rp = sub.add_parser("report", help="show a run's report (one or more runs)")
@@ -102,4 +104,15 @@ def main(argv=None):
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as e:
+        # Try to show log file location even if run() failed
+        import traceback
+        import sys
+        # If we've created a run directory, log file should be in runs/{run_id}/acb.log
+        # For now just show the error - the user should check runs/ for the log
+        traceback.print_exc(file=sys.stderr)
+        print(f"\n[acb] Error occurred. Check runs/ directory for detailed logs in acb.log files.", 
+              file=sys.stderr)
+        sys.exit(1)

@@ -34,6 +34,8 @@ Key differences from SWE-bench:
 from __future__ import annotations
 
 import json
+import logging
+import os
 import shutil
 import subprocess
 import tempfile
@@ -44,6 +46,7 @@ if TYPE_CHECKING:
     from acb.ui import ProgressTracker
 
 from acb.benchmarks.base import Benchmark, Instance, Prediction
+from acb.logging_config import log_debug
 from acb.container import (
     build_image,
     container_create,
@@ -109,9 +112,11 @@ def _ensure_scarfbench_image(config: dict) -> str:
             f"{image} not found and Containerfile is missing at {_CONTAINERFILE}. "
             "Verify the acb/scarfbench/Containerfile exists in the repository."
         )
-    print(f"[scarfbench] building {image} from {_CONTAINERFILE} ...", flush=True)
+    if os.environ.get("ACB_DEBUG_UI"):
+        log_debug(f"building {image} from {_CONTAINERFILE} ...")
     build_image(_CONTAINERFILE, _CONTAINERFILE.parent, image)
-    print(f"[scarfbench] built {image}", flush=True)
+    if os.environ.get("ACB_DEBUG_UI"):
+        log_debug(f"built {image}")
     return image
 
 
@@ -219,7 +224,7 @@ class ScarfBench(Benchmark):
                 "Run `scarf bench pull --dest <dir>` and set the path in "
                 "config/benchmarks.yaml or overrides.benchmark.benchmark_cache_dir."
             )
-        return Path(d)
+        return Path(d).expanduser()
 
     def _scarf_eval_dir(self, output_dir: Path) -> Path:
         """Subdirectory of output_dir that holds scarf validate-compatible output."""
@@ -273,11 +278,11 @@ class ScarfBench(Benchmark):
                     f"<feature>\n{feature_content}\n</feature>\n\n"
                 )
             else:
-                print(
-                    f"[scarfbench] warning: {feature_path} not found; "
-                    "omitting feature spec from prompt",
-                    flush=True,
-                )
+                if os.environ.get("ACB_DEBUG_UI"):
+                    log_debug(
+                        f"warning: {feature_path} not found; "
+                        "omitting feature spec from prompt"
+                    )
                 feature_section = ""
 
             prompt = (
@@ -334,11 +339,11 @@ class ScarfBench(Benchmark):
                 f"and that the {source!r} framework directory exists for {layer}/{app}."
             )
 
-        print(
-            f"[scarfbench:{instance.instance_id}] copying {source} source "
-            f"({source_dir}) into container /work ...",
-            flush=True,
-        )
+        if os.environ.get("ACB_DEBUG_UI"):
+            log_debug(
+                f"copying {source} source "
+                f"({source_dir}) into container /work ..."
+            )
         _copy_source_to_container(source_dir, container_name, "/work")
 
         # Stash out_dir on the instance so collect_prediction_container() can
@@ -418,10 +423,10 @@ class ScarfBench(Benchmark):
                     shutil.copy2(item, dst)
 
         # --- Extract /work (migrated code) from container → output/ ---
-        print(
-            f"[scarfbench:{instance.instance_id}] extracting /work → {output_dir} ...",
-            flush=True,
-        )
+        if os.environ.get("ACB_DEBUG_UI"):
+            log_debug(
+                f"extracting /work → {output_dir} ..."
+            )
         _copy_work_from_container(container, output_dir)
 
         # --- Write metadata.json for scarf validate ---
@@ -538,18 +543,18 @@ class ScarfBench(Benchmark):
         # Route docker CLI calls through the Podman shim
         env = container_env(self.config)
 
-        print(
-            f"[scarfbench] running scarf validate for {len(preds_to_eval)} "
-            f"prediction(s) ...",
-            flush=True,
-        )
+        if os.environ.get("ACB_DEBUG_UI"):
+            log_debug(
+                f"running scarf validate for {len(preds_to_eval)} "
+                f"prediction(s) ..."
+            )
         
         try:
             proc = subprocess.run(cmd, env=env)
-            print(
-                f"[scarfbench] scarf validate exited with code {proc.returncode}",
-                flush=True,
-            )
+            if os.environ.get("ACB_DEBUG_UI"):
+                log_debug(
+                    f"scarf validate exited with code {proc.returncode}"
+                )
         except Exception as e:
             error_msg = f"scarf validate failed: {str(e)}"
             if tracker and tracker_key:
@@ -570,20 +575,20 @@ class ScarfBench(Benchmark):
             
             meta_path = run_dir / "metadata.json"
             if not meta_path.exists():
-                print(
-                    f"[scarfbench] warning: metadata.json not found at {meta_path}",
-                    flush=True,
-                )
+                if os.environ.get("ACB_DEBUG_UI"):
+                    log_debug(
+                        f"warning: metadata.json not found at {meta_path}"
+                    )
                 resolved[pred.instance_id] = False
                 continue
 
             try:
                 meta = json.loads(meta_path.read_text())
             except (json.JSONDecodeError, OSError) as e:
-                print(
-                    f"[scarfbench] warning: failed to read {meta_path}: {e}",
-                    flush=True,
-                )
+                if os.environ.get("ACB_DEBUG_UI"):
+                    log_debug(
+                        f"warning: failed to read {meta_path}: {e}"
+                    )
                 resolved[pred.instance_id] = False
                 continue
 
@@ -604,13 +609,13 @@ class ScarfBench(Benchmark):
             else:
                 resolved[pred.instance_id] = False
 
-            print(
-                f"[scarfbench]   {pred.instance_id}: "
-                f"compile={compile_ok} deploy={deploy_ok} "
-                f"tests={tests_passed}/{num_smoke_tests} "
-                f"=> {'PASS' if resolved[pred.instance_id] else 'FAIL'}",
-                flush=True,
-            )
+            if os.environ.get("ACB_DEBUG_UI"):
+                log_debug(
+                    f"{pred.instance_id}: "
+                    f"compile={compile_ok} deploy={deploy_ok} "
+                    f"tests={tests_passed}/{num_smoke_tests} "
+                    f"=> {'PASS' if resolved[pred.instance_id] else 'FAIL'}"
+                )
 
         # Ensure every prediction has an entry
         for pred in preds_to_eval:

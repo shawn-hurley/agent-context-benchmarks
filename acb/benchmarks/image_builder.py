@@ -36,11 +36,14 @@ against its real ``eval.sh``/``gold.patch``/``test.patch``):
 
 from __future__ import annotations
 
+import logging
+import os
 import re
 import urllib.request
 from pathlib import Path
 
 from acb.container import build_image, image_exists, image_tag
+from acb.logging_config import log_debug
 
 TASK_REPO = "SWE-bench/swe-bench-tasks"
 
@@ -92,15 +95,15 @@ def fetch_dockerfile(
     """
     if task_repo_cache_dir:
         local_path = (
-            Path(task_repo_cache_dir) / "tasks" / instance_id / "Dockerfile"
+            Path(task_repo_cache_dir).expanduser() / "tasks" / instance_id / "Dockerfile"
         )
         if local_path.exists():
             return local_path.read_text(encoding="utf-8")
-        print(
-            f"[image] {local_path} not in local task repo cache; "
-            "falling back to GitHub fetch",
-            flush=True,
-        )
+        if os.environ.get("ACB_DEBUG_UI"):
+            log_debug(
+                f"{local_path} not in local task repo cache; "
+                "falling back to GitHub fetch"
+            )
     url = f"https://raw.githubusercontent.com/{task_repo}/{ref}/tasks/{instance_id}/Dockerfile"
     with urllib.request.urlopen(url, timeout=30) as resp:  # noqa: S310
         return resp.read().decode("utf-8")
@@ -167,7 +170,8 @@ def ensure_instance_image(
             image_tag(name, eval_alias)
         return name
 
-    print(f"[image] building {name} (arch={arch}) ...", flush=True)
+    if os.environ.get("ACB_DEBUG_UI"):
+        log_debug(f"building {name} (arch={arch}) ...")
     dockerfile = fetch_dockerfile(instance_id, task_repo,
                                   task_repo_cache_dir=task_repo_cache_dir)
     dockerfile = patch_dockerfile_for_arch(dockerfile, arch)
@@ -178,7 +182,8 @@ def ensure_instance_image(
     dockerfile_path.write_text(dockerfile)
 
     build_image(dockerfile_path, context_dir, name, platform=platform_for(arch))
-    print(f"[image] built {name}", flush=True)
+    if os.environ.get("ACB_DEBUG_UI"):
+        log_debug(f"built {name}")
     if eval_alias:
         image_tag(name, eval_alias)
     return name

@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import os
 import platform as _platform
 import re
@@ -30,6 +31,7 @@ from acb.benchmarks import make_benchmark, Prediction
 from acb.config import RunConfig, Registries
 from acb.container import build_image, container_stop_rm, image_exists, pod_create, pod_remove
 from acb.harnesses import make_harness
+from acb.logging_config import setup_acb_logger, log_debug
 from acb.proxy import ProxyTags
 from acb.proxy.praxis import PraxisContainerBackend
 from acb.report import aggregate_per_instance_files, build_report
@@ -417,7 +419,23 @@ def _resolve_run_dir(output_dir: str, run_id: str) -> tuple[Path, str]:
     return base / effective_id, effective_id
 
 
-def run(cfg: RunConfig, registries: Registries | None = None) -> Path:
+def _setup_logging(out_dir: Path, verbose: bool = False) -> logging.Logger:
+    """Setup logging to file and optionally to console.
+    
+    Uses the centralized logging_config module for thread-safe setup.
+    
+    Args:
+        out_dir: Output directory for the run
+        verbose: If True, also log to console (shows live output during run)
+    
+    Returns:
+        Configured logger instance
+    """
+    log_file = out_dir / "acb.log"
+    return setup_acb_logger(log_file, verbose=verbose)
+
+
+def run(cfg: RunConfig, registries: Registries | None = None, verbose: bool = False) -> Path:
     registries = registries or Registries.load()
     # Absolute: SWE-bench's evaluation subprocess runs with cwd=SWE-bench/, so
     # any relative path derived from out_dir (predictions.jsonl etc.) would
@@ -426,7 +444,10 @@ def run(cfg: RunConfig, registries: Registries | None = None) -> Path:
     if effective_run_id != cfg.run_id:
         print(f"[acb] previous run exists, using {effective_run_id}")
         cfg = RunConfig(**{**cfg.__dict__, "run_id": effective_run_id})
+    
+    # Create output directory first, then setup logging to file
     out_dir.mkdir(parents=True, exist_ok=True)
+    _setup_logging(out_dir, verbose=verbose)
 
     bench_cfg = {**registries.benchmarks.get(cfg.benchmark, {}), **cfg.overrides.get("benchmark", {})}
     proxy_cfg = {**registries.backend_config(cfg.proxy), **cfg.overrides.get("proxy", {})}
@@ -482,7 +503,13 @@ def run(cfg: RunConfig, registries: Registries | None = None) -> Path:
         
         display = LiveTrackerDisplay(tracker)
         
-        with Live(display, refresh_per_second=2, console=tracker.console) as live:
+         # Diagnostic logging: record Live display startup
+        log_debug(f"Starting Live display: verbose={verbose}, redirect_stderr={not verbose}")
+        
+        # In verbose mode, show stderr output live (don't redirect it)
+        # In normal mode, redirect stderr to prevent blanking the display
+        with Live(display, refresh_per_second=2, console=tracker.console, 
+                  redirect_stderr=not verbose) as live:
             # Force initial render so display appears immediately with all queued instances
             live.refresh()
             
@@ -508,19 +535,25 @@ def run(cfg: RunConfig, registries: Registries | None = None) -> Path:
                     prediction, resolved = future.result()
                     all_results[(harness_name, instance_id)] = (prediction, resolved)
                 except Exception as e:  # noqa: BLE001
-                    # Display error via tracker.console for clean integration with Live display
-                    tracker.console.print(f"[red][acb] error in pipeline {harness_name}/{instance_id}: {e}[/]")
-                    # Show traceback via console
-                    import io
-                    tb_buffer = io.StringIO()
-                    traceback.print_exc(file=tb_buffer)
-                    tracker.console.print(f"[dim]{tb_buffer.getvalue()}[/]")
+                    # Record error in tracker instead of printing (avoids blanking Live display)
+                    # Errors will be shown in the final summary after Live context exits
+                    tracker_key = f"{harness_name}-{instance_id}"
+                    error_with_type = f"{type(e).__name__}: {str(e)}"
+                    tracker.record_pipeline_error(tracker_key, error_with_type)
+        
+        # Diagnostic logging: Live display exited normally
+        log_debug("Live display exited normally")
     finally:
         if ex:
             ex.shutdown(wait=True)
     
-    # Show final summary
+    # Show final summary to console AND save to file
     tracker.console.print(tracker.summary())
+    tracker.save_summary_to_file(out_dir)
+    
+    # Show log file location
+    log_file = out_dir / "acb.log"
+    tracker.console.print(f"\n[dim]Full logs saved to: {log_file.resolve()}[/dim]")
 
     # Post-process results by harness and build reports
     for harness_name in harnesses_to_run:
