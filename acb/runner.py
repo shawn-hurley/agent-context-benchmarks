@@ -37,6 +37,7 @@ from acb.proxy.praxis import PraxisContainerBackend
 from acb.report import aggregate_per_instance_files, build_report
 from acb.ui import ProgressTracker, setup_interrupt_handler, LiveTrackerDisplay
 from acb.usage import InstanceMetrics, read_records
+from acb.utils import normalize_instance_id_for_path
 
 # praxis-ai, not core praxis: only praxis-ai has the `token_count` filter
 # that computes real per-request token usage -- see acb/proxy/praxis.py's
@@ -208,7 +209,7 @@ def _setup_harness_directories(
         
         # Pre-create per-instance directories
         for inst in instances:
-            inst_dir = instances_dir / inst.instance_id
+            inst_dir = instances_dir / normalize_instance_id_for_path(inst.instance_id)
             inst_dir.mkdir(parents=True, exist_ok=True)
 
 
@@ -248,7 +249,7 @@ def _run_instance_pipeline(
     """
     harness_cfg = {**registries.harnesses.get(harness_name, {}), **cfg.overrides.get("harness", {})}
     instances_dir = harness_out_dir / "instances"
-    instance_dir = instances_dir / instance.instance_id
+    instance_dir = instances_dir / normalize_instance_id_for_path(instance.instance_id)
     usage_path = instance_dir / "usage.jsonl"
     
     # Composite key for tracker: {harness}-{instance_id}

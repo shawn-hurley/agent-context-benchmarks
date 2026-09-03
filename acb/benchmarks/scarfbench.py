@@ -55,6 +55,7 @@ from acb.container import (
     container_untar_in,
     image_exists,
 )
+from acb.utils import normalize_instance_id_for_path
 
 # Files from the benchmark's source framework directory that belong to the
 # build/test harness, not the application itself.  scarf eval run's own
@@ -441,8 +442,8 @@ class ScarfBench(Benchmark):
         )
 
         # --- Copy goose transcript to validation/agent.out ---
-        # The runner writes the transcript to <out_dir>/goose/<instance_id>/transcript.jsonl
-        transcript_src = out_dir / "goose" / instance.instance_id / "transcript.jsonl"
+        # The runner writes the transcript to <out_dir>/instances/<normalized_id>/transcript.jsonl
+        transcript_src = out_dir / "instances" / normalize_instance_id_for_path(instance.instance_id) / "transcript.jsonl"
         if transcript_src.exists():
             shutil.copy2(transcript_src, validation_dir / "agent.out")
         else:
@@ -499,14 +500,14 @@ class ScarfBench(Benchmark):
         
         if instance_id:
             # Per-instance mode: evaluate only this instance
-            pred_file = output_dir / "instances" / instance_id / "prediction.json"
+            pred_file = output_dir / "instances" / normalize_instance_id_for_path(instance_id) / "prediction.json"
             if pred_file.exists():
                 pred_data = json.loads(pred_file.read_text())
                 preds_to_eval.append(Prediction(
                     instance_id=pred_data["instance_id"],
                     model_name_or_path=pred_data["model_name_or_path"],
                     model_patch=pred_data.get("model_patch"),
-                    output=str(output_dir / "instances" / instance_id),
+                    output=str(output_dir / "instances" / normalize_instance_id_for_path(instance_id)),
                     error=None,
                 ))
         else:

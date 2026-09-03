@@ -17,6 +17,7 @@ from dataclasses import asdict
 from pathlib import Path
 
 from acb.usage import InstanceMetrics, read_records
+from acb.utils import normalize_instance_id_for_path
 
 
 def aggregate_per_instance_files(harness_out_dir: Path) -> None:
@@ -67,7 +68,7 @@ def build_report(usage_path: Path, resolved: dict[str, bool], out_dir: Path, cfg
     instances_dir = Path(out_dir) / "instances"
     if instances_dir.exists():
         for m in metrics:
-            instance_metrics_path = instances_dir / m.instance_id / "metrics.json"
+            instance_metrics_path = instances_dir / normalize_instance_id_for_path(m.instance_id) / "metrics.json"
             if instance_metrics_path.exists():
                 instance_metrics_path.write_text(json.dumps(asdict(m), indent=2))
 

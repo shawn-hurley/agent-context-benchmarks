@@ -57,6 +57,7 @@ def _ensure_swebench_venv() -> Path:
     return python
 
 from acb.benchmarks.base import Benchmark, Instance, Prediction
+from acb.utils import normalize_instance_id_for_path
 from acb.benchmarks.image_builder import ensure_instance_image
 from acb.container import (
     container_create,
@@ -257,7 +258,7 @@ class SWEBench(Benchmark):
         
         if instance_id:
             # Per-instance mode: evaluate only this instance
-            pred_file = instances_dir / instance_id / "prediction.json"
+            pred_file = instances_dir / normalize_instance_id_for_path(instance_id) / "prediction.json"
             if pred_file.exists():
                 pred = json.loads(pred_file.read_text())
                 preds_to_eval.append(Prediction(
