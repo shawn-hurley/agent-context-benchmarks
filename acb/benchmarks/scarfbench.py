@@ -430,6 +430,76 @@ class ScarfBench(Benchmark):
             )
         _copy_work_from_container(container, output_dir)
 
+        # --- Generate unified diff for model_patch (debugging/reporting) ---
+        # Exclude build artifacts and limit to 20MB to keep patches manageable
+        model_patch = ""
+        try:
+            # Exclude build artifacts to keep diff focused on source changes
+            exclude_patterns = [
+                '--exclude=target',
+                '--exclude=build',
+                '--exclude=*.class',
+                '--exclude=*.jar',
+                '--exclude=*.war',
+                '--exclude=.mvn',
+                '--exclude=node_modules',
+                '--exclude=__pycache__',
+                '--exclude=*.pyc',
+            ]
+            
+            diff_cmd = ['diff', '-Naur'] + exclude_patterns + [str(input_dir), str(output_dir)]
+            
+            if os.environ.get("ACB_DEBUG_UI"):
+                log_debug(f"generating diff: {' '.join(diff_cmd)}")
+            
+            diff_result = subprocess.run(
+                diff_cmd,
+                capture_output=True,
+                text=True,
+                timeout=60,  # 60 second timeout for large projects
+            )
+            
+            # diff exits with 0 (no changes), 1 (changes found), or 2+ (error)
+            if diff_result.returncode in (0, 1):
+                model_patch = diff_result.stdout
+                
+                # Cap at 20MB to prevent excessive file sizes
+                max_bytes = 20 * 1024 * 1024  # 20MB
+                patch_bytes = len(model_patch.encode('utf-8'))
+                
+                if patch_bytes > max_bytes:
+                    # Truncate and add warning
+                    model_patch_truncated = model_patch[:max_bytes]
+                    # Find last complete line to avoid partial lines
+                    last_newline = model_patch_truncated.rfind('\n')
+                    if last_newline > 0:
+                        model_patch_truncated = model_patch_truncated[:last_newline]
+                    
+                    model_patch = (
+                        f"WARNING: Diff truncated at 20MB (original size: {patch_bytes / 1024 / 1024:.1f}MB)\n"
+                        f"{model_patch_truncated}\n"
+                        f"\n... [TRUNCATED - {patch_bytes - max_bytes} bytes omitted] ...\n"
+                    )
+                    if os.environ.get("ACB_DEBUG_UI"):
+                        log_debug(f"diff truncated: {patch_bytes / 1024 / 1024:.1f}MB → 20MB")
+                else:
+                    if os.environ.get("ACB_DEBUG_UI"):
+                        log_debug(f"generated diff: {patch_bytes / 1024:.1f}KB")
+            else:
+                # diff command failed
+                if os.environ.get("ACB_DEBUG_UI"):
+                    log_debug(f"diff command failed (exit {diff_result.returncode}): {diff_result.stderr[:200]}")
+                model_patch = ""
+                
+        except subprocess.TimeoutExpired:
+            if os.environ.get("ACB_DEBUG_UI"):
+                log_debug("diff generation timed out after 60s")
+            model_patch = ""
+        except Exception as e:
+            if os.environ.get("ACB_DEBUG_UI"):
+                log_debug(f"diff generation failed: {e}")
+            model_patch = ""
+
         # --- Write metadata.json for scarf validate ---
         _write_metadata_json(
             run_dir / "metadata.json",
@@ -454,6 +524,7 @@ class ScarfBench(Benchmark):
         return Prediction(
             instance_id=instance.instance_id,
             model_name_or_path=model,
+            model_patch=model_patch,
             # output carries the run_dir path so evaluate() can locate it
             output=str(run_dir),
         )
@@ -511,12 +582,37 @@ class ScarfBench(Benchmark):
                     error=None,
                 ))
         else:
-            # Legacy mode: use provided predictions
-            if predictions:
+            # Batch mode: aggregate all predictions from instances/
+            instances_dir = output_dir / "instances"
+            if instances_dir.exists():
+                for inst_dir in sorted(instances_dir.iterdir()):
+                    if inst_dir.is_dir():
+                        pred_file = inst_dir / "prediction.json"
+                        if pred_file.exists():
+                            pred_data = json.loads(pred_file.read_text())
+                            preds_to_eval.append(Prediction(
+                                instance_id=pred_data["instance_id"],
+                                model_name_or_path=pred_data["model_name_or_path"],
+                                model_patch=pred_data.get("model_patch"),
+                                output=str(output_dir / "instances" / inst_dir.name),
+                                error=None,
+                            ))
+            elif predictions:
+                # Fallback: use provided predictions
                 preds_to_eval = predictions
         
         if not preds_to_eval:
             return {instance_id: False} if instance_id else {}
+        
+        # Write predictions.jsonl for HTML report (matches SWE-bench pattern)
+        preds_path = output_dir / "predictions.jsonl"
+        with preds_path.open("w") as f:
+            for p in preds_to_eval:
+                f.write(json.dumps({
+                    "instance_id": p.instance_id,
+                    "model_name_or_path": p.model_name_or_path,
+                    "model_patch": p.model_patch or "",
+                }) + "\n")
         
         # Update tracker: mark verification starting
         if tracker and tracker_key:
