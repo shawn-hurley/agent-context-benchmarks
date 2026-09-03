@@ -57,6 +57,40 @@ def _cmd_report(args):
         print(f"html report: {out_path}")
 
 
+def _cmd_clean(args):
+    import shutil
+    output_dir = Path(args.output_dir)
+    if not output_dir.exists():
+        raise SystemExit(f"output dir does not exist: {output_dir}")
+
+    to_delete = [
+        p for p in output_dir.iterdir()
+        if p.name not in {".cache", ".gitkeep"}
+    ]
+
+    if not to_delete:
+        print("No runs to delete.")
+        return
+
+    print(f"Will delete {len(to_delete)} run(s) in {output_dir}:")
+    for p in sorted(to_delete):
+        print(f"  {p.name}")
+
+    if not args.yes:
+        answer = input("\nProceed? [y/N] ").strip().lower()
+        if answer != "y":
+            print("Aborted.")
+            return
+
+    for p in to_delete:
+        if p.is_dir():
+            shutil.rmtree(p)
+        else:
+            p.unlink()
+
+    print(f"Deleted {len(to_delete)} run(s).")
+
+
 def _cmd_compare(args):
     rows = []
     for d in args.run_dirs:
@@ -98,6 +132,11 @@ def main(argv=None):
     c = sub.add_parser("compare", help="compare multiple runs")
     c.add_argument("run_dirs", nargs="+")
     c.set_defaults(func=_cmd_compare)
+
+    cl = sub.add_parser("clean", help="delete all run directories, keeping the cache")
+    cl.add_argument("--output-dir", default="runs", help="runs directory (default: runs)")
+    cl.add_argument("--yes", "-y", action="store_true", help="skip confirmation prompt")
+    cl.set_defaults(func=_cmd_clean)
 
     args = ap.parse_args(argv)
     args.func(args)
