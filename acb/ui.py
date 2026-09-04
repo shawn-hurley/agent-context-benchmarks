@@ -118,6 +118,14 @@ class ProgressTracker:
         self.console = Console()
         self.use_unicode = self._detect_unicode_support()
         
+        # Pre-create the layout structure to avoid recreating it on every render
+        # This prevents the display from showing temporary empty overlays during state transitions
+        self.layout = Layout()
+        self.layout.split_column(
+            Layout(name="header", size=8),
+            Layout(name="table"),
+        )
+        
         log_debug(f"ProgressTracker initialized: {total_instances} instances, "
                   f"harnesses={harness_names}, unicode={self.use_unicode}")
 
@@ -536,14 +544,25 @@ class ProgressTracker:
         return Panel("\n".join(header_lines), title="[bold]Overview[/]", style="bold")
 
     def render(self) -> Layout:
-        """Generate Rich Layout for Live display."""
-        # Note: _build_header and _build_table handle their own locking
-        layout = Layout()
-        layout.split_column(
-            Layout(self._build_header(), name="header", size=8),
-            Layout(self._build_table(), name="table"),
-        )
-        return layout
+        """Generate Rich Layout for Live display.
+        
+        Updates the pre-created layout with current header and table contents
+        in a single atomic operation to avoid partial rendering during updates.
+        This prevents the display from showing blank/incomplete state during
+        concurrent instance transitions (e.g., when one harness finishes and
+        another starts).
+        """
+        # Build both components first (each has its own internal locking)
+        header_panel = self._build_header()
+        table_content = self._build_table()
+        
+        # Then update both atomically within a lock to prevent Rich from rendering
+        # a half-updated layout where header is updated but table isn't yet
+        with self._lock:
+            self.layout["header"].update(header_panel)
+            self.layout["table"].update(table_content)
+        
+        return self.layout
 
     def summary(self) -> str:
         """Generate final summary text."""
