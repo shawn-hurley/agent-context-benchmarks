@@ -34,6 +34,17 @@ from rich.text import Text
 from acb.logging_config import log_debug, log_error
 
 
+def _log_terminal_state(console: Console, label: str):
+    """Log current terminal state for debugging display issues."""
+    if os.environ.get("ACB_DEBUG_UI"):
+        log_debug(f"[TERMINAL {label}] "
+                  f"is_terminal={console.is_terminal}, "
+                  f"width={console.width}, "
+                  f"height={console.height}, "
+                  f"stdout_isatty={sys.stdout.isatty()}, "
+                  f"stderr_isatty={sys.stderr.isatty()}")
+
+
 class InstanceStatus(Enum):
     """Status of a single instance."""
     QUEUED = "queued"
@@ -184,9 +195,11 @@ class ProgressTracker:
             if pod_name:
                 inst.pod_name = pod_name
             
-            if os.environ.get("ACB_DEBUG_UI"):
-                pod_info = f" pod={pod_name}" if pod_name else ""
-                log_debug(f"start_instance({tracker_key}){pod_info} - now RUNNING")
+            # Always log state transitions in debug mode for diagnostics
+            pod_info = f" pod={pod_name}" if pod_name else ""
+            running_count = sum(1 for i in self.instances.values() if i.status == InstanceStatus.RUNNING)
+            log_debug(f"start_instance({tracker_key}){pod_info} - now RUNNING "
+                      f"(total_running={running_count})")
 
     def update_activity(
         self, tracker_key: str, activity: str, tokens: int | None = None
@@ -295,9 +308,15 @@ class ProgressTracker:
                 inst.status = InstanceStatus.VERIFIED_PASS if resolved else InstanceStatus.VERIFIED_FAIL
                 inst.last_activity = "verified: pass" if resolved else "verified: fail"
             
-            if os.environ.get("ACB_DEBUG_UI"):
-                status = "PASS" if resolved and not error else ("FAIL" if not error else "ERROR")
-                log_debug(f"complete_verification({tracker_key}) - {status}")
+            # Always log state transitions in debug mode for diagnostics
+            status = "PASS" if resolved and not error else ("FAIL" if not error else "ERROR")
+            completed_count = sum(1 for i in self.instances.values() if i.status in (
+                InstanceStatus.GENERATED, InstanceStatus.VERIFYING,
+                InstanceStatus.VERIFIED_PASS, InstanceStatus.VERIFIED_FAIL, InstanceStatus.FAILED
+            ))
+            running_count = sum(1 for i in self.instances.values() if i.status == InstanceStatus.RUNNING)
+            log_debug(f"complete_verification({tracker_key}) - {status} "
+                      f"(total_completed={completed_count}, total_running={running_count})")
 
     def record_pipeline_error(self, tracker_key: str, error: str) -> None:
         """Record a pipeline error that occurred during Live display.
@@ -382,7 +401,21 @@ class ProgressTracker:
             recent_completed = completed_sorted[-5:]
             
             # Return running first, then recent completions
-            return running + recent_completed
+            result = running + recent_completed
+            
+            # DIAGNOSTIC: Log when we have no visible instances
+            if not result:
+                log_error(f"[DIAGNOSTIC] No visible instances! "
+                          f"running_count={len(running)}, "
+                          f"completed_count={len(completed)}, "
+                          f"total_instances={len(self.instances)}, "
+                          f"statuses={[(k, i.status.value) for k, i in self.instances.items()]}")
+            else:
+                if os.environ.get("ACB_DEBUG_UI"):
+                    log_debug(f"[DIAGNOSTIC] Visible instances: {len(result)} "
+                              f"(running={len(running)}, recent_completed={len(recent_completed)})")
+            
+            return result
 
     def _build_table(self) -> Table:
         """Build the instance status table."""
@@ -553,14 +586,39 @@ class ProgressTracker:
         another starts).
         """
         # Build both components first (each has its own internal locking)
-        header_panel = self._build_header()
-        table_content = self._build_table()
+        try:
+            header_panel = self._build_header()
+            if os.environ.get("ACB_DEBUG_UI"):
+                log_debug(f"[DIAGNOSTIC] Built header panel: {type(header_panel).__name__}")
+        except Exception as e:
+            log_error(f"[DIAGNOSTIC] Header build failed: {e}")
+            import traceback
+            log_debug(f"[DIAGNOSTIC] Header traceback:\n{traceback.format_exc()}")
+            raise
+        
+        try:
+            table_content = self._build_table()
+            if os.environ.get("ACB_DEBUG_UI"):
+                # Count rows in table to verify it has content
+                row_count = len(table_content.rows) if hasattr(table_content, 'rows') else 'unknown'
+                log_debug(f"[DIAGNOSTIC] Built table: {type(table_content).__name__}, rows={row_count}")
+        except Exception as e:
+            log_error(f"[DIAGNOSTIC] Table build failed: {e}")
+            import traceback
+            log_debug(f"[DIAGNOSTIC] Table traceback:\n{traceback.format_exc()}")
+            raise
         
         # Then update both atomically within a lock to prevent Rich from rendering
         # a half-updated layout where header is updated but table isn't yet
         with self._lock:
-            self.layout["header"].update(header_panel)
-            self.layout["table"].update(table_content)
+            try:
+                self.layout["header"].update(header_panel)
+                self.layout["table"].update(table_content)
+                if os.environ.get("ACB_DEBUG_UI"):
+                    log_debug(f"[DIAGNOSTIC] Layout atomically updated")
+            except Exception as e:
+                log_error(f"[DIAGNOSTIC] Layout update failed: {e}")
+                raise
         
         return self.layout
 
@@ -737,6 +795,16 @@ class LiveTrackerDisplay:
             )
         
         # Now yield the built layout
+        if os.environ.get("ACB_DEBUG_UI"):
+            # Check if layout has actual content
+            try:
+                has_header = bool(layout["header"])
+                has_table = bool(layout["table"])
+                log_debug(f"[DIAGNOSTIC] Yielding layout: {type(layout).__name__}, "
+                          f"has_header={has_header}, has_table={has_table}")
+            except Exception as e:
+                log_debug(f"[DIAGNOSTIC] Could not inspect layout: {e}")
+        
         yield layout
 
 

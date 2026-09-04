@@ -35,7 +35,7 @@ from acb.logging_config import setup_acb_logger, log_debug
 from acb.proxy import ProxyTags
 from acb.proxy.praxis import PraxisContainerBackend
 from acb.report import aggregate_per_instance_files, build_report
-from acb.ui import ProgressTracker, setup_interrupt_handler, LiveTrackerDisplay
+from acb.ui import ProgressTracker, setup_interrupt_handler, LiveTrackerDisplay, _log_terminal_state
 from acb.usage import InstanceMetrics, read_records
 from acb.utils import normalize_instance_id_for_path
 
@@ -295,6 +295,8 @@ def _run_instance_pipeline(
             instance, pod_name, build_dir, arch,
         )
         harness.setup_container(testbed_container, arch, cache_dir)
+        harness.setup_skills(testbed_container, arch, cache_dir)
+        harness.setup_mcp_servers(testbed_container, arch, cache_dir)
         
         tags = ProxyTags(
             run_id=cfg.run_id, benchmark=cfg.benchmark, harness=harness_name,
@@ -497,6 +499,10 @@ def run(cfg: RunConfig, registries: Registries | None = None, verbose: bool = Fa
     all_results = {}  # (harness_name, instance_id) -> (prediction, resolved)
     harness_reports: dict[str, dict] = {}
     
+    # Before starting the Live display
+    log_debug(f"[DIAGNOSTIC] Pre-Live: {len(work_queue)} work items, tracker has {len(tracker.instances)} instances")
+    _log_terminal_state(tracker.console, "BEFORE_LIVE")
+    
     ex = None
     try:
         ex = ThreadPoolExecutor(max_workers=cfg.max_workers)
@@ -504,15 +510,21 @@ def run(cfg: RunConfig, registries: Registries | None = None, verbose: bool = Fa
         
         display = LiveTrackerDisplay(tracker)
         
-         # Diagnostic logging: record Live display startup
+        # Diagnostic logging: record Live display startup
         log_debug(f"Starting Live display: verbose={verbose}, redirect_stderr={not verbose}")
         
         # In verbose mode, show stderr output live (don't redirect it)
         # In normal mode, redirect stderr to prevent blanking the display
         with Live(display, refresh_per_second=2, console=tracker.console, 
                   redirect_stderr=not verbose) as live:
+            
+            _log_terminal_state(tracker.console, "INSIDE_LIVE_START")
+            log_debug(f"[DIAGNOSTIC] Entered Live context, forcing initial render")
+            
             # Force initial render so display appears immediately with all queued instances
             live.refresh()
+            
+            log_debug(f"[DIAGNOSTIC] Submitting {len(work_queue)} work items to executor")
             
             # Submit all work items
             futures = {}
@@ -527,11 +539,19 @@ def run(cfg: RunConfig, registries: Registries | None = None, verbose: bool = Fa
                 )
                 futures[future] = (harness_name, instance.instance_id)
             
+            log_debug(f"[DIAGNOSTIC] All work submitted ({len(futures)} futures), waiting for completion")
+            
             # Collect results as they complete
+            completed_futures = 0
             for future in as_completed(futures):
                 if tracker.interrupted:
+                    log_debug(f"[DIAGNOSTIC] Interrupt detected, breaking from completion loop")
                     break
                 harness_name, instance_id = futures[future]
+                completed_futures += 1
+                
+                log_debug(f"[DIAGNOSTIC] Future {completed_futures}/{len(futures)} completed: {harness_name}-{instance_id}")
+                
                 try:
                     prediction, resolved = future.result()
                     all_results[(harness_name, instance_id)] = (prediction, resolved)
@@ -541,11 +561,17 @@ def run(cfg: RunConfig, registries: Registries | None = None, verbose: bool = Fa
                     tracker_key = f"{harness_name}-{instance_id}"
                     error_with_type = f"{type(e).__name__}: {str(e)}"
                     tracker.record_pipeline_error(tracker_key, error_with_type)
+                    log_debug(f"[DIAGNOSTIC] Future failed: {tracker_key}: {error_with_type}")
+            
+            log_debug(f"[DIAGNOSTIC] Completed all futures, about to exit Live context")
+            _log_terminal_state(tracker.console, "INSIDE_LIVE_END")
         
         # Diagnostic logging: Live display exited normally
         log_debug("Live display exited normally")
+        _log_terminal_state(tracker.console, "AFTER_LIVE")
     finally:
         if ex:
+            log_debug("[DIAGNOSTIC] Shutting down executor")
             ex.shutdown(wait=True)
     
     # Show final summary to console AND save to file
