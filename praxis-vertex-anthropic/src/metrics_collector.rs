@@ -617,13 +617,14 @@ impl HttpFilter for BenchmarkMetricsFilter {
             if data.can_parse_body {
                 if data.is_streaming {
                     let filtered = Self::process_sse_chunk(chunk, &mut data, end_of_stream);
-                    // Use None (not Some(empty)) when there is no output for this
-                    // chunk.  In HTTP/1.1 chunked encoding, Some(Bytes::new()) is
-                    // the 0-length terminator chunk and would close the stream
-                    // prematurely — causing pi's "stream ended without stop reason"
-                    // and opencode's loop when the partial buffer holds bytes
-                    // mid-event or when vertex_event is the only event in a chunk.
-                    *body = if filtered.is_empty() { None } else { Some(filtered) };
+                    // Always use Some(), even when filtered is empty. Empty bytes indicate we're
+                    // buffering partial events in sse_partial (will be sent in the next chunk) or
+                    // we intentionally stripped vertex_event. Returning None would signal
+                    // end-of-stream to Pingora and close the downstream connection prematurely.
+                    // The HTTP/1.1 chunked transfer encoding terminator (0-length chunk) is sent
+                    // automatically by Pingora when end_of_stream=true, not by us here.
+                    // See: https://tools.ietf.org/html/rfc7230#section-4.1
+                    *body = Some(filtered);
                 } else if end_of_stream {
                     // Non-streaming: attempt JSON parse on the final chunk.
                     // Vertex headers (set in on_response) are the primary token source;
