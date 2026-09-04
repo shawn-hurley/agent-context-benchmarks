@@ -113,11 +113,51 @@ def _run(cmd: list[str], **kwargs) -> subprocess.CompletedProcess:
     kwargs.setdefault("check", True)
     kwargs.setdefault("capture_output", True)
     kwargs.setdefault("text", True)
+    
+    # Prevent TTY detection to avoid terminal control sequences
+    # that interfere with Rich Live display during QUEUED→RUNNING transitions
+    kwargs.setdefault("stdin", subprocess.DEVNULL)
+    env = kwargs.get("env", os.environ.copy())
+    if "TERM" not in env:
+        env["TERM"] = "dumb"
+    kwargs["env"] = env
+    
     try:
-        return subprocess.run(cmd, **kwargs)
+        result = subprocess.run(cmd, **kwargs)
+        
+        # Log container operations for debugging (always enabled)
+        from acb.logging_config import log_debug
+        cmd_str = " ".join(cmd)
+        log_debug(f"[CONTAINER] {cmd_str}")
+        
+        if result.stdout and result.stdout.strip():
+            # Truncate to 1000 chars to keep logs readable
+            stdout_truncated = result.stdout[:1000]
+            if len(result.stdout) > 1000:
+                stdout_truncated += f"... ({len(result.stdout)} total chars)"
+            log_debug(f"[CONTAINER OUT] {stdout_truncated}")
+        
+        if result.stderr and result.stderr.strip():
+            stderr_truncated = result.stderr[:1000]
+            if len(result.stderr) > 1000:
+                stderr_truncated += f"... ({len(result.stderr)} total chars)"
+            log_debug(f"[CONTAINER ERR] {stderr_truncated}")
+        
+        return result
     except subprocess.CalledProcessError as e:
+        # Log the failure with full details
+        from acb.logging_config import log_error
+        cmd_str = " ".join(cmd)
+        log_error(f"[CONTAINER FAIL] {cmd_str}")
+        
+        if e.stdout:
+            log_error(f"[CONTAINER STDOUT] {e.stdout}")
+        if e.stderr:
+            log_error(f"[CONTAINER STDERR] {e.stderr}")
+        
+        # Preserve error details in exception
         raise RuntimeError(
-            f"command failed: {' '.join(cmd)}\n--- stdout ---\n{e.stdout}"
+            f"command failed: {cmd_str}\n--- stdout ---\n{e.stdout}"
             f"\n--- stderr ---\n{e.stderr}"
         ) from e
 
