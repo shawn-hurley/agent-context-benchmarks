@@ -61,6 +61,7 @@ Observed event shapes verified against a real run (pi 0.84.3, --mode json):
 from __future__ import annotations
 
 import json
+import logging
 import shlex
 import tarfile
 import tempfile
@@ -76,6 +77,8 @@ from acb.harnesses.base import HarnessAdapter, HarnessResult
 
 if TYPE_CHECKING:
     from acb.ui import ProgressTracker
+
+logger = logging.getLogger(__name__)
 
 # Pinned for reproducibility.
 DEFAULT_VERSION = "0.84.3"
@@ -373,3 +376,43 @@ class Pi(HarnessAdapter):
                        label=label, timeout=timeout, describe_event=_describe_event,
                        tracker=getattr(self, '_tracker', None),
                        tracker_key=getattr(self, '_tracker_key', None))
+
+    def _write_mcp_config(self, container: str, servers: list[dict]) -> None:
+        """Write MCP server configuration to Pi's config directory.
+
+        Pi reads mcp_servers from PI_CODING_AGENT_DIR/mcp_servers.json.
+        This method generates the config and writes it to the container.
+
+        Args:
+            container: Podman container ID
+            servers: List of MCP server configurations from harnesses.yaml
+        """
+        if not servers:
+            return
+
+        from acb.mcp import MCPServerManager
+
+        mcp_mgr = MCPServerManager()
+        config_data = mcp_mgr.generate_config(servers, "pi")
+
+        # Pi reads from PI_CODING_AGENT_DIR which is /tmp/pi-agent in the container
+        container_agent_dir = _CONTAINER_AGENT_DIR
+        
+        # Ensure config directory exists
+        container_exec_capture(container, ["mkdir", "-p", container_agent_dir])
+
+        # Write config to temp file as JSON
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
+            json.dump(config_data, f, indent=2)
+            tmp_path = Path(f.name)
+
+        try:
+            # Copy config file to container
+            container_cp_in(
+                container, 
+                tmp_path, 
+                f"{container_agent_dir}/mcp_servers.json"
+            )
+            logger.info(f"MCP config written to {container_agent_dir}/mcp_servers.json")
+        finally:
+            tmp_path.unlink(missing_ok=True)

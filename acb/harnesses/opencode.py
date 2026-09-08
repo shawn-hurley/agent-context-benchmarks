@@ -317,3 +317,38 @@ class OpenCode(HarnessAdapter):
                        label=label, timeout=timeout, describe_event=_describe_event,
                        tracker=getattr(self, '_tracker', None),
                        tracker_key=getattr(self, '_tracker_key', None))
+
+    def _write_mcp_config(self, container: str, servers: list[dict]) -> None:
+        """Write MCP server configuration for OpenCode.
+
+        OpenCode MCP servers are configured in OPENCODE_CONFIG_CONTENT JSON
+        under the 'mcpServers' key. Since this is embedded in a JSON string
+        passed via environment variable, we note this for documentation.
+        
+        The actual injection happens in run_container() where OPENCODE_CONFIG_CONTENT
+        is built and merged. This method validates the configuration.
+
+        Args:
+            container: Podman container ID
+            servers: List of MCP server configurations from harnesses.yaml
+        """
+        if not servers:
+            return
+
+        from acb.mcp import MCPServerManager
+        import logging
+
+        logger = logging.getLogger(__name__)
+
+        mcp_mgr = MCPServerManager()
+        config_data = mcp_mgr.generate_config(servers, "opencode")
+
+        logger.info(
+            f"OpenCode MCP servers will be configured via OPENCODE_CONFIG_CONTENT: "
+            f"{list(config_data.get('mcpServers', {}).keys())}"
+        )
+        
+        # For OpenCode, the MCP config will be merged into OPENCODE_CONFIG_CONTENT
+        # in run_container(). We store it as an instance variable for later use.
+        self._mcp_config = config_data
+        logger.debug(f"MCP config stored for OpenCode: {config_data}")

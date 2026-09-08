@@ -43,6 +43,12 @@ _shared:
     search, internet fetch, or any external network tools. All information
     you need is available in the local repository files.
 
+  # Default empty skills list (can be overridden per harness)
+  skills: &default_skills []
+
+  # Default empty MCP servers list (can be overridden per harness)
+  mcp_servers: &default_mcp_servers []
+
 claude-code:
   binary: claude
   timeout: 1800
@@ -57,6 +63,8 @@ claude-code:
   # an optional `max_budget_usd` key here if you want one (see
   # ClaudeCode.run_container()).
   system_prompt: *no_internet_prompt
+  skills: *default_skills
+  mcp_servers: *default_mcp_servers
 
 goose:
   binary: goose
@@ -67,6 +75,8 @@ goose:
   # Passed via goose's own `--system` flag (separate from the per-instance
   # task prompt).
   system_prompt: *no_internet_prompt
+  skills: *default_skills
+  mcp_servers: *default_mcp_servers
 
 opencode:
   binary: opencode
@@ -75,8 +85,12 @@ opencode:
   # rather than a CLI flag -- opencode run has no --append-system-prompt flag
   # (verified against 1.18.22 --help). See opencode.py run_container().
   system_prompt: *no_internet_prompt
+  skills: *default_skills
+  mcp_servers: *default_mcp_servers
 
 pi:
   binary: pi
   timeout: 1800
   system_prompt: *no_internet_prompt
+  skills: *default_skills
+  mcp_servers: *default_mcp_servers

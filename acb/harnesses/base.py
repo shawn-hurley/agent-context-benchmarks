@@ -98,6 +98,96 @@ class HarnessAdapter(ABC):
         """
         return None
 
+    def setup_skills(self, container: str, arch: str, cache_dir: Path) -> None:
+        """Setup skills from harness config.
+
+        Called after setup_container() to install skills (per agentskills.io
+        standard) to harness-specific directories. Skills are optional -- if
+        none are configured, this is a no-op.
+
+        Args:
+            container: Podman container ID
+            arch: Target architecture (arm64 or amd64)
+            cache_dir: Cache directory for downloaded skills
+
+        Raises:
+            RuntimeError: If a required skill fails to install
+        """
+        from acb.skills import SkillInstaller
+
+        skills = self.config.get("skills", [])
+        if not skills:
+            return
+
+        installer = SkillInstaller(cache_dir / "skills")
+        for skill_cfg in skills:
+            result = installer.install_skill(
+                skill_cfg,
+                container,
+                arch,
+                harness_name=self.name,
+                tracker=getattr(self, "_tracker", None),
+                tracker_key=getattr(self, "_tracker_key", None),
+            )
+
+            # Log results
+            for log in result.logs:
+                import logging
+
+                logger = logging.getLogger(__name__)
+                logger.info(f"[{skill_cfg.get('name')}] {log}")
+
+            # Handle failure
+            if not result.success:
+                required = skill_cfg.get("required", True)
+                if required:
+                    raise RuntimeError(
+                        f"Failed to install required skill '{skill_cfg.get('name')}': "
+                        f"{result.error}"
+                    )
+                else:
+                    import logging
+
+                    logger = logging.getLogger(__name__)
+                    logger.warning(
+                        f"Failed to install optional skill '{skill_cfg.get('name')}': "
+                        f"{result.error}"
+                    )
+
+    def setup_mcp_servers(self, container: str, arch: str, cache_dir: Path) -> None:
+        """Setup MCP servers from harness config.
+
+        Called after setup_skills() to configure MCP servers. MCP servers are
+        optional -- if none are configured, this is a no-op.
+
+        Args:
+            container: Podman container ID
+            arch: Target architecture (arm64 or amd64)
+            cache_dir: Cache directory
+
+        Raises:
+            NotImplementedError: If subclass doesn't override _write_mcp_config()
+        """
+        mcp_servers = self.config.get("mcp_servers", [])
+        if not mcp_servers:
+            return
+
+        self._write_mcp_config(container, mcp_servers)
+
+    @abstractmethod
+    def _write_mcp_config(self, container: str, servers: list[dict]) -> None:
+        """Write MCP server configuration to container in harness-specific format.
+
+        Subclasses must implement this to write MCP configs appropriate for the
+        harness. For harnesses that don't support MCP, this can be a no-op.
+
+        Args:
+            container: Podman container ID
+            servers: List of MCP server configurations from harnesses.yaml
+        """
+        # Default: no-op for harnesses without MCP support
+        pass
+
     @abstractmethod
     def run_container(self, prompt: str, container: str, model: str, env: dict[str, str],
                        out_dir: Path, instance_id: str) -> HarnessResult:

@@ -39,9 +39,11 @@ shared plumbing in acb/harnesses/_streaming.py, also used by claude-code):
 
 from __future__ import annotations
 
+import json
 import shlex
 import subprocess
 import tarfile
+import tempfile
 import threading
 import urllib.request
 from pathlib import Path
@@ -308,7 +310,59 @@ class Goose(HarnessAdapter):
                 capture_output=True,
             )
             if tracker and tracker_key:
-                tracker.update_activity(tracker_key, "setup: injected goose config")
+                 tracker.update_activity(tracker_key, "setup: injected goose config")
         except subprocess.CalledProcessError as e:
             if tracker and tracker_key:
                 tracker.update_activity(tracker_key, "setup: goose config injection failed")
+
+    def _write_mcp_config(self, container: str, servers: list[dict]) -> None:
+        """Write MCP server configuration to Goose's config.yaml.
+
+        Goose MCP servers are configured in ~/.config/goose/config.yaml under
+        the 'extensions' section. This method generates the extensions config
+        and writes it to the container.
+
+        Args:
+            container: Podman container ID
+            servers: List of MCP server configurations from harnesses.yaml
+        """
+        if not servers:
+            return
+
+        from acb.mcp import MCPServerManager
+
+        mcp_mgr = MCPServerManager()
+        config_data = mcp_mgr.generate_config(servers, "goose")
+
+        # Ensure config directory exists
+        container_exec_capture(container, ["mkdir", "-p", "/root/.config/goose"])
+
+        # Write config to temp file as YAML
+        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
+            # Import yaml here to avoid hard dependency
+            try:
+                import yaml
+
+                yaml.dump(config_data, f)
+            except ImportError:
+                # Fallback: write as JSON-like YAML
+                f.write("extensions:\n")
+                for ext_name, ext_config in config_data.get("extensions", {}).items():
+                    f.write(f"  {ext_name}:\n")
+                    for key, value in ext_config.items():
+                        if isinstance(value, list):
+                            f.write(f"    {key}:\n")
+                            for item in value:
+                                f.write(f"      - {item}\n")
+                        elif isinstance(value, dict):
+                            f.write(f"    {key}: {value}\n")
+                        else:
+                            f.write(f"    {key}: {value}\n")
+
+            tmp_path = Path(f.name)
+
+        try:
+            # Copy config file to container
+            container_cp_in(container, tmp_path, "/root/.config/goose/config.yaml")
+        finally:
+            tmp_path.unlink(missing_ok=True)

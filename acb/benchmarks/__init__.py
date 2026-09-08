@@ -7,6 +7,7 @@ from acb.benchmarks.swebench import SWEBench
 
 _BENCHMARKS: dict[str, type[Benchmark]] = {
     "swebench": SWEBench,
+    "swebench-lite": SWEBench,  # Same adapter, uses Lite dataset from benchmarks.yaml
     "livecodebench": LiveCodeBench,
     "scarfbench": ScarfBench,
 }
