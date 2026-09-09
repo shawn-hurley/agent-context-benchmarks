@@ -388,25 +388,30 @@ After loading, the skill content will be available in your context with detailed
             finally:
                 tmp_path.unlink(missing_ok=True)
 
-        exec_cmd = ["podman", "exec", "-i", "-t"]
+        exec_cmd = ["podman", "exec", "-i"]  # Removed -t: script provides TTY
         for key, value in env.items():
             exec_cmd += ["-e", f"{key}={value}"]
         # Same conda activation as goose/claude-code: podman exec doesn't
         # source /root/.bashrc, so the testbed conda env must be activated
         # explicitly so opencode's bash tool runs in the right environment.
         #
-        # -t allocates a pseudo-TTY inside the container. opencode (like pi)
-        # is a TUI-first Node.js application that -- even in --format json
-        # mode -- initialises its terminal subsystem at startup. Without a
-        # TTY, it has no /dev/tty to write to, and may exit silently (code 0)
-        # before emitting any JSON. The PTY keeps /dev/tty available so
-        # startup proceeds; --format json then routes all agent events to
-        # stdout (fd 1) as clean JSON lines regardless.
+        # opencode (like pi) is a TUI-first Node.js application that -- even in
+        # --format json mode -- initialises its terminal subsystem at startup and
+        # needs /dev/tty to write to. Without a TTY, it may exit silently (code 0)
+        # before emitting any JSON. We wrap the command in `script -qfc` which:
+        # 1. Provides a pseudo-TTY so opencode has /dev/tty available
+        # 2. Filters TTY control sequences (clear screen, cursor movement) so they
+        #    don't leak to the parent terminal and cause screen blanking
+        # 3. Streams clean JSON output to stdout for _streaming.py to capture
+        # The -q flag suppresses "Script started/done" messages, -f flushes output
+        # immediately, and -c runs the command directly.
         activate = "source /opt/miniconda3/etc/profile.d/conda.sh && conda activate testbed"
         inner = " ".join(shlex.quote(a) for a in opencode_argv)
+        # Wrap inner command with script to provide filtered TTY
+        wrapped = f"script -qfc {shlex.quote(inner)} /dev/null"
         exec_cmd += [
             "--workdir", "/testbed", container,
-            "bash", "-c", f"{activate} && exec {inner}",
+            "bash", "-c", f"{activate} && exec {wrapped}",
         ]
         # out_dir is now the per-instance directory (instances/{test_id}/)
         transcript_path = Path(out_dir) / "transcript.jsonl"

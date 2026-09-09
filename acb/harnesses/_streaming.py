@@ -20,6 +20,7 @@ behavior for goose is unchanged by this move.
 from __future__ import annotations
 
 import json
+import re
 import subprocess
 import threading
 import time
@@ -30,6 +31,25 @@ from acb.harnesses.base import HarnessResult
 
 HEARTBEAT_INTERVAL = 10  # seconds
 ACTIVITY_TEXT_TAIL = 160  # chars of rolling assistant-text preview to keep
+
+# ANSI/VT100 escape sequence pattern for filtering TTY control codes
+# Matches:
+# - CSI sequences: ESC[ ... letter (cursor movement, colors, clear screen, etc.)
+# - OSC sequences: ESC] ... (BEL|ESC\) (terminal title, hyperlinks, etc.)
+# - Simple escapes: ESC letter or ESC special char
+# These sequences leak from podman exec -t pseudo-TTYs and can clear the
+# parent terminal display. Filtering them here (as a safety net) prevents
+# screen blanking while preserving the actual JSON event content from harnesses.
+# Primary filtering happens via `script -qfc` wrapper in Pi/OpenCode harnesses.
+ANSI_ESCAPE_PATTERN = re.compile(
+    rb'(?:'
+    rb'\x1b\[[0-9;?]*[A-HJKSTfhilmnsu]|'  # CSI: ESC[ params letter
+    rb'\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)|'  # OSC: ESC] ... (BEL|ESC\)
+    rb'\x1b[=>]|'  # Simple: ESC= or ESC>
+    rb'\x1b\([0-9A-B]|'  # Charset: ESC( ...
+    rb'\x1b\)0'  # Charset: ESC)0
+    rb')'
+)
 
 # Given one parsed stream-json event, return (description, is_text_delta).
 # is_text_delta is True when `description` is a fragment of assistant text
@@ -66,14 +86,27 @@ class RunState:
 
 def read_stream(proc: subprocess.Popen, transcript_path: Path,
                  state: RunState, buffer: list[str], describe_event: DescribeEvent) -> None:
-    """Tail the harness's stdout: persist every line, update `state` live."""
+    """Tail the harness's stdout: persist every line, update `state` live.
+    
+    Filters ANSI/VT100 escape sequences from each line before processing to
+    prevent TTY control codes (clear screen, cursor movement) from leaking to
+    the parent terminal. This provides a safety net when harnesses run with
+    pseudo-TTY allocation (podman exec -t or script -qfc wrapper).
+    """
     transcript_path.parent.mkdir(parents=True, exist_ok=True)
     with transcript_path.open("w", encoding="utf-8") as tf:
         for line in proc.stdout:  # type: ignore[union-attr]
-            buffer.append(line)
-            tf.write(line)
+            # Strip ANSI escape sequences before buffering or persisting
+            # This prevents screen blanking from harness TTY control codes
+            # Note: line is str (from text=True), encode then decode after filtering
+            line_bytes = line.encode('utf-8', errors='replace')
+            clean_bytes = ANSI_ESCAPE_PATTERN.sub(b'', line_bytes)
+            clean_line = clean_bytes.decode('utf-8', errors='replace')
+            
+            buffer.append(clean_line)
+            tf.write(clean_line)
             tf.flush()
-            stripped = line.strip()
+            stripped = clean_line.strip()
             if not stripped:
                 continue
             try:

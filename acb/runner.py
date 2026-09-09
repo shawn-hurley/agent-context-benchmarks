@@ -21,6 +21,7 @@ import logging
 import os
 import platform as _platform
 import re
+import threading
 import traceback
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
@@ -513,10 +514,43 @@ def run(cfg: RunConfig, registries: Registries | None = None, verbose: bool = Fa
         # Diagnostic logging: record Live display startup
         log_debug(f"Starting Live display: verbose={verbose}, redirect_stderr={not verbose}")
         
+        # Setup background refresh thread to keep display responsive
+        # This refreshes the display periodically even when no futures complete
+        refresh_interval = 0.5  # 2 Hz refresh rate
+        refresh_stop = threading.Event()
+        
+        def refresh_loop(live_display, stop_event, interval):
+            """Background thread to refresh display periodically.
+            
+            Args:
+                live_display: Rich Live display instance to refresh
+                stop_event: Threading event to signal thread shutdown
+                interval: Refresh interval in seconds (time between refreshes)
+            """
+            while not stop_event.is_set():
+                try:
+                    live_display.refresh()
+                except Exception as e:
+                    log_debug(f"[REFRESH_ERROR] Background refresh failed: {e}")
+                stop_event.wait(interval)
+        
         # In verbose mode, show stderr output live (don't redirect it)
-        # In normal mode, redirect stderr to prevent blanking the display
-        with Live(display, refresh_per_second=2, console=tracker.console, 
+         # In normal mode, redirect stderr to prevent blanking the display
+         # Disable auto_refresh to prevent race condition: render() creates new Layout
+         # each time, and we manually refresh at controlled points (after instance completions
+         # and periodically via background thread)
+        with Live(display, auto_refresh=False, refresh_per_second=2, console=tracker.console, 
                   redirect_stderr=not verbose) as live:
+            
+            # Start background refresh thread with explicit dependencies
+            refresh_thread = threading.Thread(
+                target=refresh_loop,
+                args=(live, refresh_stop, refresh_interval),
+                daemon=True,
+                name="acb-display-refresh"
+            )
+            refresh_thread.start()
+            log_debug(f"[DIAGNOSTIC] Started background refresh thread")
             
             _log_terminal_state(tracker.console, "INSIDE_LIVE_START")
             log_debug(f"[DIAGNOSTIC] Entered Live context, forcing initial render")
@@ -562,6 +596,13 @@ def run(cfg: RunConfig, registries: Registries | None = None, verbose: bool = Fa
                     error_with_type = f"{type(e).__name__}: {str(e)}"
                     tracker.record_pipeline_error(tracker_key, error_with_type)
                     log_debug(f"[DIAGNOSTIC] Future failed: {tracker_key}: {error_with_type}")
+                
+                # Refresh display after each future completes (success or error)
+                # This ensures the display updates promptly with new status
+                try:
+                    live.refresh()
+                except Exception as e:
+                    log_debug(f"[REFRESH_ERROR] Failed to refresh display: {e}")
             
             log_debug(f"[DIAGNOSTIC] Completed all futures, about to exit Live context")
             _log_terminal_state(tracker.console, "INSIDE_LIVE_END")
@@ -570,6 +611,18 @@ def run(cfg: RunConfig, registries: Registries | None = None, verbose: bool = Fa
         log_debug("Live display exited normally")
         _log_terminal_state(tracker.console, "AFTER_LIVE")
     finally:
+        # Stop background refresh thread
+        if 'refresh_stop' in locals():
+            log_debug("[DIAGNOSTIC] Stopping background refresh thread")
+            refresh_stop.set()
+            if 'refresh_thread' in locals():
+                try:
+                    refresh_thread.join(timeout=1.0)
+                    if refresh_thread.is_alive():
+                        log_debug("[DIAGNOSTIC] Warning: Refresh thread still alive after timeout")
+                except Exception as e:
+                    log_debug(f"[DIAGNOSTIC] Error stopping refresh thread: {e}")
+        
         if ex:
             log_debug("[DIAGNOSTIC] Shutting down executor")
             ex.shutdown(wait=True)

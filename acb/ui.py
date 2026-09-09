@@ -144,7 +144,7 @@ class ProgressTracker:
         self.completion_order: list[str] = []  # For "Recent" display
         self.interrupted = False
         self.start_time = time.monotonic()
-        self._lock = threading.Lock()  # Thread safety for concurrent updates
+        self._lock = threading.RLock()  # Reentrant lock: allows same thread to acquire multiple times
         
         # Track errors that occur during Live display (will be shown in summary)
         self.accumulated_errors: list[tuple[str, str]] = []  # List of (tracker_key, error_msg)
@@ -154,14 +154,6 @@ class ProgressTracker:
         
         # Cache last valid table to handle race conditions
         self._last_valid_table = None
-        
-        # Pre-create the layout structure to avoid recreating it on every render
-        # This prevents the display from showing temporary empty overlays during state transitions
-        self.layout = Layout()
-        self.layout.split_column(
-            Layout(name="header", size=8),
-            Layout(name="table"),
-        )
         
         log_debug(f"ProgressTracker initialized: {total_instances} instances, "
                   f"harnesses={harness_names}, unicode={self.use_unicode}")
@@ -619,56 +611,68 @@ class ProgressTracker:
     def render(self) -> Layout:
         """Generate Rich Layout for Live display.
         
-        Updates the pre-created layout with current header and table contents
-        in a single atomic operation to avoid partial rendering during updates.
-        This prevents the display from showing blank/incomplete state during
-        concurrent instance transitions (e.g., when one harness finishes and
-        another starts).
+        Creates a fresh Layout on each call to ensure thread-safety.
+        No shared Layout state between renders eliminates race conditions
+        between worker threads updating state and Rich's renderer reading the layout.
+        
+        The entire render operation is atomic within the lock:
+        - Build header (reads instances)
+        - Build table (reads instances)
+        - Create new Layout
+        - Populate layout with components
+        - Return layout
+        
+        Since we use RLock, nested lock acquisitions in _build_header() and
+        _build_table() will succeed.
         """
-                # PRE-CHECK: Verify console is in valid state before attempting render
+        # PRE-CHECK: Verify console is in valid state before attempting render
         visibility = _check_console_visibility(self.console)
         if os.environ.get("ACB_DEBUG_UI"):
             log_debug(f"[VISIBILITY] is_terminal={visibility['is_terminal']}, width={visibility['width']}, height={visibility['height']}")
         if not visibility['is_terminal'] or visibility['width'] == 0 or visibility['height'] == 0:
             log_debug(f"[VISIBILITY_SKIP] Skipping render - terminal invalid: {visibility}")
-            return self.layout
+            # Return minimal layout for invalid terminal
+            layout = Layout()
+            layout.split_column(Layout(name="header", size=8), Layout(name="table"))
+            return layout
         
-        # Build both components first (each has its own internal locking)
-        try:
-            header_panel = self._build_header()
-            if os.environ.get("ACB_DEBUG_UI"):
-                log_debug(f"[DIAGNOSTIC] Built header panel: {type(header_panel).__name__}")
-        except Exception as e:
-            log_error(f"[DIAGNOSTIC] Header build failed: {e}")
-            import traceback
-            log_debug(f"[DIAGNOSTIC] Header traceback:\n{traceback.format_exc()}")
-            raise
-        
-        try:
-            table_content = self._build_table()
-            if os.environ.get("ACB_DEBUG_UI"):
-                # Count rows in table to verify it has content
-                row_count = len(table_content.rows) if hasattr(table_content, 'rows') else 'unknown'
-                log_debug(f"[DIAGNOSTIC] Built table: {type(table_content).__name__}, rows={row_count}")
-        except Exception as e:
-            log_error(f"[DIAGNOSTIC] Table build failed: {e}")
-            import traceback
-            log_debug(f"[DIAGNOSTIC] Table traceback:\n{traceback.format_exc()}")
-            raise
-        
-        # Then update both atomically within a lock to prevent Rich from rendering
-        # a half-updated layout where header is updated but table isn't yet
+        # Build all components and create layout atomically within lock
+        # This ensures no worker threads modify state while we're reading it
         with self._lock:
             try:
-                self.layout["header"].update(header_panel)
-                self.layout["table"].update(table_content)
+                # Build components (reads instances dictionary)
+                header_panel = self._build_header()
+                table_content = self._build_table()
+                
                 if os.environ.get("ACB_DEBUG_UI"):
-                    log_debug(f"[DIAGNOSTIC] Layout atomically updated")
+                    log_debug(f"[DIAGNOSTIC] Built header panel: {type(header_panel).__name__}")
+                    row_count = len(table_content.rows) if hasattr(table_content, 'rows') else 'unknown'
+                    log_debug(f"[DIAGNOSTIC] Built table: {type(table_content).__name__}, rows={row_count}")
+                
+                # Create fresh layout (no shared state with previous renders)
+                layout = Layout()
+                layout.split_column(
+                    Layout(name="header", size=8),
+                    Layout(name="table"),
+                )
+                
+                # Populate the layout
+                layout["header"].update(header_panel)
+                layout["table"].update(table_content)
+                
+                if os.environ.get("ACB_DEBUG_UI"):
+                    log_debug(f"[DIAGNOSTIC] Created and populated new layout")
+                
+                return layout
+                
             except Exception as e:
-                log_error(f"[DIAGNOSTIC] Layout update failed: {e}")
-                raise
-        
-        return self.layout
+                log_error(f"[DIAGNOSTIC] Layout render failed: {e}")
+                import traceback
+                log_debug(f"[DIAGNOSTIC] Render traceback:\n{traceback.format_exc()}")
+                # Return minimal layout on error
+                layout = Layout()
+                layout.split_column(Layout(name="header", size=8), Layout(name="table"))
+                return layout
 
     def summary(self) -> str:
         """Generate final summary text."""
