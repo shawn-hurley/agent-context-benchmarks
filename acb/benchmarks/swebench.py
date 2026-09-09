@@ -16,6 +16,7 @@ import json
 import os
 import subprocess
 import threading
+from fnmatch import fnmatch
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -109,6 +110,17 @@ def _tail_file(
 class SWEBench(Benchmark):
     name = "swebench"
 
+    def __init__(self, config: dict | None = None):
+        """Initialize SWEBench adapter.
+        
+        Args:
+            config: Configuration dict, optionally containing patch_exclude_patterns
+                   (list of glob patterns for files to exclude from model_patch).
+        """
+        super().__init__(config)
+        # Extract patch exclusion patterns from config (default: empty list = no filtering)
+        self.patch_exclude_patterns = self.config.get("patch_exclude_patterns", [])
+
     def load_instances(self, subset=None, limit=None) -> list[Instance]:
         from datasets import load_dataset
 
@@ -193,6 +205,41 @@ class SWEBench(Benchmark):
         )
         return container_name
 
+    def _filter_excluded_paths(self, paths: list[str]) -> list[str]:
+        """Filter out paths matching configured exclusion patterns.
+        
+        Uses fnmatch for glob-style pattern matching (* and ? wildcards).
+        Supports both direct file matches and directory patterns (e.g., .rgctl/**).
+        
+        Args:
+            paths: List of file paths relative to /testbed
+            
+        Returns:
+            Filtered list with excluded patterns removed
+        """
+        if not self.patch_exclude_patterns:
+            return paths
+        
+        filtered = []
+        for path in paths:
+            excluded = False
+            for pattern in self.patch_exclude_patterns:
+                # Handle directory-recursive patterns (e.g., .rgctl/**)
+                if pattern.endswith('/**'):
+                    dir_prefix = pattern[:-3]  # Remove '/**'
+                    if path == dir_prefix or path.startswith(dir_prefix + '/'):
+                        excluded = True
+                        break
+                # Standard glob pattern matching
+                elif fnmatch(path, pattern):
+                    excluded = True
+                    break
+            
+            if not excluded:
+                filtered.append(path)
+        
+        return filtered
+
     def collect_prediction_container(self, instance: Instance, container: str, model: str) -> Prediction:
         container_exec_capture(container, ["git", "-C", "/testbed", "add", "-u"])
 
@@ -204,6 +251,11 @@ class SWEBench(Benchmark):
             container, ["git", "-C", "/testbed", "ls-files", "--others", "--exclude-standard"],
         )
         new_untracked = [p for p in current_out.splitlines() if p and p not in baseline]
+        
+        # Filter out configured exclusion patterns (e.g., agent skill artifacts).
+        # This prevents files like .goosehints and .rgctl/ from being included in model_patch.
+        new_untracked = self._filter_excluded_paths(new_untracked)
+        
         # One `git add -- <all paths>` at once means a single bad path takes
         # the whole prediction down with it -- verified: a model-generated
         # file with a garbled name (`test_edge_cases_final.py\n</ ...`, from

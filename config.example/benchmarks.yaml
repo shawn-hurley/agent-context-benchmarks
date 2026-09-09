@@ -18,6 +18,25 @@ swebench:
   # namespace: ""                # set "" to build images locally (e.g. arm64
   #                              # Macs where prebuilt x86_64 images are absent)
 
+  # --- Patch exclusion patterns ---
+  # Glob patterns for untracked files to exclude from model_patch. These are
+  # files created by agent skills/tools during execution that should NOT be
+  # included in the final solution patch sent for evaluation.
+  # 
+  # Supports fnmatch-style glob patterns: *, ?, [seq], [!seq]
+  # For recursive directory matching, use /** (e.g., .rgctl/**)
+  #
+  # Leave empty or omit to include all untracked files (default behavior).
+  patch_exclude_patterns:
+    - .goosehints              # Goose skill instructions
+    - .rgctl                   # rgctl cache/index directory
+    - .rgctl/**                # All files within .rgctl/
+    - .aider*                  # Aider tool artifacts
+    - .cursor*                 # Cursor IDE artifacts
+    - "*.swp"                  # Vim swap files
+    - "*.swo"                  # Vim backup files
+    - .DS_Store                # macOS metadata
+
   # --- Container-mode generation (the only mode -- see acb/runner.py) ----
   # The harness runs *inside* the same SWE-bench eval image evaluation will
   # grade the patch in (built on demand from the task repo -- see
@@ -47,6 +66,17 @@ swebench-lite:
   container_backend: auto
   image_arch: auto
   task_repo: SWE-bench/swe-bench-tasks
+
+  # Patch exclusion patterns - same as swebench (see above for details).
+  patch_exclude_patterns:
+    - .goosehints
+    - .rgctl
+    - .rgctl/**
+    - .aider*
+    - .cursor*
+    - "*.swp"
+    - "*.swo"
+    - .DS_Store
 
 livecodebench:
   # Stub - benchmark adapter not yet implemented (see acb/benchmarks/stubs.py)

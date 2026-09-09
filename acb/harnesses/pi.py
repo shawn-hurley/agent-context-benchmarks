@@ -300,39 +300,6 @@ class Pi(HarnessAdapter):
         container_exec_capture(container, [
             "ln", "-sf", _CONTAINER_BINARY, "/usr/local/bin/pi",
         ])
-        
-        # Inject skill hints if skills are configured
-        skills = self.config.get("skills", [])
-        if skills:
-            self._inject_skill_hints(container, skills)
-
-    def _inject_skill_hints(self, container: str, skills: list[dict]) -> None:
-        """Inject skill hints into .pi/AGENTS.md to prompt skill usage.
-        
-        Args:
-            container: Podman container ID
-            skills: List of skill configurations from harness config
-        """
-        if not skills:
-            return
-            
-        try:
-            hints_content = _generate_skill_hints_pi(skills)
-            
-            with tempfile.NamedTemporaryFile(mode='w', suffix='.md', delete=False) as f:
-                f.write(hints_content)
-                hints_file = f.name
-            
-            try:
-                # Create .pi directory in /testbed
-                container_exec_capture(container, ["mkdir", "-p", "/testbed/.pi"])
-                # Copy hints file to container
-                container_cp_in(container, hints_file, "/testbed/.pi/AGENTS.md")
-                logger.info(f"Injected Pi skill hints with {len(skills)} skill(s)")
-            finally:
-                os.unlink(hints_file)
-        except Exception as e:
-            logger.warning(f"Failed to inject Pi skill hints: {e}")
 
     def build_container_env(self, base_url: str, api_key: str) -> dict[str, str]:
         """Stash base_url for run_container() and return the env vars.
@@ -442,9 +409,23 @@ class Pi(HarnessAdapter):
             "--",                   # stop option parsing
             prompt,
         ]
-        if system_prompt := self.config.get("system_prompt"):
+        # Build combined prompt: system_prompt + skill hints
+        combined_prompt = ""
+        system_prompt = self.config.get("system_prompt", "")
+        skills = self.config.get("skills", [])
+
+        if system_prompt:
+            combined_prompt += system_prompt
+
+        if skills:
+            if combined_prompt:  # Add separator if we have system_prompt
+                combined_prompt += "\n\n---\n\n"
+            combined_prompt += _generate_skill_hints_pi(skills)
+
+        # Append combined prompt via CLI flag
+        if combined_prompt:
             pi_argv = (pi_argv[:pi_argv.index("--")] +
-                       ["--append-system-prompt", system_prompt] +
+                       ["--append-system-prompt", combined_prompt] +
                        pi_argv[pi_argv.index("--"):])
 
         exec_cmd = ["podman", "exec", "-i"]  # Removed -t: script provides TTY

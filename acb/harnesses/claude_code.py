@@ -361,41 +361,6 @@ class ClaudeCode(HarnessAdapter):
         )
         container_cp_in(container, binary, "/usr/local/bin/claude")
         container_exec_capture(container, ["chmod", "+x", "/usr/local/bin/claude"])
-        
-        # Inject skill hints if skills are configured
-        skills = self.config.get("skills", [])
-        if skills:
-            self._inject_skill_hints(container, skills)
-
-    def _inject_skill_hints(self, container: str, skills: list[dict]) -> None:
-        """Inject skill hints into .claude/CLAUDE.md to prompt skill usage.
-        
-        Args:
-            container: Podman container ID
-            skills: List of skill configurations from harness config
-        """
-        if not skills:
-            return
-            
-        try:
-            hints_content = _generate_skill_hints_claude_code(skills)
-            
-            with tempfile.NamedTemporaryFile(mode='w', suffix='.md', delete=False) as f:
-                f.write(hints_content)
-                hints_file = f.name
-            
-            try:
-                # Create .claude directory in /testbed
-                container_exec_capture(container, ["mkdir", "-p", "/testbed/.claude"])
-                # Copy hints file to container
-                container_cp_in(container, hints_file, "/testbed/.claude/CLAUDE.md")
-                logger = logging.getLogger(__name__)
-                logger.info(f"Injected Claude-Code skill hints with {len(skills)} skill(s)")
-            finally:
-                os.unlink(hints_file)
-        except Exception as e:
-            logger = logging.getLogger(__name__)
-            logger.warning(f"Failed to inject Claude-Code skill hints: {e}")
 
     def run_container(self, prompt: str, container: str, model: str, env: dict[str, str],
                        out_dir: Path, instance_id: str,
@@ -437,8 +402,22 @@ class ClaudeCode(HarnessAdapter):
             "--allowedTools", "Bash,Edit,Read",
             "--no-session-persistence",
         ]
-        if system_prompt := self.config.get("system_prompt"):
-            claude_argv += ["--append-system-prompt", system_prompt]
+        # Build combined prompt: system_prompt + skill hints
+        combined_prompt = ""
+        system_prompt = self.config.get("system_prompt", "")
+        skills = self.config.get("skills", [])
+
+        if system_prompt:
+            combined_prompt += system_prompt
+
+        if skills:
+            if combined_prompt:  # Add separator if we have system_prompt
+                combined_prompt += "\n\n---\n\n"
+            combined_prompt += _generate_skill_hints_claude_code(skills)
+
+        # Append combined prompt via CLI flag
+        if combined_prompt:
+            claude_argv += ["--append-system-prompt", combined_prompt]
         if max_budget := self.config.get("max_budget_usd"):
             claude_argv += ["--max-budget-usd", str(max_budget)]
 

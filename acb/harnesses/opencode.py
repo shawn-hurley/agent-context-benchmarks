@@ -185,41 +185,6 @@ class OpenCode(HarnessAdapter):
         )
         container_cp_in(container, binary, "/usr/local/bin/opencode")
         container_exec_capture(container, ["chmod", "+x", "/usr/local/bin/opencode"])
-        
-        # Inject skill hints if skills are configured
-        skills = self.config.get("skills", [])
-        if skills:
-            self._inject_skill_hints(container, skills)
-
-    def _inject_skill_hints(self, container: str, skills: list[dict]) -> None:
-        """Inject skill hints into .opencode/AGENTS.md to prompt skill usage.
-        
-        Args:
-            container: Podman container ID
-            skills: List of skill configurations from harness config
-        """
-        if not skills:
-            return
-            
-        try:
-            hints_content = self._generate_skill_hints(skills)
-            
-            with tempfile.NamedTemporaryFile(mode='w', suffix='.md', delete=False) as f:
-                f.write(hints_content)
-                hints_file = f.name
-            
-            try:
-                # Create .opencode directory in /testbed
-                container_exec_capture(container, ["mkdir", "-p", "/testbed/.opencode"])
-                # Copy hints file to container
-                container_cp_in(container, hints_file, "/testbed/.opencode/AGENTS.md")
-                logger = logging.getLogger(__name__)
-                logger.info(f"Injected OpenCode skill hints with {len(skills)} skill(s)")
-            finally:
-                os.unlink(hints_file)
-        except Exception as e:
-            logger = logging.getLogger(__name__)
-            logger.warning(f"Failed to inject OpenCode skill hints: {e}")
 
     def _generate_skill_hints(self, skills: list[dict]) -> str:
         """Generate generic skill usage hints for OpenCode.
@@ -377,10 +342,24 @@ After loading, the skill content will be available in your context with detailed
         # opencode.ai/docs/rules -- "Global" type, takes precedence over
         # project-local AGENTS.md). Writing it here, just before exec, mirrors
         # the pattern goose uses for its container config injection.
-        if system_prompt := self.config.get("system_prompt"):
+        # Build combined content: system_prompt + skill hints
+        combined_content = ""
+        system_prompt = self.config.get("system_prompt", "")
+        skills = self.config.get("skills", [])
+
+        if system_prompt:
+            combined_content += system_prompt
+
+        if skills:
+            if combined_content:  # Add separator if we have system_prompt
+                combined_content += "\n\n---\n\n"
+            combined_content += self._generate_skill_hints(skills)
+
+        # Write combined content to global AGENTS.md
+        if combined_content:
             container_exec_capture(container, ["mkdir", "-p", "/root/.config/opencode"])
             with tempfile.NamedTemporaryFile(mode="w", suffix=".md", delete=False) as f:
-                f.write(system_prompt)
+                f.write(combined_content)
                 tmp_path = Path(f.name)
             try:
                 container_cp_in(container, tmp_path,
