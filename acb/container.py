@@ -109,7 +109,7 @@ def container_env(config: dict | None = None) -> dict[str, str]:
 # ---------------------------------------------------------------------------
 
 
-def _run(cmd: list[str], **kwargs) -> subprocess.CompletedProcess:
+def _run(cmd: list[str], log_output: bool = True, **kwargs) -> subprocess.CompletedProcess:
     kwargs.setdefault("check", True)
     kwargs.setdefault("capture_output", True)
     kwargs.setdefault("text", True)
@@ -117,9 +117,18 @@ def _run(cmd: list[str], **kwargs) -> subprocess.CompletedProcess:
     # Prevent TTY detection to avoid terminal control sequences
     # that interfere with Rich Live display during QUEUED→RUNNING transitions
     kwargs.setdefault("stdin", subprocess.DEVNULL)
+    kwargs.setdefault("close_fds", True)  # Close inherited file descriptors to prevent /dev/tty access
     env = kwargs.get("env", os.environ.copy())
     if "TERM" not in env:
         env["TERM"] = "dumb"
+    
+    # Additional environment variables to prevent Podman/Docker from detecting
+    # TTY and showing progress bars or other interactive output that might
+    # bypass stdout/stderr redirection and write directly to /dev/tty
+    env.setdefault("DOCKER_BUILDKIT", "0")
+    env.setdefault("PODMAN_PROGRESS_BAR", "0")
+    env.setdefault("BUILDAH_PROGRESS_BAR", "0")
+    
     kwargs["env"] = env
     
     try:
@@ -130,18 +139,21 @@ def _run(cmd: list[str], **kwargs) -> subprocess.CompletedProcess:
         cmd_str = " ".join(cmd)
         log_debug(f"[CONTAINER] {cmd_str}")
         
-        if result.stdout and result.stdout.strip():
-            # Truncate to 1000 chars to keep logs readable
-            stdout_truncated = result.stdout[:1000]
-            if len(result.stdout) > 1000:
-                stdout_truncated += f"... ({len(result.stdout)} total chars)"
-            log_debug(f"[CONTAINER OUT] {stdout_truncated}")
-        
-        if result.stderr and result.stderr.strip():
-            stderr_truncated = result.stderr[:1000]
-            if len(result.stderr) > 1000:
-                stderr_truncated += f"... ({len(result.stderr)} total chars)"
-            log_debug(f"[CONTAINER ERR] {stderr_truncated}")
+        # Conditionally log stdout/stderr based on log_output parameter
+        # Command is always logged above; this controls output logging only
+        if log_output:
+            if result.stdout and result.stdout.strip():
+                # Truncate to 1000 chars to keep logs readable
+                stdout_truncated = result.stdout[:1000]
+                if len(result.stdout) > 1000:
+                    stdout_truncated += f"... ({len(result.stdout)} total chars)"
+                log_debug(f"[CONTAINER OUT] {stdout_truncated}")
+            
+            if result.stderr and result.stderr.strip():
+                stderr_truncated = result.stderr[:1000]
+                if len(result.stderr) > 1000:
+                    stderr_truncated += f"... ({len(result.stderr)} total chars)"
+                log_debug(f"[CONTAINER ERR] {stderr_truncated}")
         
         return result
     except subprocess.CalledProcessError as e:
@@ -205,15 +217,51 @@ def container_create(
 
 
 def container_cp_in(container: str, host_path, container_path: str) -> None:
-    _run(["podman", "cp", str(host_path), f"{container}:{container_path}"])
+    """Copy file/directory from host into container.
+    
+    Includes diagnostic logging to track potential screen blanking issues.
+    """
+    from acb.logging_config import log_debug
+    import os
+    if os.environ.get("ACB_DEBUG_UI"):
+        log_debug(f"[CP_IN_START] {host_path} -> {container}:{container_path}")
+    try:
+        _run(["podman", "cp", str(host_path), f"{container}:{container_path}"])
+        if os.environ.get("ACB_DEBUG_UI"):
+            log_debug(f"[CP_IN_END] {host_path} -> {container}:{container_path}")
+    except Exception as e:
+        if os.environ.get("ACB_DEBUG_UI"):
+            log_debug(f"[CP_IN_FAILED] {host_path} -> {container}:{container_path}: {e}")
+        raise
 
 
 def container_cp_out(container: str, container_path: str, host_path) -> None:
-    _run(["podman", "cp", f"{container}:{container_path}", str(host_path)])
+    """Copy file/directory from container to host.
+    
+    Includes diagnostic logging to track potential screen blanking issues.
+    """
+    from acb.logging_config import log_debug
+    import os
+    if os.environ.get("ACB_DEBUG_UI"):
+        log_debug(f"[CP_OUT_START] {container}:{container_path} -> {host_path}")
+    try:
+        _run(["podman", "cp", f"{container}:{container_path}", str(host_path)])
+        if os.environ.get("ACB_DEBUG_UI"):
+            log_debug(f"[CP_OUT_END] {container}:{container_path} -> {host_path}")
+    except Exception as e:
+        if os.environ.get("ACB_DEBUG_UI"):
+            log_debug(f"[CP_OUT_FAILED] {container}:{container_path} -> {host_path}: {e}")
+        raise
 
 
 def container_start(container: str) -> None:
-    _run(["podman", "start", container])
+    """Start a container.
+    
+    Suppresses output logging since 'podman start' just echoes the container name,
+    which adds no debugging value and can interfere with terminal display.
+    The command itself is still logged via [CONTAINER] for debugging.
+    """
+    _run(["podman", "start", container], log_output=False)
 
 
 def container_stop_rm(container: str) -> None:
@@ -228,13 +276,24 @@ def container_logs(container: str) -> str:
     return out.stdout + out.stderr
 
 
-def container_exec_capture(container: str, cmd: list[str], workdir: str | None = None) -> str:
-    """Run ``cmd`` inside ``container`` and return stdout (raises on nonzero exit)."""
+def container_exec_capture(container: str, cmd: list[str], workdir: str | None = None,
+                          log_output: bool = True) -> str:
+    """Run ``cmd`` inside ``container`` and return stdout (raises on nonzero exit).
+    
+    Args:
+        container: Container name
+        cmd: Command to execute as list
+        workdir: Optional working directory inside container
+        log_output: If False, suppress stdout/stderr logging (default: True)
+    
+    Returns:
+        Command stdout as string
+    """
     full = ["podman", "exec"]
     if workdir:
         full += ["--workdir", workdir]
     full += [container, *cmd]
-    return _run(full).stdout
+    return _run(full, log_output=log_output).stdout
 
 
 def image_exists(name: str) -> bool:

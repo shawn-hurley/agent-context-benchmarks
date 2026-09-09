@@ -313,6 +313,13 @@ class SWEBench(Benchmark):
         
         env = container_env(self.config)
         
+        # Prevent TTY detection to avoid Docker/Podman progress bars and status messages
+        # from bypassing stdout/stderr redirection and appearing on the terminal.
+        # This ensures evaluation output stays in the log file and doesn't interfere
+        # with the Rich Live display. (See acb/container.py:119-122 for same pattern)
+        env["TERM"] = "dumb"
+        env.setdefault("DOCKER_BUILDKIT", "0")
+        
         # Tail evaluation logs and update tracker activity
         log_dir_base = _SWEBENCH_DIR / "logs" / "run_evaluation" / run_id
         stop_event = threading.Event()
@@ -339,6 +346,7 @@ class SWEBench(Benchmark):
                     cmd,
                     cwd=str(_SWEBENCH_DIR),
                     env=env,
+                    stdin=subprocess.DEVNULL,
                     stdout=eval_log,
                     stderr=subprocess.STDOUT
                 )

@@ -62,6 +62,7 @@ from __future__ import annotations
 
 import json
 import logging
+import os
 import shlex
 import tarfile
 import tempfile
@@ -206,6 +207,71 @@ def _describe_event(obj: dict) -> tuple[str | None, bool]:
     return None, False
 
 
+def _generate_skill_hints_pi(skills: list[dict]) -> str:
+    """Generate generic skill usage hints for Pi.
+    
+    Creates instructions for accessing and using any installed skills.
+    Content is generic and works with any skill that follows the
+    agentskills.io standard.
+    
+    Args:
+        skills: List of skill configurations
+        
+    Returns:
+        Markdown content with skill usage instructions
+    """
+    if not skills:
+        return ""
+    
+    skill_list = "\n".join([
+        f"- **{s.get('name', 'unknown')}** (location: `~/.pi/agent/skills/{s.get('name', 'unknown')}/SKILL.md`): {s.get('description', 'Available for use')}"
+        for s in skills
+    ])
+    
+    # Generic template that works with any skill
+    return f"""# Available Skills
+
+You have access to {len(skills)} installed skill(s) that provide specialized capabilities for code analysis and development tasks.
+
+## Installed Skills
+
+{skill_list}
+
+## How to Access Skills
+
+Pi automatically discovers skills from `~/.pi/agent/skills/`, but you need to **read the skill content** to access detailed instructions:
+
+**Use the `read` tool to access skill instructions:**
+
+```bash
+read ~/.pi/agent/skills/skill-name/SKILL.md
+```
+
+## Recommended Workflow
+
+1. **Read the skill content** early in your workflow using the `read` tool
+2. **Follow the instructions** provided in the SKILL.md file
+3. **Use skill-provided commands** or tools as documented
+4. **Refer back** to skill content if you need guidance
+
+## When to Use Skills
+
+- **Load skill content early** - ideally as one of your first actions
+- Skills often provide **more efficient methods** than standard tools
+- Skills may include **executable binaries** or **analysis tools**
+- Follow the **specific workflows** described in each skill
+
+## Example: Accessing a Skill
+
+```bash
+# Read the skill instructions
+read ~/.pi/agent/skills/rgctl/SKILL.md
+```
+
+After reading, follow the workflow and commands described in the skill content.
+"""
+
+
 class Pi(HarnessAdapter):
     name = "pi"
     api = "anthropic"  # default; runner overrides via effective_api()
@@ -234,6 +300,39 @@ class Pi(HarnessAdapter):
         container_exec_capture(container, [
             "ln", "-sf", _CONTAINER_BINARY, "/usr/local/bin/pi",
         ])
+        
+        # Inject skill hints if skills are configured
+        skills = self.config.get("skills", [])
+        if skills:
+            self._inject_skill_hints(container, skills)
+
+    def _inject_skill_hints(self, container: str, skills: list[dict]) -> None:
+        """Inject skill hints into .pi/AGENTS.md to prompt skill usage.
+        
+        Args:
+            container: Podman container ID
+            skills: List of skill configurations from harness config
+        """
+        if not skills:
+            return
+            
+        try:
+            hints_content = _generate_skill_hints_pi(skills)
+            
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.md', delete=False) as f:
+                f.write(hints_content)
+                hints_file = f.name
+            
+            try:
+                # Create .pi directory in /testbed
+                container_exec_capture(container, ["mkdir", "-p", "/testbed/.pi"])
+                # Copy hints file to container
+                container_cp_in(container, hints_file, "/testbed/.pi/AGENTS.md")
+                logger.info(f"Injected Pi skill hints with {len(skills)} skill(s)")
+            finally:
+                os.unlink(hints_file)
+        except Exception as e:
+            logger.warning(f"Failed to inject Pi skill hints: {e}")
 
     def build_container_env(self, base_url: str, api_key: str) -> dict[str, str]:
         """Stash base_url for run_container() and return the env vars.

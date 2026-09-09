@@ -42,6 +42,8 @@ each run -- opencode's documented global-rules file (opencode.ai/docs/rules).
 from __future__ import annotations
 
 import json
+import logging
+import os
 import shlex
 import tarfile
 import tempfile
@@ -183,6 +185,103 @@ class OpenCode(HarnessAdapter):
         )
         container_cp_in(container, binary, "/usr/local/bin/opencode")
         container_exec_capture(container, ["chmod", "+x", "/usr/local/bin/opencode"])
+        
+        # Inject skill hints if skills are configured
+        skills = self.config.get("skills", [])
+        if skills:
+            self._inject_skill_hints(container, skills)
+
+    def _inject_skill_hints(self, container: str, skills: list[dict]) -> None:
+        """Inject skill hints into .opencode/AGENTS.md to prompt skill usage.
+        
+        Args:
+            container: Podman container ID
+            skills: List of skill configurations from harness config
+        """
+        if not skills:
+            return
+            
+        try:
+            hints_content = self._generate_skill_hints(skills)
+            
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.md', delete=False) as f:
+                f.write(hints_content)
+                hints_file = f.name
+            
+            try:
+                # Create .opencode directory in /testbed
+                container_exec_capture(container, ["mkdir", "-p", "/testbed/.opencode"])
+                # Copy hints file to container
+                container_cp_in(container, hints_file, "/testbed/.opencode/AGENTS.md")
+                logger = logging.getLogger(__name__)
+                logger.info(f"Injected OpenCode skill hints with {len(skills)} skill(s)")
+            finally:
+                os.unlink(hints_file)
+        except Exception as e:
+            logger = logging.getLogger(__name__)
+            logger.warning(f"Failed to inject OpenCode skill hints: {e}")
+
+    def _generate_skill_hints(self, skills: list[dict]) -> str:
+        """Generate generic skill usage hints for OpenCode.
+        
+        Creates instructions for loading and using any installed skills.
+        Content is generic and works with any skill that follows the
+        agentskills.io standard.
+        
+        Args:
+            skills: List of skill configurations
+            
+        Returns:
+            Markdown content with skill usage instructions
+        """
+        if not skills:
+            return ""
+        
+        skill_list = "\n".join([
+            f"- **{s.get('name', 'unknown')}**: {s.get('description', 'Available for use')}"
+            for s in skills
+        ])
+        
+        # Generic template that works with any skill
+        return f"""# Available Skills
+
+You have access to {len(skills)} skill(s) that provide enhanced capabilities. Skills contain specialized instructions and tools for specific tasks.
+
+## Installed Skills
+
+{skill_list}
+
+## How to Use Skills
+
+OpenCode provides a built-in `skill` tool to load skill content:
+
+```typescript
+skill({{ name: "skill-name" }})
+```
+
+**Recommended workflow:**
+
+1. **Load the skill** using the `skill` tool with the skill name
+2. **Read the skill instructions** that are provided after loading
+3. **Follow the workflow** described in the skill content
+4. **Use skill-provided tools** as instructed
+
+## When to Use Skills
+
+- Load skills **early** in your workflow, ideally as one of your first actions
+- Skills often provide **more efficient** methods than standard tools
+- Check skill content for **specific workflows** and best practices
+- Skills may include **executable tools** or **analysis capabilities**
+
+## Example: Loading a Skill
+
+```typescript
+// Load a skill to access its instructions and tools
+skill({{ name: "rgctl" }})
+```
+
+After loading, the skill content will be available in your context with detailed usage instructions.
+"""
 
     def build_container_env(self, base_url: str, api_key: str) -> dict[str, str]:
         """Stash base_url for run_container() and return the API key env var.

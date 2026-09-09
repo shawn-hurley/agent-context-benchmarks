@@ -40,6 +40,8 @@ shared plumbing in acb/harnesses/_streaming.py, also used by claude-code):
 from __future__ import annotations
 
 import json
+import logging
+import os
 import shlex
 import subprocess
 import tarfile
@@ -171,6 +173,9 @@ class Goose(HarnessAdapter):
         moved here so benchmark code stays harness-agnostic (see
         HarnessAdapter.setup_container()); behavior is unchanged.
         
+        Also injects .goosehints file if skills are configured to tell goose
+        about available skills.
+        
         cache_dir is shared across all runs under the output directory.
         """
         binary = ensure_linux_binary(
@@ -180,6 +185,11 @@ class Goose(HarnessAdapter):
         )
         container_cp_in(container, binary, "/usr/local/bin/goose")
         container_exec_capture(container, ["chmod", "+x", "/usr/local/bin/goose"])
+        
+        # Inject .goosehints if skills are configured
+        skills = self.config.get("skills", [])
+        if skills:
+            self._inject_goosehints(container, skills)
 
     def run_container(self, prompt: str, container: str, model: str, env: dict[str, str],
                        out_dir: Path, instance_id: str,
@@ -310,10 +320,70 @@ class Goose(HarnessAdapter):
                 capture_output=True,
             )
             if tracker and tracker_key:
-                 tracker.update_activity(tracker_key, "setup: injected goose config")
+                tracker.update_activity(tracker_key, "setup: injected goose config")
         except subprocess.CalledProcessError as e:
             if tracker and tracker_key:
                 tracker.update_activity(tracker_key, "setup: goose config injection failed")
+
+    def _inject_goosehints(self, container: str, skills: list[dict]) -> None:
+        """Inject .goosehints file into container to instruct Goose to load skills.
+        
+        .goosehints is loaded by Goose at session startup and provides hints about
+        available skills and how to use them. This method generates the hints content
+        based on configured skills and injects it into /testbed/.goosehints.
+        
+        Args:
+            container: Podman container ID
+            skills: List of skill configurations from harness config
+        """
+        try:
+            hints_content = self._generate_skill_hints(skills)
+            
+            # Write hints content to temporary file
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.md', delete=False) as f:
+                f.write(hints_content)
+                hints_file = f.name
+            
+            try:
+                # Copy .goosehints to container at /testbed/.goosehints
+                # This is where Goose will find it at session startup
+                container_cp_in(container, hints_file, "/testbed/.goosehints")
+                logger = logging.getLogger(__name__)
+                logger.info(f"Injected .goosehints with {len(skills)} skill(s)")
+            finally:
+                os.unlink(hints_file)
+        except Exception as e:
+            logger = logging.getLogger(__name__)
+            logger.warning(f"Failed to inject .goosehints: {e}")
+
+    def _generate_skill_hints(self, skills: list[dict]) -> str:
+        """Generate .goosehints content based on installed skills.
+        
+        If a template file exists at acb/goosehints-templates/swebench-skills.md,
+        uses that. Otherwise, generates minimal hints from the skill names.
+        
+        Args:
+            skills: List of skill configurations
+            
+        Returns:
+            Markdown content for .goosehints file
+        """
+        # Try to load template file
+        template_path = Path(__file__).parent.parent / "goosehints-templates" / "swebench-skills.md"
+        if template_path.exists():
+            return template_path.read_text()
+        
+        # Fallback: generate minimal hints from skill names
+        skill_names = [s['name'] for s in skills]
+        hints = ["# Available Skills\n\n"]
+        for skill in skills:
+            name = skill.get('name', 'unknown')
+            desc = skill.get('description', 'Available for use')
+            hints.append(f"## {name}\n\n")
+            hints.append(f"{desc}\n\n")
+            hints.append(f"Load with: `load_skill \"{name}\"`\n\n")
+        
+        return "".join(hints)
 
     def _write_mcp_config(self, container: str, servers: list[dict]) -> None:
         """Write MCP server configuration to Goose's config.yaml.

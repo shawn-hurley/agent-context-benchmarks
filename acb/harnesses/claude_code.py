@@ -127,6 +127,8 @@ ever assumes that.
 from __future__ import annotations
 
 import json
+import logging
+import os
 import shlex
 import tarfile
 import tempfile
@@ -264,11 +266,73 @@ def _describe_event(obj: dict) -> tuple[str | None, bool]:
             return (f"running tool: {name}" if name else "running tool"), False
         if itype == "tool_result":
             return ("tool call failed" if item.get("is_error") else "tool call finished"), False
-        if itype == "text" and etype == "assistant":
+        if              itype == "text" and etype == "assistant":
             text = item.get("text") or ""
             preview = text.strip()
             return (f"thinking: {preview[:160]}" if preview else "thinking..."), False
     return None, False
+
+
+def _generate_skill_hints_claude_code(skills: list[dict]) -> str:
+    """Generate generic skill usage hints for Claude-Code.
+    
+    Creates instructions for accessing and using any installed skills.
+    Content is generic and works with any skill that follows the
+    agentskills.io standard.
+    
+    Args:
+        skills: List of skill configurations
+        
+    Returns:
+        Markdown content with skill usage instructions
+    """
+    if not skills:
+        return ""
+    
+    skill_list = "\n".join([
+        f"- **{s.get('name', 'unknown')}** (location: `~/.claude/skills/{s.get('name', 'unknown')}/SKILL.md`): {s.get('description', 'Available for use')}"
+        for s in skills
+    ])
+    
+    # Generic template that works with any skill
+    return f"""# Available Skills
+
+You have access to {len(skills)} installed skill(s) that enhance your capabilities for code analysis and development tasks.
+
+## Installed Skills
+
+{skill_list}
+
+## How to Access Skills
+
+Skills are installed in `~/.claude/skills/`. To use a skill, **read its documentation** using the Read tool:
+
+```
+Read the file: ~/.claude/skills/skill-name/SKILL.md
+```
+
+## Recommended Workflow
+
+1. **Read the skill content** early using the Read tool
+2. **Follow the instructions** provided in the SKILL.md file
+3. **Use skill-provided tools** or commands as documented
+4. **Refer back** to skill content when needed
+
+## When to Use Skills
+
+- **Access skill content early** - as one of your first actions
+- Skills provide **specialized workflows** that are more efficient than general tools
+- Skills may include **executable commands** or **analysis capabilities**
+- Follow the **specific patterns** described in each skill
+
+## Example: Accessing a Skill
+
+```
+Use the Read tool to read: ~/.claude/skills/rgctl/SKILL.md
+```
+
+After reading the skill content, follow the workflow and use the tools described within.
+"""
 
 
 class ClaudeCode(HarnessAdapter):
@@ -297,6 +361,41 @@ class ClaudeCode(HarnessAdapter):
         )
         container_cp_in(container, binary, "/usr/local/bin/claude")
         container_exec_capture(container, ["chmod", "+x", "/usr/local/bin/claude"])
+        
+        # Inject skill hints if skills are configured
+        skills = self.config.get("skills", [])
+        if skills:
+            self._inject_skill_hints(container, skills)
+
+    def _inject_skill_hints(self, container: str, skills: list[dict]) -> None:
+        """Inject skill hints into .claude/CLAUDE.md to prompt skill usage.
+        
+        Args:
+            container: Podman container ID
+            skills: List of skill configurations from harness config
+        """
+        if not skills:
+            return
+            
+        try:
+            hints_content = _generate_skill_hints_claude_code(skills)
+            
+            with tempfile.NamedTemporaryFile(mode='w', suffix='.md', delete=False) as f:
+                f.write(hints_content)
+                hints_file = f.name
+            
+            try:
+                # Create .claude directory in /testbed
+                container_exec_capture(container, ["mkdir", "-p", "/testbed/.claude"])
+                # Copy hints file to container
+                container_cp_in(container, hints_file, "/testbed/.claude/CLAUDE.md")
+                logger = logging.getLogger(__name__)
+                logger.info(f"Injected Claude-Code skill hints with {len(skills)} skill(s)")
+            finally:
+                os.unlink(hints_file)
+        except Exception as e:
+            logger = logging.getLogger(__name__)
+            logger.warning(f"Failed to inject Claude-Code skill hints: {e}")
 
     def run_container(self, prompt: str, container: str, model: str, env: dict[str, str],
                        out_dir: Path, instance_id: str,

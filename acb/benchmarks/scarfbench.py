@@ -639,6 +639,13 @@ class ScarfBench(Benchmark):
 
         # Route docker CLI calls through the Podman shim
         env = container_env(self.config)
+        
+        # Prevent TTY detection to avoid Docker/Podman progress bars and status messages
+        # from bypassing stdout/stderr redirection and appearing on the terminal.
+        # This ensures evaluation output stays in the log file and doesn't interfere
+        # with the Rich Live display. (See acb/container.py:119-122 for same pattern)
+        env["TERM"] = "dumb"
+        env.setdefault("DOCKER_BUILDKIT", "0")
 
         if os.environ.get("ACB_DEBUG_UI"):
             log_debug(
@@ -646,8 +653,18 @@ class ScarfBench(Benchmark):
                 f"prediction(s) ..."
             )
         
+        # Redirect evaluation subprocess output to log file to prevent terminal interference
+        # This prevents scarf validate's output from bypassing Rich's Live display
+        eval_log_path = output_dir / f"scarfbench_eval_{instance_id or 'batch'}.log"
         try:
-            proc = subprocess.run(cmd, env=env)
+            with eval_log_path.open("w") as eval_log:
+                proc = subprocess.run(
+                    cmd,
+                    env=env,
+                    stdin=subprocess.DEVNULL,
+                    stdout=eval_log,
+                    stderr=subprocess.STDOUT
+                )
             if os.environ.get("ACB_DEBUG_UI"):
                 log_debug(
                     f"scarf validate exited with code {proc.returncode}"

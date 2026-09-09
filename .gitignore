@@ -20,3 +20,5 @@ SWE-bench/
 bin/
 *_PLAN.md
 target
+
+Dockerfile.rgctl-build

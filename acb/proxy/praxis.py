@@ -746,12 +746,15 @@ class PraxisContainerBackend(PraxisBackend):
         started = False
         while time.time() < deadline:
             try:
+                # Suppress output logging for health check to prevent terminal interference
+                # Health check only needs the exit code, not the output content
                 container_exec_capture(
                     self.container_name,
                     ["sh", "-c",
                      f"wget -qO- --timeout=2 "
                      f"http://127.0.0.1:{self.CONTAINER_PORT}/v1/models "
                      f"2>/dev/null | grep -q ."],
+                    log_output=False,
                 )
                 started = True
                 break

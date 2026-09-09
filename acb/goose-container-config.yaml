@@ -1,9 +1,20 @@
 # Goose configuration for SWE-bench container evaluation
-# Disables internet search/fetch extension to ensure offline operation
+# Enables skills discovery and disables internet search/fetch extension to ensure offline operation
 # This file is injected into containers at ~/.config/goose/config.yaml
 
-# Extensions section - disables fetch, keeps essential tools
+# Extensions section - enables skills, disables fetch, keeps essential tools
 extensions:
+  # Skills platform extension for discovering Agent Skills from ~/.agents/skills/
+  # Type: platform (NOT builtin) - this is a critical distinction
+  # While the Skills platform extension is "enabled by default" when no config exists,
+  # it must be explicitly enabled here when other extensions are declared in the config
+  # See: https://goose-docs.ai/docs/guides/context-engineering/using-skills
+  skills:
+    type: platform
+    name: skills
+    enabled: true
+    bundled: true
+  
   developer:
     type: builtin
     name: developer

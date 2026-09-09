@@ -45,6 +45,29 @@ def _log_terminal_state(console: Console, label: str):
                   f"stderr_isatty={sys.stderr.isatty()}")
 
 
+def _check_console_visibility(console: Console) -> dict:
+    """Check if console/display is visible and healthy.
+    
+    Returns dict with visibility indicators for debugging screen blanking issues.
+    
+    Args:
+        console: Rich Console instance
+    
+    Returns:
+        Dictionary with visibility state properties
+    """
+    return {
+        "is_terminal": console.is_terminal,
+        "is_interactive": console.is_interactive,
+        "is_dumb_terminal": console.is_dumb_terminal,
+        "is_alt_screen": console.is_alt_screen,
+        "stdout_isatty": sys.stdout.isatty(),
+        "stderr_isatty": sys.stderr.isatty(),
+        "width": console.width,
+        "height": console.height,
+    }
+
+
 class InstanceStatus(Enum):
     """Status of a single instance."""
     QUEUED = "queued"
@@ -128,6 +151,9 @@ class ProgressTracker:
 
         self.console = Console()
         self.use_unicode = self._detect_unicode_support()
+        
+        # Cache last valid table to handle race conditions
+        self._last_valid_table = None
         
         # Pre-create the layout structure to avoid recreating it on every render
         # This prevents the display from showing temporary empty overlays during state transitions
@@ -427,7 +453,18 @@ class ProgressTracker:
         table.add_column("Tokens", justify="right", width=7)
         table.add_column("Last Activity", style="dim", width=20)
 
-        visible = self._get_visible_instances()
+        visible = self._get_visible_instances()        
+        # RACE CONDITION DETECTION: Check if we have no visible instances but should have some
+        if not visible:
+            completed, running, failed, queued = self._get_stats()
+            total_active = running + completed + failed
+            
+            if os.environ.get("ACB_DEBUG_UI"):
+                log_debug(f"[RACE_CHECK] No visible: completed={completed}, running={running}, failed={failed}, active={total_active}, cache={'yes' if self._last_valid_table else 'no'}")
+            
+            if total_active > 0 and self._last_valid_table is not None:
+                log_debug(f"[RACE_CONDITION] Detected empty table with {total_active} active - using cache")
+                return self._last_valid_table
         
         # Track how many completed instances we're showing for hidden count
         with self._lock:
@@ -488,6 +525,9 @@ class ProgressTracker:
                 "", "", "", "", ""
             )
 
+        # Cache valid table for fallback recovery
+        self._last_valid_table = table
+        
         return table
 
     def _get_stats(self) -> tuple[int, int, int, int]:
@@ -585,6 +625,14 @@ class ProgressTracker:
         concurrent instance transitions (e.g., when one harness finishes and
         another starts).
         """
+                # PRE-CHECK: Verify console is in valid state before attempting render
+        visibility = _check_console_visibility(self.console)
+        if os.environ.get("ACB_DEBUG_UI"):
+            log_debug(f"[VISIBILITY] is_terminal={visibility['is_terminal']}, width={visibility['width']}, height={visibility['height']}")
+        if not visibility['is_terminal'] or visibility['width'] == 0 or visibility['height'] == 0:
+            log_debug(f"[VISIBILITY_SKIP] Skipping render - terminal invalid: {visibility}")
+            return self.layout
+        
         # Build both components first (each has its own internal locking)
         try:
             header_panel = self._build_header()
@@ -789,7 +837,7 @@ class LiveTrackerDisplay:
             error_msg = str(e)[:100]  # Truncate long error messages
             layout = Panel(
                 f"[red]Display render error:[/red]\n{error_msg}\n\n"
-                f"[dim]Check logs in runs/{tracker.run_id}/acb.log[/dim]",
+                f"[dim]Check logs in runs/{self.tracker.run_id}/acb.log[/dim]",
                 title="[bold red]ACB Display Error[/]",
                 border_style="red"
             )
