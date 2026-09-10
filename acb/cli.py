@@ -53,7 +53,13 @@ def _cmd_report(args):
             out_path = Path(args.html)
         else:
             out_path = run_dirs[0] / "report.html"
-        out_path.write_text(build_html_report(run_dirs))
+        # Pass single directory as string/Path to enable suite detection
+        # Pass multiple directories as list for multi-run comparison
+        if len(run_dirs) == 1:
+            html_content = build_html_report(run_dirs[0])
+        else:
+            html_content = build_html_report(run_dirs)
+        out_path.write_text(html_content)
         print(f"html report: {out_path}")
 
 

@@ -302,7 +302,6 @@ class SWEBench(Benchmark):
             Dictionary mapping instance_id to resolved status
         """
         output_dir = Path(output_dir)
-        preds_path = output_dir / "predictions.jsonl"
         instances_dir = output_dir / "instances"
         
         # Collect predictions to evaluate
@@ -337,8 +336,12 @@ class SWEBench(Benchmark):
         if not preds_to_eval:
             return {instance_id: False} if instance_id else {}
         
-        # Write predictions to temp file for swebench
-        with preds_path.open("w") as f:
+        # Write predictions to temporary file for swebench CLI
+        # Note: We use a temporary file instead of predictions.jsonl to avoid overwriting
+        # when evaluating per-instance. The source of truth is instances/*/prediction.json
+        import tempfile
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.jsonl', delete=False, dir=output_dir) as f:
+            preds_temp_path = Path(f.name)
             for p in preds_to_eval:
                 f.write(json.dumps({
                     "instance_id": p.instance_id,
@@ -356,7 +359,7 @@ class SWEBench(Benchmark):
         cmd = [
             str(swebench_python), "-m", "swebench.harness.run_evaluation",
             "--dataset_name", dataset,
-            "--predictions_path", str(preds_path),
+            "--predictions_path", str(preds_temp_path),
             "--run_id", run_id,
             "--max_workers", str(self.config.get("max_workers", 4)),
         ]
@@ -412,6 +415,11 @@ class SWEBench(Benchmark):
             stop_event.set()
             for t in tailers:
                 t.join(timeout=5)
+            # Clean up temporary predictions file
+            try:
+                preds_temp_path.unlink()
+            except OSError:
+                pass
         
         # Tracker shows verification status - no print needed
         

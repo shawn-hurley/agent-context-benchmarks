@@ -442,8 +442,7 @@ def _setup_logging(out_dir: Path, verbose: bool = False) -> logging.Logger:
 def run(cfg: RunConfig, registries: Registries | None = None, verbose: bool = False) -> Path:
     registries = registries or Registries.load()
     # Absolute: SWE-bench's evaluation subprocess runs with cwd=SWE-bench/, so
-    # any relative path derived from out_dir (predictions.jsonl etc.) would
-    # otherwise resolve against the wrong directory once passed to it.
+    # any relative paths must resolve correctly even from that different directory.
     out_dir, effective_run_id = _resolve_run_dir(cfg.output_dir, cfg.run_id)
     if effective_run_id != cfg.run_id:
         print(f"[acb] previous run exists, using {effective_run_id}")

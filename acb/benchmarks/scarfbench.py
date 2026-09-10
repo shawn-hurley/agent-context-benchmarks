@@ -604,15 +604,8 @@ class ScarfBench(Benchmark):
         if not preds_to_eval:
             return {instance_id: False} if instance_id else {}
         
-        # Write predictions.jsonl for HTML report (matches SWE-bench pattern)
-        preds_path = output_dir / "predictions.jsonl"
-        with preds_path.open("w") as f:
-            for p in preds_to_eval:
-                f.write(json.dumps({
-                    "instance_id": p.instance_id,
-                    "model_name_or_path": p.model_name_or_path,
-                    "model_patch": p.model_patch or "",
-                }) + "\n")
+        # Note: predictions are stored in instances/*/prediction.json (source of truth)
+        # HTML report reads directly from instance directories, no separate predictions.jsonl needed
         
         # Update tracker: mark verification starting
         if tracker and tracker_key:

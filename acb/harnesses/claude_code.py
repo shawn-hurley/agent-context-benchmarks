@@ -274,64 +274,71 @@ def _describe_event(obj: dict) -> tuple[str | None, bool]:
 
 
 def _generate_skill_hints_claude_code(skills: list[dict]) -> str:
-    """Generate generic skill usage hints for Claude-Code.
+    """Generate MANDATORY skill loading instructions for Claude-code.
     
-    Creates instructions for accessing and using any installed skills.
-    Content is generic and works with any skill that follows the
-    agentskills.io standard.
+    Creates imperative instructions requiring skill loading before any code
+    analysis. Matches Goose's proven .goosehints approach with two-layer enforcement.
     
     Args:
         skills: List of skill configurations
         
     Returns:
-        Markdown content with skill usage instructions
+        Markdown content with mandatory skill loading instructions
     """
     if not skills:
         return ""
     
     skill_list = "\n".join([
-        f"- **{s.get('name', 'unknown')}** (location: `~/.claude/skills/{s.get('name', 'unknown')}/SKILL.md`): {s.get('description', 'Available for use')}"
+        f"- **{s.get('name', 'unknown')}** at `/root/.claude/skills/{s.get('name', 'unknown')}/SKILL.md`: {s.get('description', 'Required for this task')}"
         for s in skills
     ])
     
-    # Generic template that works with any skill
-    return f"""# Available Skills
+    read_commands = "\n".join([
+        f'Read /root/.claude/skills/{s.get("name", "unknown")}/SKILL.md'
+        for s in skills
+    ])
+    
+    return f"""# ⚠️ CRITICAL: SKILL LOADING REQUIRED
 
-You have access to {len(skills)} installed skill(s) that enhance your capabilities for code analysis and development tasks.
+## STEP 1: Load All Skills (MANDATORY - DO THIS FIRST)
 
-## Installed Skills
+**YOU MUST load the following {len(skills)} skill(s) as your ABSOLUTE FIRST ACTION before any code analysis:**
 
 {skill_list}
 
-## How to Access Skills
-
-Skills are installed in `~/.claude/skills/`. To use a skill, **read its documentation** using the Read tool:
+**Use the Read tool to load each skill:**
 
 ```
-Read the file: ~/.claude/skills/skill-name/SKILL.md
+{read_commands}
 ```
 
-## Recommended Workflow
+**DO NOT use find, grep, bash, or analyze UNTIL you have loaded all skills above.**
 
-1. **Read the skill content** early using the Read tool
-2. **Follow the instructions** provided in the SKILL.md file
-3. **Use skill-provided tools** or commands as documented
-4. **Refer back** to skill content when needed
+---
 
-## When to Use Skills
+## STEP 2: Follow Skill Instructions (MANDATORY)
 
-- **Access skill content early** - as one of your first actions
-- Skills provide **specialized workflows** that are more efficient than general tools
-- Skills may include **executable commands** or **analysis capabilities**
-- Follow the **specific patterns** described in each skill
+After loading each skill, you will receive detailed instructions with sections like:
+- "⚠️ CRITICAL" 
+- "REQUIRED: Always Follow This Exact Sequence"
+- "YOU MUST" statements
 
-## Example: Accessing a Skill
+**These instructions are NOT suggestions or guidance - they are MANDATORY procedures that you MUST follow exactly as written.**
 
-```
-Use the Read tool to read: ~/.claude/skills/rgctl/SKILL.md
-```
+**YOU MUST:**
+1. Read the entire skill content after loading
+2. Identify the "REQUIRED: Always Follow This Exact Sequence" section
+3. Execute EVERY step in that sequence IN ORDER
+4. Use ONLY the tools and methods the skill specifies
+5. Do NOT use forbidden tools (like find, grep, bash) until the skill says you can
 
-After reading the skill content, follow the workflow and use the tools described within.
+**Critical:** If the skill says "DO NOT use X UNTIL AFTER you...", then using X before completing those steps = automatic task failure, even if your code changes are correct.
+
+---
+
+## Why This Two-Layer Enforcement Exists
+
+Skills provide optimized workflows tested specifically for this benchmark. The system prompt (STEP 1) tells you to load skills. The skill content (STEP 2) tells you HOW to use it. Both layers are mandatory. Skipping either layer = automatic task failure.
 """
 
 

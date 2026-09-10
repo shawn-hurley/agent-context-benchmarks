@@ -23,7 +23,10 @@ from acb.utils import normalize_instance_id_for_path
 def aggregate_per_instance_files(harness_out_dir: Path) -> None:
     """Aggregate per-instance usage files into combined usage.jsonl for backwards compatibility.
     
-    Note: predictions.jsonl is aggregated by benchmark.evaluate()
+    Also aggregates benchmark_metrics.jsonl (per-request Praxis metrics with content classification).
+    
+    Note: predictions are stored in instances/*/prediction.json (source of truth)
+    Note: HTML report reads directly from instance directories, no predictions.jsonl aggregation needed
     Note: metrics.jsonl is written by build_report() after updating with resolved status
     """
     instances_dir = harness_out_dir / "instances"
@@ -38,6 +41,22 @@ def aggregate_per_instance_files(harness_out_dir: Path) -> None:
                 instance_usage = instance_dir / "usage.jsonl"
                 if instance_usage.exists():
                     f.write(instance_usage.read_text())
+    
+    # Aggregate benchmark_metrics (per-request Praxis output with content classification)
+    # Add instance_id to each record since benchmark_metrics are stored per-instance
+    benchmark_metrics_path = harness_out_dir / "benchmark_metrics.jsonl"
+    with benchmark_metrics_path.open("w") as f:
+        for instance_dir in sorted(instances_dir.iterdir()):
+            if instance_dir.is_dir():
+                instance_id = instance_dir.name
+                instance_bm = instance_dir / "benchmark_metrics.jsonl"
+                if instance_bm.exists():
+                    for line in instance_bm.read_text().strip().split('\n'):
+                        if line.strip():
+                            # Parse, add instance_id, and write back
+                            rec = json.loads(line)
+                            rec['instance_id'] = instance_id
+                            f.write(json.dumps(rec, separators=(',', ':')) + '\n')
 
 
 def build_report(usage_path: Path, resolved: dict[str, bool], out_dir: Path, cfg) -> Path:

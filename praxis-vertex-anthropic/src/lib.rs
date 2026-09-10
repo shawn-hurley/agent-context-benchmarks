@@ -31,6 +31,7 @@
 //! See `token_usage_to_metrics.rs` for full documentation.
 
 mod metrics_collector;
+mod request_classifier;
 mod token_usage_to_metrics;
 
 use async_trait::async_trait;
@@ -40,6 +41,7 @@ use praxis_filter::{
 };
 
 use metrics_collector::BenchmarkMetricsFilter;
+use request_classifier::RequestClassifierFilter;
 use token_usage_to_metrics::TokenUsageToMetricsFilter;
 
 const DEFAULT_MAX_BODY_BYTES: usize = 4 * 1024 * 1024; // 4 MiB
@@ -155,6 +157,10 @@ pub fn register_filters(registry: &mut FilterRegistry) {
     praxis_filter::register_filters!(
         @register registry,
         http "vertex_anthropic_prepare" => VertexAnthropicPrepareFilter::from_config
+    );
+    praxis_filter::register_filters!(
+        @register registry,
+        http "request_classifier" => RequestClassifierFilter::from_config
     );
     praxis_filter::register_filters!(
         @register registry,

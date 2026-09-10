@@ -91,22 +91,63 @@ class _RunData:
     def load(cls, run_dir: Path, harness_name: str = "") -> "_RunData":
         run_dir = Path(run_dir)
         report = json.loads(p.read_text()) if (p := run_dir / "report.json").exists() else {}
-        metrics = _load_jsonl(run_dir / "metrics.jsonl")
+        
+        # Try benchmark_metrics.jsonl first (new way - has content classification)
+        # Fall back to metrics.jsonl (old way) if benchmark_metrics doesn't exist
+        benchmark_metrics = _load_jsonl(run_dir / "benchmark_metrics.jsonl")
+        
+        if benchmark_metrics:
+            # NEW PATH: Aggregate benchmark_metrics per-instance
+            # Group by instance_id (from first 'instance_id' field in benchmark_metrics records, 
+            # or fall back to using index if instance_id not present)
+            instances: dict[str, list] = defaultdict(list)
+            for rec in benchmark_metrics:
+                iid = rec.get('instance_id')
+                if iid:
+                    instances[iid].append(rec)
+            
+            # Aggregate each instance's per-request metrics
+            metrics = []
+            for iid, recs in instances.items():
+                agg = _aggregate_benchmark_metrics(recs)
+                agg['instance_id'] = iid
+                # Preserve other fields from report if available
+                for metric in _load_jsonl(run_dir / "metrics.jsonl"):
+                    if metric.get('instance_id') == iid:
+                        agg['resolved'] = metric.get('resolved')
+                        break
+                metrics.append(agg)
+            
+            # If no instance_id in benchmark_metrics, fall back to metrics.jsonl
+            if not metrics:
+                metrics = _load_jsonl(run_dir / "metrics.jsonl")
+        else:
+            # FALLBACK: Use metrics.jsonl (old way)
+            metrics = _load_jsonl(run_dir / "metrics.jsonl")
+        
         usage_rows = (
             [r.__dict__ for r in read_records(run_dir / "usage.jsonl")]
             if (run_dir / "usage.jsonl").exists()
             else []
         )
+        
+        # Load predictions from instances/*/prediction.json (source of truth)
+        # This ensures we get ALL patches, not relying on predictions.jsonl which may be incomplete
         predictions: dict[str, str] = {}
-        preds_path = run_dir / "predictions.jsonl"
-        if preds_path.exists():
-            for line in preds_path.read_text().splitlines():
-                line = line.strip()
-                if line:
-                    obj = json.loads(line)
-                    iid = obj.get("instance_id", "")
-                    if iid:
-                        predictions[iid] = obj.get("model_patch") or ""
+        instances_dir = run_dir / "instances"
+        if instances_dir.exists():
+            for inst_dir in sorted(instances_dir.iterdir()):
+                if inst_dir.is_dir():
+                    pred_file = inst_dir / "prediction.json"
+                    if pred_file.exists():
+                        try:
+                            pred = json.loads(pred_file.read_text())
+                            iid = pred.get("instance_id")
+                            if iid:
+                                predictions[iid] = pred.get("model_patch", "")
+                        except (json.JSONDecodeError, OSError):
+                            # Skip malformed or unreadable files
+                            pass
         model = report.get("model")
         cost = load_cost_table().get(model) if model else None
         return cls(run_dir=run_dir, report=report, metrics=metrics,
@@ -164,6 +205,198 @@ def _total_cost(usage_rows: list[dict], cost: ModelCost) -> float:
         )
         for r in usage_rows
     )
+
+
+def _aggregate_benchmark_metrics(records: list[dict]) -> dict:
+    """Aggregate per-request benchmark_metrics into instance-level metrics.
+    
+    Computes totals, averages, and context growth from per-request data.
+    Returns a dict compatible with InstanceMetrics structure.
+    
+    Note: total_tokens = input + output + cache_read + cache_creation
+    (not the sum of per-request total_tokens, which are just input + output)
+    """
+    if not records:
+        return {
+            'turns': 0,
+            'total_input': 0,
+            'total_output': 0,
+            'total_cache_read': 0,
+            'total_cache_creation': 0,
+            'total_tokens': 0,
+            'peak_context': 0,
+            'per_turn_prompt': [],
+            'cache_efficiency': 0.0,
+            'requests': [],
+        }
+    
+    # Sort by timestamp to ensure turn order
+    sorted_records = sorted(records, key=lambda r: r.get('timestamp_ms', 0))
+    
+    # Compute aggregates
+    total_input = sum(r.get('input_tokens', 0) for r in sorted_records)
+    total_output = sum(r.get('output_tokens', 0) for r in sorted_records)
+    total_cache_read = sum(r.get('cache_read_input_tokens', 0) for r in sorted_records)
+    total_cache_creation = sum(r.get('cache_creation_input_tokens', 0) for r in sorted_records)
+    
+    # total_tokens = sum of all components (not sum of per-request total_tokens)
+    total_tokens = total_input + total_output + total_cache_read + total_cache_creation
+    
+    # Per-turn prompt size (input + cache_read + cache_creation)
+    per_turn_prompt = [
+        r.get('input_tokens', 0) + r.get('cache_read_input_tokens', 0) + r.get('cache_creation_input_tokens', 0)
+        for r in sorted_records
+    ]
+    peak_context = max(per_turn_prompt) if per_turn_prompt else 0
+    
+    # Cache efficiency: cache_read / total_prompt_tokens
+    total_prompt = sum(per_turn_prompt)
+    cache_efficiency = total_cache_read / total_prompt if total_prompt > 0 else 0.0
+    
+    return {
+        'turns': len(sorted_records),
+        'total_input': total_input,
+        'total_output': total_output,
+        'total_cache_read': total_cache_read,
+        'total_cache_creation': total_cache_creation,
+        'total_tokens': total_tokens,
+        'peak_context': peak_context,
+        'per_turn_prompt': per_turn_prompt,
+        'cache_efficiency': cache_efficiency,
+        'requests': sorted_records,  # Keep per-request data for content analysis
+    }
+
+
+def _content_type_breakdown(metrics: list[dict]) -> dict:
+    """Generate data for content type visualization."""
+    by_type = {}
+    tool_usage = {}
+    
+    for m in metrics:
+        content_type = m.get('content_type', 'unknown')
+        tokens = m.get('input_tokens', 0)
+        
+        # Aggregate by content type
+        if content_type not in by_type:
+            by_type[content_type] = {
+                'count': 0,
+                'total_tokens': 0,
+                'turns': []
+            }
+        by_type[content_type]['count'] += 1
+        by_type[content_type]['total_tokens'] += tokens
+        by_type[content_type]['turns'].append(m.get('turn_index', 0))
+        
+        # Track tool usage
+        if content_type in ['tool_call', 'tool_result']:
+            tool_name = m.get('tool_name', 'unknown')
+            tool_detail = m.get('tool_detail')
+            
+            tool_key = f"{tool_name}:{tool_detail}" if tool_detail else tool_name
+            
+            if tool_key not in tool_usage:
+                tool_usage[tool_key] = {
+                    'tool_name': tool_name,
+                    'tool_detail': tool_detail,
+                    'calls': 0,
+                    'results': 0,
+                    'total_tokens': 0
+                }
+            
+            if content_type == 'tool_call':
+                tool_usage[tool_key]['calls'] += 1
+            else:
+                tool_usage[tool_key]['results'] += 1
+            
+            tool_usage[tool_key]['total_tokens'] += tokens
+    
+    return {
+        'by_type': by_type,
+        'tool_usage': tool_usage
+    }
+
+
+def _prepare_timeline_data(metrics: list[dict]) -> dict:
+    """Prepare stacked bar chart data showing content types per turn."""
+    # Get all turns in order
+    turn_set = set()
+    for m in metrics:
+        turn_idx = m.get('turn_index', 0)
+        turn_set.add(turn_idx)
+    
+    turns = sorted(turn_set)
+    if not turns:
+        return {'labels': [], 'datasets': []}
+    
+    # Group by content type
+    by_type = {}
+    for m in metrics:
+        content_type = m.get('content_type', 'unknown')
+        if content_type not in by_type:
+            by_type[content_type] = [0] * len(turns)
+        
+        turn_idx = m.get('turn_index', 0)
+        if turn_idx in turns:
+            data_idx = turns.index(turn_idx)
+            by_type[content_type][data_idx] = m.get('input_tokens', 0)
+    
+    # Build Chart.js dataset
+    colors = {
+        'system_prompt': '#4e79a7',
+        'user_message': '#59a14f',
+        'tool_call': '#f28e2b',
+        'tool_result': '#e15759',
+        'assistant_continuation': '#76b7b2',
+        'mixed': '#edc948',
+        'unknown': '#999999'
+    }
+    
+    datasets = []
+    for content_type, data in sorted(by_type.items()):
+        datasets.append({
+            'label': content_type.replace('_', ' ').title(),
+            'data': data,
+            'backgroundColor': colors.get(content_type, '#cccccc')
+        })
+    
+    return {
+        'labels': [f"Turn {t}" for t in turns],
+        'datasets': datasets
+    }
+
+
+def _content_type_suite_breakdown(runs: list["_RunData"]) -> dict:
+    """Aggregate content type data across all harnesses in a suite.
+    
+    Returns:
+        {
+            'by_harness': { harness_name: content_breakdown },
+            'aggregate': aggregate_breakdown,
+        }
+    """
+    by_harness = {}
+    all_requests_aggregate = []
+    
+    for rd in runs:
+        # Flatten all per-request records from this harness
+        harness_requests = []
+        for m in rd.metrics:
+            harness_requests.extend(m.get('requests', []))
+        
+        all_requests_aggregate.extend(harness_requests)
+        
+        # Aggregate for this harness
+        if harness_requests:
+            harness_breakdown = _content_type_breakdown(harness_requests)
+            by_harness[rd.run_id] = harness_breakdown
+    
+    # Aggregate across all harnesses
+    aggregate_breakdown = _content_type_breakdown(all_requests_aggregate) if all_requests_aggregate else {'by_type': {}, 'tool_usage': {}}
+    
+    return {
+        'by_harness': by_harness,
+        'aggregate': aggregate_breakdown,
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -432,6 +665,103 @@ def _build_single_run_html(rd: _RunData) -> str:
         )
         cost_chart_js = ""
 
+    # Generate content type visualization if metrics have classification data
+    content_type_html = ""
+    content_type_js = ""
+    
+    # Flatten all per-request records from all instances (from benchmark_metrics.jsonl)
+    all_requests = []
+    for m in rd.metrics:
+        all_requests.extend(m.get('requests', []))
+    
+    metrics_with_classification = [r for r in all_requests if 'content_type' in r]
+    if metrics_with_classification:
+        content_breakdown = _content_type_breakdown(metrics_with_classification)
+        timeline_data = _prepare_timeline_data(metrics_with_classification)
+        
+        content_type_html = """
+    <h2>Content Type Analysis</h2>
+    <div class="chart-wrap"><canvas id="contentTypeChart"></canvas></div>
+    <div class="chart-wrap"><canvas id="contentTimelineChart"></canvas></div>"""
+        
+        if content_breakdown['tool_usage']:
+            # Build tool usage table
+            tool_rows = ""
+            for tool_key, data in sorted(content_breakdown['tool_usage'].items()):
+                total_uses = data['calls'] + data['results']
+                avg_tokens = data['total_tokens'] // total_uses if total_uses > 0 else 0
+                tool_rows += f"""
+        <tr>
+          <td>{data['tool_name']}</td>
+          <td>{data['tool_detail'] or '—'}</td>
+          <td>{data['calls']}</td>
+          <td>{data['results']}</td>
+          <td>{data['total_tokens']:,}</td>
+          <td>{avg_tokens:,}</td>
+        </tr>"""
+            content_type_html += f"""
+    <h3>Tool Usage Statistics</h3>
+    <div class="chart-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Tool Name</th>
+            <th>Detail</th>
+            <th>Calls</th>
+            <th>Results</th>
+            <th>Total Tokens</th>
+            <th>Avg Tokens/Use</th>
+          </tr>
+        </thead>
+        <tbody>{tool_rows}
+        </tbody>
+      </table>
+    </div>"""
+        
+        content_type_data = json.dumps(content_breakdown['by_type'])
+        timeline_data_json = json.dumps(timeline_data)
+        
+        content_type_js = f"""
+    // Content Type Distribution (Pie Chart)
+    new Chart(document.getElementById('contentTypeChart'), {{
+      type: 'pie',
+      data: {{
+        labels: {json.dumps(list(content_breakdown['by_type'].keys()))},
+        datasets: [{{
+          data: {json.dumps([v['total_tokens'] for v in content_breakdown['by_type'].values()])},
+          backgroundColor: ['#4e79a7', '#f28e2b', '#e15759', '#76b7b2', '#59a14f', '#edc948', '#999999'],
+        }}],
+      }},
+      options: {{
+        responsive: true,
+        plugins: {{
+          legend: {{ position: 'right' }},
+          title: {{ display: true, text: 'Total Tokens by Content Type' }}
+        }}
+      }}
+    }});
+
+    // Content Type Timeline (Stacked Bar)
+    const timelineData = {timeline_data_json};
+    new Chart(document.getElementById('contentTimelineChart'), {{
+      type: 'bar',
+      data: timelineData,
+      options: {{
+        responsive: true,
+        scales: {{
+          x: {{ title: {{ display: true, text: 'Turn' }} }},
+          y: {{ stacked: true, title: {{ display: true, text: 'Tokens' }} }}
+        }},
+        plugins: {{
+          tooltip: {{
+            callbacks: {{
+              title: function(context) {{ return 'Turn ' + context[0].label; }}
+            }}
+          }}
+        }}
+      }}
+    }});"""
+
     patches_html, patches_data_js = _patches_section([rd])
     return _render_html(
         title=title,
@@ -447,6 +777,8 @@ def _build_single_run_html(rd: _RunData) -> str:
         duration_chart_js=duration_chart_js,
         cost_chart_html=cost_chart_html,
         cost_chart_js=cost_chart_js,
+        content_type_html=content_type_html,
+        content_type_js=content_type_js,
         instances_html=f"<h2>Instances</h2>{_instance_table(rd.metrics)}",
         patches_html=patches_html,
         patches_data_js=patches_data_js,
@@ -760,6 +1092,147 @@ def _build_multi_run_html(runs: list[_RunData], is_suite: bool = False) -> str:
             instances_html_parts.append(_instance_table(rd.metrics))
         instances_html = "\n".join(instances_html_parts)
 
+    # Content type visualization for suite/multi-run
+    content_type_html = ""
+    content_type_js = ""
+    
+    # Check if any run has request data with content classification
+    has_any_requests = any(
+        any(m.get('requests') for m in rd.metrics)
+        for rd in runs
+    )
+    
+    if has_any_requests:
+        suite_breakdown = _content_type_suite_breakdown(runs)
+        
+        # Build aggregate pie chart
+        if suite_breakdown['aggregate']['by_type']:
+            content_type_html = f"""
+    <h2>Content Type Analysis</h2>
+    <div class="chart-wrap"><canvas id="contentTypeChart"></canvas></div>"""
+            
+            # Per-harness comparison if we have multiple harnesses
+            if len(runs) > 1 and suite_breakdown['by_harness']:
+                content_type_html += f"""
+    <h3>Content Type Distribution by Harness</h3>
+    <div class="chart-wrap"><canvas id="harnessContentTypeChart"></canvas></div>"""
+            
+            # Tool usage table if available
+            all_tool_usage = {}
+            for harness_data in suite_breakdown['by_harness'].values():
+                for tool_key, tool_data in harness_data['tool_usage'].items():
+                    if tool_key not in all_tool_usage:
+                        all_tool_usage[tool_key] = {'tool_name': tool_data['tool_name'], 'tool_detail': tool_data['tool_detail'], 'calls': 0, 'results': 0, 'total_tokens': 0}
+                    all_tool_usage[tool_key]['calls'] += tool_data['calls']
+                    all_tool_usage[tool_key]['results'] += tool_data['results']
+                    all_tool_usage[tool_key]['total_tokens'] += tool_data['total_tokens']
+            
+            if all_tool_usage:
+                tool_rows = ""
+                for tool_key in sorted(all_tool_usage.keys()):
+                    data = all_tool_usage[tool_key]
+                    total_uses = data['calls'] + data['results']
+                    avg_tokens = data['total_tokens'] // total_uses if total_uses > 0 else 0
+                    tool_rows += f"""
+        <tr>
+          <td>{data['tool_name']}</td>
+          <td>{data['tool_detail'] or '—'}</td>
+          <td>{data['calls']}</td>
+          <td>{data['results']}</td>
+          <td>{data['total_tokens']:,}</td>
+          <td>{avg_tokens:,}</td>
+        </tr>"""
+                content_type_html += f"""
+    <h3>Tool Usage Statistics (Suite Total)</h3>
+    <div class="chart-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Tool Name</th>
+            <th>Detail</th>
+            <th>Calls</th>
+            <th>Results</th>
+            <th>Total Tokens</th>
+            <th>Avg Tokens/Use</th>
+          </tr>
+        </thead>
+        <tbody>{tool_rows}
+        </tbody>
+      </table>
+    </div>"""
+            
+            # Generate JavaScript for charts
+            content_type_js = f"""
+    // Aggregate Content Type Distribution (Pie Chart)
+    new Chart(document.getElementById('contentTypeChart'), {{
+      type: 'pie',
+      data: {{
+        labels: {json.dumps(list(suite_breakdown['aggregate']['by_type'].keys()))},
+        datasets: [{{
+          data: {json.dumps([v['total_tokens'] for v in suite_breakdown['aggregate']['by_type'].values()])},
+          backgroundColor: ['#4e79a7', '#f28e2b', '#e15759', '#76b7b2', '#59a14f', '#edc948', '#999999'],
+        }}],
+      }},
+      options: {{
+        responsive: true,
+        plugins: {{
+          legend: {{ position: 'right' }},
+          title: {{ display: true, text: 'Total Tokens by Content Type (Suite)' }}
+        }}
+      }}
+    }});"""
+            
+            # Per-harness comparison chart if multiple runs
+            if len(runs) > 1 and suite_breakdown['by_harness']:
+                harness_names = list(suite_breakdown['by_harness'].keys())
+                all_types = set()
+                for bd in suite_breakdown['by_harness'].values():
+                    all_types.update(bd['by_type'].keys())
+                all_types = sorted(all_types)
+                
+                colors_map = {
+                    'system_prompt': '#4e79a7',
+                    'user_message': '#59a14f',
+                    'tool_call': '#f28e2b',
+                    'tool_result': '#e15759',
+                    'assistant_continuation': '#76b7b2',
+                    'mixed': '#edc948',
+                    'unknown': '#999999'
+                }
+                
+                datasets = []
+                for content_type in all_types:
+                    data = []
+                    for harness_name in harness_names:
+                        harness_data = suite_breakdown['by_harness'][harness_name]
+                        data.append(harness_data['by_type'].get(content_type, {}).get('total_tokens', 0))
+                    datasets.append({
+                        'label': content_type.replace('_', ' ').title(),
+                        'data': data,
+                        'backgroundColor': colors_map.get(content_type, '#cccccc')
+                    })
+                
+                content_type_js += f"""
+
+    // Per-Harness Content Type Comparison (Stacked Bar)
+    new Chart(document.getElementById('harnessContentTypeChart'), {{
+      type: 'bar',
+      data: {{
+        labels: {json.dumps(harness_names)},
+        datasets: {json.dumps(datasets)},
+      }},
+      options: {{
+        responsive: true,
+        scales: {{
+          x: {{ title: {{ display: true, text: 'Harness' }} }},
+          y: {{ stacked: true, title: {{ display: true, text: 'Tokens' }} }}
+        }},
+        plugins: {{
+          title: {{ display: true, text: 'Content Type Distribution by Harness' }}
+        }}
+      }}
+    }});"""
+    
     patches_html, patches_data_js = _patches_section(runs)
 
     return _render_html(
@@ -782,6 +1255,8 @@ def _build_multi_run_html(runs: list[_RunData], is_suite: bool = False) -> str:
         patches_data_js=patches_data_js,
         tokens_stacked=False,
         tokens_datasets_override=tokens_datasets,
+        content_type_html=content_type_html,
+        content_type_js=content_type_js,
     )
 
 
@@ -810,6 +1285,8 @@ def _render_html(
     tokens_datasets_override: list[dict] | None = None,
     resolve_chart_html: str = "",
     resolve_chart_js: str = "",
+    content_type_html: str = "",
+    content_type_js: str = "",
 ) -> str:
     max_context_len = max((len(d["data"]) for d in context_datasets), default=0)
     context_labels = list(range(max_context_len))
@@ -878,17 +1355,23 @@ def _render_html(
   .badge-unresolved {{ background: #fce8e6; color: #c0392b; }}
   .badge-unknown    {{ background: #f1f1f1; color: #888; }}
   .patch-grid {{ display: grid; gap: 1rem; padding: 0 1rem 1rem; }}
-  .patch-col > h4 {{
-    font-size: 0.82rem; color: #555; margin: 0.75rem 0 0.4rem;
-    text-transform: uppercase; letter-spacing: 0.04em;
-  }}
-  .no-patch {{
-    color: #aaa; font-style: italic; font-size: 0.85rem;
-    padding: 1rem; border: 1px dashed #e0e0e0; border-radius: 4px;
-  }}
-  .patch-col .d2h-wrapper {{ overflow-x: auto; }}
-  .patch-col .d2h-file-header {{ font-size: 0.8rem; }}
-</style>
+   .patch-col > h4 {{
+     font-size: 0.82rem; color: #555; margin: 0.75rem 0 0.4rem;
+     text-transform: uppercase; letter-spacing: 0.04em;
+   }}
+   .no-patch {{
+     color: #aaa; font-style: italic; font-size: 0.85rem;
+     padding: 1rem; border: 1px dashed #e0e0e0; border-radius: 4px;
+   }}
+   .patch-col .d2h-wrapper {{ overflow-x: auto; }}
+   .patch-col .d2h-file-header {{ font-size: 0.8rem; }}
+   /* --- content type analysis --- */
+   .tool-usage-table {{ width: 100%; border-collapse: collapse; }}
+   .tool-usage-table th,
+   .tool-usage-table td {{ padding: 0.5rem 1rem; text-align: left; border-bottom: 1px solid #eee; }}
+   .tool-usage-table th {{ background: #fafafa; font-size: 0.8rem; text-transform: uppercase; color: #888; }}
+   .tool-usage-table tr:hover {{ background: #f9f9f9; }}
+ </style>
 </head>
 <body>
   <h1>{heading}</h1>
@@ -901,14 +1384,15 @@ def _render_html(
   <h2>Context growth over turns (prompt size = input + cache_read + cache_creation)</h2>
   <div class="chart-wrap"><canvas id="contextGrowthChart"></canvas></div>
 
-  <h2>Tokens per turn (avg across instances)</h2>
-  <div class="chart-wrap"><canvas id="tokensPerTurnChart"></canvas></div>
-  {duration_chart_html}
-  {cost_chart_html}
+   <h2>Tokens per turn (avg across instances)</h2>
+   <div class="chart-wrap"><canvas id="tokensPerTurnChart"></canvas></div>
+   {duration_chart_html}
+   {cost_chart_html}
+   {content_type_html}
 
-  {instances_html}
+   {instances_html}
 
-  {patches_html}
+   {patches_html}
 
 {patches_data_js}
 <script>
@@ -941,11 +1425,12 @@ def _render_html(
         y: {{ title: {{ display: true, text: 'tokens' }}, beginAtZero: true }},
       }},
     }},
-  }});
-  {duration_chart_js}
-  {cost_chart_js}
+   }});
+   {duration_chart_js}
+   {cost_chart_js}
+   {content_type_js}
 
-  // Lazy-render diff2html on first expand of each patch block
+   // Lazy-render diff2html on first expand of each patch block
   document.querySelectorAll('details.patch-block').forEach(function(el) {{
     el.addEventListener('toggle', function() {{
       if (!this.open || this.dataset.rendered) return;

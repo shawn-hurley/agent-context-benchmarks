@@ -28,6 +28,29 @@ const META_TOKEN_TOTAL: &str = "token.total";
 const META_TOKEN_CACHE_READ: &str = "token.cache_read";
 const META_TOKEN_CACHE_CREATION: &str = "token.cache_creation";
 
+/// Classification of request content type
+#[derive(Serialize, Deserialize, Clone, Debug)]
+#[serde(rename_all = "snake_case")]
+pub enum ContentType {
+    SystemPrompt,
+    UserMessage,
+    ToolCall,
+    ToolResult,
+    AssistantContinuation,
+    Mixed,
+    Unknown,
+}
+
+/// Request classification stored in extensions
+#[derive(Clone, Debug)]
+pub struct RequestClassification {
+    pub content_type: ContentType,
+    pub tool_name: Option<String>,
+    pub tool_detail: Option<String>,
+    pub tool_count: Option<u32>,
+    pub message_count: Option<u32>,
+}
+
 lazy_static! {
     static ref METRICS_FILE: Mutex<BufWriter<File>> = {
         let file = OpenOptions::new()
@@ -54,6 +77,18 @@ pub struct BenchmarkMetric {
     pub endpoint: String,
     pub request_body_bytes: usize,
     pub response_body_bytes: usize,
+    
+    // Content classification fields
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub content_type: Option<ContentType>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_name: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_detail: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_count: Option<u32>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub message_count: Option<u32>,
 }
 
 /// Filter that reads token usage from filter_metadata and writes metrics to file.
@@ -189,6 +224,20 @@ impl HttpFilter for TokenUsageToMetricsFilter {
         let (input_tokens, output_tokens, total_tokens, cache_read_input_tokens, cache_creation_input_tokens) =
             Self::extract_tokens_from_metadata(ctx);
 
+        // Extract classification from extensions (written during request phase by request_classifier)
+        let (content_type, tool_name, tool_detail, tool_count, message_count) = 
+            if let Some(classification) = ctx.extensions.get::<RequestClassification>() {
+                (
+                    Some(classification.content_type.clone()),
+                    classification.tool_name.clone(),
+                    classification.tool_detail.clone(),
+                    classification.tool_count,
+                    classification.message_count,
+                )
+            } else {
+                (None, None, None, None, None)
+            };
+
         // Build metric record
         let metric = BenchmarkMetric {
             request_id,
@@ -203,6 +252,11 @@ impl HttpFilter for TokenUsageToMetricsFilter {
             endpoint,
             request_body_bytes,
             response_body_bytes,
+            content_type,
+            tool_name,
+            tool_detail,
+            tool_count,
+            message_count,
         };
 
         // Write to file with deduplication

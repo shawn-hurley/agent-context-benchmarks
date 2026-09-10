@@ -187,65 +187,71 @@ class OpenCode(HarnessAdapter):
         container_exec_capture(container, ["chmod", "+x", "/usr/local/bin/opencode"])
 
     def _generate_skill_hints(self, skills: list[dict]) -> str:
-        """Generate generic skill usage hints for OpenCode.
+        """Generate MANDATORY skill loading instructions for OpenCode.
         
-        Creates instructions for loading and using any installed skills.
-        Content is generic and works with any skill that follows the
-        agentskills.io standard.
+        Creates imperative instructions requiring skill loading before any code
+        analysis. Matches Goose's proven .goosehints approach with two-layer enforcement.
         
         Args:
             skills: List of skill configurations
             
         Returns:
-            Markdown content with skill usage instructions
+            Markdown content with mandatory skill loading instructions
         """
         if not skills:
             return ""
         
         skill_list = "\n".join([
-            f"- **{s.get('name', 'unknown')}**: {s.get('description', 'Available for use')}"
+            f"- **{s.get('name', 'unknown')}**: {s.get('description', 'Required for this task')}"
             for s in skills
         ])
         
-        # Generic template that works with any skill
-        return f"""# Available Skills
+        load_commands = "\n".join([
+            f'skill({{ name: "{s.get("name", "unknown")}" }})'
+            for s in skills
+        ])
+        
+        return f"""# ⚠️ CRITICAL: SKILL LOADING REQUIRED
 
-You have access to {len(skills)} skill(s) that provide enhanced capabilities. Skills contain specialized instructions and tools for specific tasks.
+## STEP 1: Load All Skills (MANDATORY - DO THIS FIRST)
 
-## Installed Skills
+**YOU MUST load the following {len(skills)} skill(s) as your ABSOLUTE FIRST ACTION before any code analysis:**
 
 {skill_list}
 
-## How to Use Skills
-
-OpenCode provides a built-in `skill` tool to load skill content:
+**Use the `skill` tool to load each skill:**
 
 ```typescript
-skill({{ name: "skill-name" }})
+{load_commands}
 ```
 
-**Recommended workflow:**
+**DO NOT use find, grep, bash, read, or any analysis tools UNTIL you have loaded all skills above.**
 
-1. **Load the skill** using the `skill` tool with the skill name
-2. **Read the skill instructions** that are provided after loading
-3. **Follow the workflow** described in the skill content
-4. **Use skill-provided tools** as instructed
+---
 
-## When to Use Skills
+## STEP 2: Follow Skill Instructions (MANDATORY)
 
-- Load skills **early** in your workflow, ideally as one of your first actions
-- Skills often provide **more efficient** methods than standard tools
-- Check skill content for **specific workflows** and best practices
-- Skills may include **executable tools** or **analysis capabilities**
+After loading each skill, you will receive detailed instructions with sections like:
+- "⚠️ CRITICAL" 
+- "REQUIRED: Always Follow This Exact Sequence"
+- "YOU MUST" statements
 
-## Example: Loading a Skill
+**These instructions are NOT suggestions or guidance - they are MANDATORY procedures that you MUST follow exactly as written.**
 
-```typescript
-// Load a skill to access its instructions and tools
-skill({{ name: "rgctl" }})
-```
+**YOU MUST:**
+1. Read the entire skill content after loading
+2. Identify the "REQUIRED: Always Follow This Exact Sequence" section
+3. Execute EVERY step in that sequence IN ORDER
+4. Use ONLY the tools and methods the skill specifies
+5. Do NOT use forbidden tools (like find, grep, bash) until the skill says you can
 
-After loading, the skill content will be available in your context with detailed usage instructions.
+**Critical:** If the skill says "DO NOT use X UNTIL AFTER you...", then using X before completing those steps = automatic task failure, even if your code changes are correct.
+
+---
+
+## Why This Two-Layer Enforcement Exists
+
+Skills provide optimized workflows tested specifically for this benchmark. The system prompt (STEP 1) tells you to load skills. The skill content (STEP 2) tells you HOW to use it. Both layers are mandatory. Skipping either layer = automatic task failure.
 """
 
     def build_container_env(self, base_url: str, api_key: str) -> dict[str, str]:

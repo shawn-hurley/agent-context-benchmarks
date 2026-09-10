@@ -291,6 +291,11 @@ def build_config(port: int, model_spec, harness_api: str, include_token_count: b
         # Writes to filter_metadata (token.input, token.output, token.total).
         filters.append({"filter": "token_count", "provider": "anthropic", "conditions": _messages_only()})
 
+        # Classify request content type during request phase.
+        # Stores classification in ctx.extensions for later retrieval by token_usage_to_metrics.
+        # Must come BEFORE benchmark_metrics so both filters work together.
+        filters.append({"filter": "request_classifier", "conditions": _messages_only()})
+
         # Collect comprehensive metrics including all token types, timing, and sizes.
         # Also strips vertex_event from SSE streams to prevent SDK validation errors.
         # Writes to filter_metadata (token.input/output/total/cache_read/cache_creation),
@@ -420,6 +425,12 @@ def build_config(port: int, model_spec, harness_api: str, include_token_count: b
             trailing_filters.append({"filter": "token_count", "provider": "openai"})
         elif model_spec.api == "anthropic":
             trailing_filters.append({"filter": "token_count", "provider": "anthropic"})
+
+        # Classify request content type during request phase.
+        # Stores classification in ctx.extensions for later retrieval by token_usage_to_metrics.
+        # Must come BEFORE benchmark_metrics so both filters work together.
+        # No path conditions - classify ALL LLM requests (both Anthropic Messages API and OpenAI API)
+        trailing_filters.append({"filter": "request_classifier"})
 
         # Comprehensive token tracking across all backends.
         # Handles both OpenAI and Anthropic response formats automatically,

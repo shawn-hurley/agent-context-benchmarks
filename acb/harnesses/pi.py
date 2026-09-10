@@ -208,67 +208,71 @@ def _describe_event(obj: dict) -> tuple[str | None, bool]:
 
 
 def _generate_skill_hints_pi(skills: list[dict]) -> str:
-    """Generate generic skill usage hints for Pi.
+    """Generate MANDATORY skill loading instructions for Pi.
     
-    Creates instructions for accessing and using any installed skills.
-    Content is generic and works with any skill that follows the
-    agentskills.io standard.
+    Creates imperative instructions requiring skill loading before any code
+    analysis. Matches Goose's proven .goosehints approach with two-layer enforcement.
     
     Args:
         skills: List of skill configurations
         
     Returns:
-        Markdown content with skill usage instructions
+        Markdown content with mandatory skill loading instructions
     """
     if not skills:
         return ""
     
     skill_list = "\n".join([
-        f"- **{s.get('name', 'unknown')}** (location: `~/.pi/agent/skills/{s.get('name', 'unknown')}/SKILL.md`): {s.get('description', 'Available for use')}"
+        f"- **{s.get('name', 'unknown')}** at `/root/.pi/agent/skills/{s.get('name', 'unknown')}/SKILL.md`: {s.get('description', 'Required for this task')}"
         for s in skills
     ])
     
-    # Generic template that works with any skill
-    return f"""# Available Skills
+    read_commands = "\n".join([
+        f'read /root/.pi/agent/skills/{s.get("name", "unknown")}/SKILL.md'
+        for s in skills
+    ])
+    
+    return f"""# ⚠️ CRITICAL: SKILL LOADING REQUIRED
 
-You have access to {len(skills)} installed skill(s) that provide specialized capabilities for code analysis and development tasks.
+## STEP 1: Load All Skills (MANDATORY - DO THIS FIRST)
 
-## Installed Skills
+**YOU MUST load the following {len(skills)} skill(s) as your ABSOLUTE FIRST ACTION before any code analysis:**
 
 {skill_list}
 
-## How to Access Skills
-
-Pi automatically discovers skills from `~/.pi/agent/skills/`, but you need to **read the skill content** to access detailed instructions:
-
-**Use the `read` tool to access skill instructions:**
+**Use the `read` tool to load each skill:**
 
 ```bash
-read ~/.pi/agent/skills/skill-name/SKILL.md
+{read_commands}
 ```
 
-## Recommended Workflow
+**DO NOT use find, grep, bash, or analyze UNTIL you have loaded all skills above.**
 
-1. **Read the skill content** early in your workflow using the `read` tool
-2. **Follow the instructions** provided in the SKILL.md file
-3. **Use skill-provided commands** or tools as documented
-4. **Refer back** to skill content if you need guidance
+---
 
-## When to Use Skills
+## STEP 2: Follow Skill Instructions (MANDATORY)
 
-- **Load skill content early** - ideally as one of your first actions
-- Skills often provide **more efficient methods** than standard tools
-- Skills may include **executable binaries** or **analysis tools**
-- Follow the **specific workflows** described in each skill
+After loading each skill, you will receive detailed instructions with sections like:
+- "⚠️ CRITICAL" 
+- "REQUIRED: Always Follow This Exact Sequence"
+- "YOU MUST" statements
 
-## Example: Accessing a Skill
+**These instructions are NOT suggestions or guidance - they are MANDATORY procedures that you MUST follow exactly as written.**
 
-```bash
-# Read the skill instructions
-read ~/.pi/agent/skills/rgctl/SKILL.md
-```
+**YOU MUST:**
+1. Read the entire skill content after loading
+2. Identify the "REQUIRED: Always Follow This Exact Sequence" section
+3. Execute EVERY step in that sequence IN ORDER
+4. Use ONLY the tools and methods the skill specifies
+5. Do NOT use forbidden tools (like find, grep, bash) until the skill says you can
 
-After reading, follow the workflow and commands described in the skill content.
+**Critical:** If the skill says "DO NOT use X UNTIL AFTER you...", then using X before completing those steps = automatic task failure, even if your code changes are correct.
+
+---
+
+## Why This Two-Layer Enforcement Exists
+
+Skills provide optimized workflows tested specifically for this benchmark. The system prompt (STEP 1) tells you to load skills. The skill content (STEP 2) tells you HOW to use it. Both layers are mandatory. Skipping either layer = automatic task failure.
 """
 
 
