@@ -273,6 +273,7 @@ acb run --benchmark swebench-lite --harness goose \
 acb report runs/demo/goose            # single-harness run report
 acb report runs/demo                  # multi-harness suite report
 acb compare runs/a/goose runs/b/goose # side-by-side comparison
+acb compare runs/baseline runs/candidate --html # suite comparison with deltas
 ```
 
 **Report path notes**:
@@ -347,6 +348,12 @@ runs/demo/
 | `metrics.jsonl`   | derived per-instance context metrics + resolved status      |
 | `report.json`     | run-level rollup (resolve rate, avg/peak tokens, cache eff.)|
 | `report.html`     | interactive visualization with charts                       |
+
+Suite comparisons require the same benchmark and instance IDs on both sides.
+Models may differ. Harnesses are compared by union: shared harnesses receive
+baseline/candidate deltas, while harnesses present on only one side are marked
+accordingly. In the HTML comparison, click a harness's token value to inspect
+content classifications and tool-level token usage.
 
 ## Status
 

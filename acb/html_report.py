@@ -19,6 +19,7 @@ internet access for the charts; everything else is inline.
 from __future__ import annotations
 
 import json
+import html
 from collections import defaultdict
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -267,15 +268,98 @@ def _aggregate_benchmark_metrics(records: list[dict]) -> dict:
     }
 
 
+def _metric_total_tokens(metric: dict) -> float:
+    """Return all measured tokens for a classified request."""
+    return sum(
+        metric.get(field, 0) or 0
+        for field in (
+            "input_tokens",
+            "output_tokens",
+            "cache_read_input_tokens",
+            "cache_creation_input_tokens",
+        )
+    )
+
+
+def _tool_identities(metric: dict) -> list[dict]:
+    """Return normalized tool identities, including legacy records."""
+    tools = metric.get("tools") or []
+    if tools:
+        return tools
+    name = metric.get("tool_name")
+    if not name:
+        return []
+    return [{
+        "name": name,
+        "detail": metric.get("tool_detail"),
+        "call_id": metric.get("tool_call_id"),
+    }]
+
+
+def _normalize_tool_interactions(metrics: list[dict]) -> list[dict]:
+    """Combine tool-call and tool-result records into logical interactions.
+
+    The raw metrics remain request-level records. This derived stream is used
+    only for tool reporting, so a matching call/result pair is counted once
+    while retaining the summed token cost of both model requests.
+    """
+    interactions: dict[str, dict] = {}
+    anonymous_index = 0
+    for metric in metrics:
+        if metric.get("content_type") not in {"tool_call", "tool_result"}:
+            continue
+        tools = _tool_identities(metric)
+        if not tools:
+            tools = [{"name": "unknown", "detail": None, "call_id": None}]
+        token_share = _metric_total_tokens(metric) / len(tools)
+        for tool_index, tool in enumerate(tools):
+            call_id = tool.get("call_id")
+            if call_id:
+                key = f"call:{call_id}"
+            else:
+                key = f"record:{metric.get('request_id', anonymous_index)}:{tool_index}"
+                anonymous_index += 1
+            interaction = interactions.setdefault(key, {
+                "name": tool.get("name") or "unknown",
+                "detail": tool.get("detail"),
+                "call_id": call_id,
+                "request_ids": [],
+                "source_types": set(),
+                "tokens": 0.0,
+                "duration_ms": 0.0,
+            })
+            # Prefer the most informative detail if the paired records differ.
+            if not interaction["detail"] and tool.get("detail"):
+                interaction["detail"] = tool["detail"]
+            request_id = metric.get("request_id")
+            if request_id and request_id not in interaction["request_ids"]:
+                interaction["request_ids"].append(request_id)
+            interaction["source_types"].add(metric["content_type"])
+            interaction["tokens"] += token_share
+            interaction["duration_ms"] += (metric.get("duration_ms") or 0) / len(tools)
+
+    normalized = []
+    for interaction in interactions.values():
+        source_types = interaction.pop("source_types")
+        interaction["source_types"] = sorted(source_types)
+        interaction["complete_pair"] = source_types == {"tool_call", "tool_result"}
+        interaction["call_only"] = source_types == {"tool_call"}
+        interaction["result_only"] = source_types == {"tool_result"}
+        normalized.append(interaction)
+    return normalized
+
+
 def _content_type_breakdown(metrics: list[dict]) -> dict:
     """Generate data for content type visualization."""
     by_type = {}
     tool_usage = {}
-    
+
     for m in metrics:
         content_type = m.get('content_type', 'unknown')
-        tokens = m.get('input_tokens', 0)
-        
+        if content_type in ['tool_call', 'tool_result']:
+            continue
+        tokens = _metric_total_tokens(m)
+
         # Aggregate by content type
         if content_type not in by_type:
             by_type[content_type] = {
@@ -287,29 +371,32 @@ def _content_type_breakdown(metrics: list[dict]) -> dict:
         by_type[content_type]['total_tokens'] += tokens
         by_type[content_type]['turns'].append(m.get('turn_index', 0))
         
-        # Track tool usage
-        if content_type in ['tool_call', 'tool_result']:
-            tool_name = m.get('tool_name', 'unknown')
-            tool_detail = m.get('tool_detail')
-            
+    interactions = _normalize_tool_interactions(metrics)
+    if interactions:
+        by_type['tool_call'] = {
+            'count': len(interactions),
+            'total_tokens': sum(i['tokens'] for i in interactions),
+            'turns': [],
+        }
+        for interaction in interactions:
+            tool_name = interaction['name']
+            tool_detail = interaction['detail']
             tool_key = f"{tool_name}:{tool_detail}" if tool_detail else tool_name
-            
-            if tool_key not in tool_usage:
-                tool_usage[tool_key] = {
-                    'tool_name': tool_name,
-                    'tool_detail': tool_detail,
-                    'calls': 0,
-                    'results': 0,
-                    'total_tokens': 0
-                }
-            
-            if content_type == 'tool_call':
-                tool_usage[tool_key]['calls'] += 1
-            else:
-                tool_usage[tool_key]['results'] += 1
-            
-            tool_usage[tool_key]['total_tokens'] += tokens
-    
+            data = tool_usage.setdefault(tool_key, {
+                'tool_name': tool_name,
+                'tool_detail': tool_detail,
+                'interactions': 0,
+                'complete_pairs': 0,
+                'call_only': 0,
+                'result_only': 0,
+                'total_tokens': 0.0,
+            })
+            data['interactions'] += 1
+            data['complete_pairs'] += int(interaction['complete_pair'])
+            data['call_only'] += int(interaction['call_only'])
+            data['result_only'] += int(interaction['result_only'])
+            data['total_tokens'] += interaction['tokens']
+
     return {
         'by_type': by_type,
         'tool_usage': tool_usage
@@ -417,7 +504,7 @@ def _shell_command_breakdown(metrics: list[dict]) -> dict:
         if m.get('tool_detail') == 'bash':
             cmd = m.get('tool_name', 'unknown')
             content_type = m.get('content_type')
-            tokens = m.get('input_tokens', 0)
+            tokens = _metric_total_tokens(m)
             turn = m.get('turn_index', 0)
             
             if cmd not in commands:
@@ -469,7 +556,7 @@ def _calculate_tool_usage_percentage(metrics: list[dict]) -> dict:
                 'tool_result_tokens': 0
             }
         
-        tokens = m.get('input_tokens', 0)
+        tokens = _metric_total_tokens(m)
         content_type = m.get('content_type')
         
         by_instance[instance_id]['total_tokens'] += tokens
@@ -867,22 +954,18 @@ def _build_single_run_html(rd: _RunData) -> str:
                 reverse=True
             )
             for tool_key, data in sorted_tools:
-                total_uses = data['calls'] + data['results']
-                avg_tokens = data['total_tokens'] // total_uses if total_uses > 0 else 0
-                
-                # Determine type based on tool_detail
-                tool_type = "Shell" if data.get('tool_detail') == 'bash' else "Agent"
-                row_class = "shell-tool" if tool_type == "Shell" else "agent-tool"
-                
+                interactions = data['interactions']
+                avg_tokens = data['total_tokens'] / interactions if interactions else 0
                 tool_rows += f"""
-        <tr class="{row_class}">
-          <td>{tool_type}</td>
+        <tr>
           <td>{data['tool_name']}</td>
           <td>{data['tool_detail'] or '—'}</td>
-          <td>{data['calls']}</td>
-          <td>{data['results']}</td>
-          <td>{data['total_tokens']:,}</td>
-          <td>{avg_tokens:,}</td>
+          <td>{interactions}</td>
+          <td>{data['complete_pairs']}</td>
+          <td>{data['call_only']}</td>
+          <td>{data['result_only']}</td>
+          <td>{data['total_tokens']:,.0f}</td>
+          <td>{avg_tokens:,.0f}</td>
         </tr>"""
             content_type_html += f"""
     <h3>Tool Usage Statistics</h3>
@@ -890,13 +973,14 @@ def _build_single_run_html(rd: _RunData) -> str:
       <table>
         <thead>
           <tr>
-            <th>Type</th>
             <th>Tool Name</th>
             <th>Detail</th>
-            <th>Calls</th>
-            <th>Results</th>
+            <th>Interactions</th>
+            <th>Complete Pairs</th>
+            <th>Call Only</th>
+            <th>Result Only</th>
             <th>Total Tokens</th>
-            <th>Avg Tokens/Use</th>
+            <th>Avg Tokens/Interaction</th>
           </tr>
         </thead>
         <tbody>{tool_rows}
@@ -1368,9 +1452,19 @@ def _build_multi_run_html(runs: list[_RunData], is_suite: bool = False) -> str:
             for harness_data in suite_breakdown['by_harness'].values():
                 for tool_key, tool_data in harness_data['tool_usage'].items():
                     if tool_key not in all_tool_usage:
-                        all_tool_usage[tool_key] = {'tool_name': tool_data['tool_name'], 'tool_detail': tool_data['tool_detail'], 'calls': 0, 'results': 0, 'total_tokens': 0}
-                    all_tool_usage[tool_key]['calls'] += tool_data['calls']
-                    all_tool_usage[tool_key]['results'] += tool_data['results']
+                        all_tool_usage[tool_key] = {
+                            'tool_name': tool_data['tool_name'],
+                            'tool_detail': tool_data['tool_detail'],
+                            'interactions': 0,
+                            'complete_pairs': 0,
+                            'call_only': 0,
+                            'result_only': 0,
+                            'total_tokens': 0,
+                        }
+                    all_tool_usage[tool_key]['interactions'] += tool_data['interactions']
+                    all_tool_usage[tool_key]['complete_pairs'] += tool_data['complete_pairs']
+                    all_tool_usage[tool_key]['call_only'] += tool_data['call_only']
+                    all_tool_usage[tool_key]['result_only'] += tool_data['result_only']
                     all_tool_usage[tool_key]['total_tokens'] += tool_data['total_tokens']
             
             if all_tool_usage:
@@ -1382,22 +1476,17 @@ def _build_multi_run_html(runs: list[_RunData], is_suite: bool = False) -> str:
                     reverse=True
                 )
                 for tool_key, data in sorted_tool_usage:
-                    total_uses = data['calls'] + data['results']
-                    avg_tokens = data['total_tokens'] // total_uses if total_uses > 0 else 0
-                    
-                    # Determine type based on tool_detail
-                    tool_type = "Shell" if data.get('tool_detail') == 'bash' else "Agent"
-                    row_class = "shell-tool" if tool_type == "Shell" else "agent-tool"
-                    
+                    avg_tokens = data['total_tokens'] / data['interactions'] if data['interactions'] else 0
                     tool_rows += f"""
-        <tr class="{row_class}">
-          <td>{tool_type}</td>
+        <tr>
           <td>{data['tool_name']}</td>
           <td>{data['tool_detail'] or '—'}</td>
-          <td>{data['calls']}</td>
-          <td>{data['results']}</td>
-          <td>{data['total_tokens']:,}</td>
-          <td>{avg_tokens:,}</td>
+          <td>{data['interactions']}</td>
+          <td>{data['complete_pairs']}</td>
+          <td>{data['call_only']}</td>
+          <td>{data['result_only']}</td>
+          <td>{data['total_tokens']:,.0f}</td>
+          <td>{avg_tokens:,.0f}</td>
         </tr>"""
                 content_type_html += f"""
     <h3>Tool Usage Statistics (Suite Total)</h3>
@@ -1405,13 +1494,14 @@ def _build_multi_run_html(runs: list[_RunData], is_suite: bool = False) -> str:
       <table>
         <thead>
           <tr>
-            <th>Type</th>
             <th>Tool Name</th>
             <th>Detail</th>
-            <th>Calls</th>
-            <th>Results</th>
+            <th>Interactions</th>
+            <th>Complete Pairs</th>
+            <th>Call Only</th>
+            <th>Result Only</th>
             <th>Total Tokens</th>
-            <th>Avg Tokens/Use</th>
+            <th>Avg Tokens/Interaction</th>
           </tr>
         </thead>
         <tbody>{tool_rows}
@@ -1854,6 +1944,166 @@ def _render_html(
 # Public entry point
 # ---------------------------------------------------------------------------
 
+def _load_suite_runs(suite_dir: Path) -> list[_RunData]:
+    """Load harness reports from a suite directory in stable order."""
+    return [
+        _RunData.load(item, harness_name=item.name)
+        for item in sorted(Path(suite_dir).iterdir())
+        if item.is_dir() and (item / "report.json").exists()
+    ]
+
+
+def _comparison_value(value: float | int | None) -> dict[str, float | int | None]:
+    return {"value": value}
+
+
+def _comparison_payload(baseline_dir: Path, candidate_dir: Path) -> dict:
+    baseline_report = json.loads((baseline_dir / "report.json").read_text())
+    candidate_report = json.loads((candidate_dir / "report.json").read_text())
+    if baseline_report.get("benchmark") != candidate_report.get("benchmark"):
+        raise ValueError("comparison requires matching benchmarks")
+
+    baseline_runs = {r.run_id: r for r in _load_suite_runs(baseline_dir)}
+    candidate_runs = {r.run_id: r for r in _load_suite_runs(candidate_dir)}
+    baseline_instances = {
+        m["instance_id"] for rd in baseline_runs.values() for m in rd.metrics
+    }
+    candidate_instances = {
+        m["instance_id"] for rd in candidate_runs.values() for m in rd.metrics
+    }
+    if baseline_instances != candidate_instances:
+        only_baseline = sorted(baseline_instances - candidate_instances)
+        only_candidate = sorted(candidate_instances - baseline_instances)
+        raise ValueError(
+            "comparison requires matching instance sets; "
+            f"only in baseline={only_baseline}, only in candidate={only_candidate}"
+        )
+
+    def report_value(rd: _RunData | None, key: str):
+        return rd.report.get(key) if rd else None
+
+    rows = []
+    for harness in sorted(set(baseline_runs) | set(candidate_runs)):
+        before = baseline_runs.get(harness)
+        after = candidate_runs.get(harness)
+        metrics_before = {m["instance_id"]: m for m in before.metrics} if before else {}
+        metrics_after = {m["instance_id"]: m for m in after.metrics} if after else {}
+        instances = []
+        for instance_id in sorted(baseline_instances):
+            left = metrics_before.get(instance_id)
+            right = metrics_after.get(instance_id)
+            instances.append({
+                "instance_id": instance_id,
+                "baseline_resolved": left.get("resolved") if left else None,
+                "candidate_resolved": right.get("resolved") if right else None,
+                "baseline_tokens": left.get("total_tokens") if left else None,
+                "candidate_tokens": right.get("total_tokens") if right else None,
+            })
+
+        def detail(rd: _RunData | None) -> dict | None:
+            if not rd:
+                return None
+            requests = [r for m in rd.metrics for r in m.get("requests", [])]
+            breakdown = _content_type_breakdown(requests)
+            return {
+                "content": breakdown["by_type"],
+                "tools": breakdown["tool_usage"],
+                "tool_percentage": _calculate_tool_usage_percentage(requests),
+            }
+
+        rows.append({
+            "harness": harness,
+            "baseline": {
+                "model": report_value(before, "model"),
+                "resolved": report_value(before, "resolved"),
+                "resolve_rate": report_value(before, "resolve_rate"),
+                "avg_total_tokens": report_value(before, "avg_total_tokens"),
+                "tokens_per_resolved": report_value(before, "tokens_per_resolved"),
+                "detail": detail(before),
+            },
+            "candidate": {
+                "model": report_value(after, "model"),
+                "resolved": report_value(after, "resolved"),
+                "resolve_rate": report_value(after, "resolve_rate"),
+                "avg_total_tokens": report_value(after, "avg_total_tokens"),
+                "tokens_per_resolved": report_value(after, "tokens_per_resolved"),
+                "detail": detail(after),
+            },
+            "instances": instances,
+        })
+    return {
+        "benchmark": baseline_report.get("benchmark"),
+        "baseline_run_id": baseline_report.get("suite_id") or baseline_report.get("run_id") or baseline_dir.name,
+        "candidate_run_id": candidate_report.get("suite_id") or candidate_report.get("run_id") or candidate_dir.name,
+        "baseline_model": baseline_report.get("model"),
+        "candidate_model": candidate_report.get("model"),
+        "rows": rows,
+    }
+
+
+def _build_comparison_html(baseline_dir: Path, candidate_dir: Path) -> str:
+    payload = _comparison_payload(baseline_dir, candidate_dir)
+    payload_json = json.dumps(payload, separators=(",", ":"))
+    return f"""<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><title>acb comparison</title>
+<style>
+body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 2rem; background: #f7f7f9; color: #1a1a1a; }}
+h1 {{ margin-bottom: .25rem; }} .meta {{ color: #666; margin-bottom: 1.5rem; }}
+table {{ border-collapse: collapse; width: 100%; background: white; box-shadow: 0 1px 3px #0001; }}
+th, td {{ padding: .65rem .8rem; border-bottom: 1px solid #eee; text-align: left; }}
+th {{ background: #fafafa; color: #666; font-size: .78rem; text-transform: uppercase; }}
+.num {{ text-align: right; font-variant-numeric: tabular-nums; }}
+.better {{ color: #187a37; }} .worse {{ color: #b42318; }} .muted {{ color: #888; }}
+button {{ border: 0; background: none; color: #1769aa; cursor: pointer; text-decoration: underline; font: inherit; }}
+.detail {{ display: none; background: white; margin: 1rem 0 2rem; padding: 1rem; box-shadow: 0 1px 3px #0001; }}
+.detail.open {{ display: block; }} .detail h3 {{ margin-top: 0; }} .detail table {{ box-shadow: none; }}
+.status {{ font-weight: 600; }}
+.run-labels {{ display: flex; gap: 1rem; margin: 1rem 0 1.25rem; flex-wrap: wrap; }}
+.run-labels div {{ background: white; border-left: 4px solid #1769aa; padding: .7rem 1rem; min-width: 220px; box-shadow: 0 1px 3px #0001; }}
+.run-labels div:first-child {{ border-left-color: #187a37; }}
+.run-labels span {{ display: block; color: #666; font-size: .75rem; text-transform: uppercase; }}
+.run-labels strong {{ display: block; margin-top: .2rem; font-size: 1.05rem; }}
+small {{ font-weight: normal; text-transform: none; }}
+</style></head><body>
+<h1>Benchmark Comparison</h1>
+<div class="run-labels"><div><span>Candidate</span><strong>{html.escape(str(payload['candidate_run_id']))}</strong></div>
+<div><span>Baseline</span><strong>{html.escape(str(payload['baseline_run_id']))}</strong></div></div>
+<div class="meta">Benchmark: <strong>{html.escape(str(payload['benchmark']))}</strong> &middot;
+Candidate model: {html.escape(str(payload['candidate_model']))} &middot;
+Baseline model: {html.escape(str(payload['baseline_model']))}</div>
+<table><thead><tr><th>Harness</th><th>Correctness<br><small>Candidate / Baseline</small></th><th>Resolve delta<br><small>Candidate - Baseline</small></th>
+<th>Avg tokens<br><small>Candidate / Baseline</small></th><th>Token delta<br><small>Candidate - Baseline</small></th><th>Instances</th><th>Details</th></tr></thead>
+<tbody id="summary"></tbody></table>
+<div id="details"></div>
+<script>
+const comparison = {payload_json};
+const fmt = value => value == null ? 'n/a' : Number(value).toLocaleString(undefined, {{maximumFractionDigits: 1}});
+const delta = (a, b) => a == null || b == null ? null : b - a;
+const deltaCell = (a, b, digits = 1) => {{ const d = delta(a,b); if (d == null) return '<span class="muted">n/a</span>'; const cls = d < 0 ? 'better' : d > 0 ? 'worse' : 'muted'; return `<span class="${{cls}}">${{d > 0 ? '+' : ''}}${{Number(d).toLocaleString(undefined, {{maximumFractionDigits: digits}})}}</span>`; }};
+const correctness = (row) => {{
+  if (!row.baseline.detail && !row.candidate.detail) return '<span class="muted">harness missing</span>';
+  return `${{fmt(row.candidate.resolved)}} / ${{fmt(row.baseline.resolved)}}`;
+}};
+const summary = document.getElementById('summary');
+comparison.rows.forEach((row, index) => {{
+  const missing = !row.baseline.detail ? ' <span class="muted">(only in candidate)</span>' : !row.candidate.detail ? ' <span class="muted">(only in baseline)</span>' : '';
+  summary.insertAdjacentHTML('beforeend', `<tr><td><strong>${{row.harness}}</strong>${{missing}}</td><td>${{correctness(row)}}</td><td class="num">${{deltaCell(row.baseline.resolve_rate, row.candidate.resolve_rate, 1)}}</td><td class="num"><button data-index="${{index}}">${{fmt(row.candidate.avg_total_tokens)}} / ${{fmt(row.baseline.avg_total_tokens)}}</button></td><td class="num">${{deltaCell(row.baseline.avg_total_tokens, row.candidate.avg_total_tokens, 0)}}</td><td class="num">${{row.instances.length}}</td><td><button data-index="${{index}}">Open breakdown</button></td></tr>`);
+}});
+const details = document.getElementById('details');
+const renderBreakdown = (row, side) => {{
+  const data = row[side].detail; if (!data) return '<p class="muted">No data for this side.</p>';
+  const types = Object.entries(data.content).map(([key, value]) => `<tr><td>${{key}}</td><td class="num">${{fmt(value.total_tokens)}}</td><td class="num">${{value.count}}</td></tr>`).join('');
+  const tools = Object.entries(data.tools).map(([key, value]) => `<tr><td>${{value.tool_name}}</td><td>${{value.tool_detail || ''}}</td><td class="num">${{value.interactions}}</td><td class="num">${{value.complete_pairs}}</td><td class="num">${{value.call_only}}</td><td class="num">${{value.result_only}}</td><td class="num">${{fmt(value.total_tokens)}}</td></tr>`).join('');
+  const runName = side === 'candidate' ? comparison.candidate_run_id : comparison.baseline_run_id;
+  return `<h3>${{side[0].toUpperCase() + side.slice(1)}}: ${{runName}} (${{row[side].model || ''}})</h3><h4>Content classification</h4><table><tr><th>Type</th><th>Tokens</th><th>Records</th></tr>${{types}}</table><h4>Tools</h4><table><tr><th>Name</th><th>Detail</th><th>Interactions</th><th>Complete Pairs</th><th>Call Only</th><th>Result Only</th><th>Tokens</th></tr>${{tools || '<tr><td colspan="7">No tool data</td></tr>'}}</table>`;
+}};
+document.querySelectorAll('button[data-index]').forEach(button => button.addEventListener('click', () => {{
+  const index = Number(button.dataset.index); const row = comparison.rows[index]; const id = `detail-${{index}}`; let panel = document.getElementById(id);
+  if (!panel) {{ panel = document.createElement('section'); panel.id = id; panel.className = 'detail'; panel.innerHTML = `<h2>${{row.harness}} token breakdown</h2>${{renderBreakdown(row, 'candidate')}}${{renderBreakdown(row, 'baseline')}}<h3>Correctness by instance</h3><table><tr><th>Instance</th><th>Candidate</th><th>Baseline</th><th>Token delta<br><small>Candidate - Baseline</small></th></tr>${{row.instances.map(i => `<tr><td>${{i.instance_id}}</td><td>${{i.candidate_resolved == null ? 'n/a' : i.candidate_resolved ? 'resolved' : 'unresolved'}}</td><td>${{i.baseline_resolved == null ? 'n/a' : i.baseline_resolved ? 'resolved' : 'unresolved'}}</td><td class="num">${{deltaCell(i.baseline_tokens, i.candidate_tokens, 0)}}</td></tr>`).join('')}}</table>`; details.appendChild(panel); }}
+  panel.classList.toggle('open'); panel.scrollIntoView({{behavior: 'smooth', block: 'nearest'}});
+}}));
+</script></body></html>"""
+
 def build_html_report(run_dirs: str | Path | list[str | Path]) -> str:
     """Build a self-contained HTML report for one or more runs or a suite.
 
@@ -1889,8 +2139,11 @@ def build_html_report(run_dirs: str | Path | list[str | Path]) -> str:
             runs = [_RunData.load(run_dir)]
             return _build_single_run_html(runs[0])
     else:
-        # List of directories (explicit multi-run comparison)
+        # List of directories (explicit multi-run comparison). Two suite roots
+        # are treated as baseline/candidate comparison inputs.
         run_dirs = [Path(d) for d in run_dirs]
+        if len(run_dirs) == 2 and all(_is_suite_directory(d) for d in run_dirs):
+            return _build_comparison_html(run_dirs[0], run_dirs[1])
         runs = [_RunData.load(d) for d in run_dirs]
         
         if len(runs) == 1:

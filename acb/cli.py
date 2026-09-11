@@ -98,6 +98,41 @@ def _cmd_clean(args):
 
 
 def _cmd_compare(args):
+    if args.html is not None:
+        from acb.html_report import build_html_report
+        out_path = Path(args.html) if args.html else Path(args.run_dirs[0]) / "comparison.html"
+        out_path.write_text(build_html_report([Path(d) for d in args.run_dirs]))
+        print(f"html comparison: {out_path}")
+        return
+
+    from acb.html_report import _comparison_payload, _is_suite_directory
+    suite_dirs = [Path(d) for d in args.run_dirs]
+    if len(suite_dirs) == 2 and all(_is_suite_directory(d) for d in suite_dirs):
+        payload = _comparison_payload(suite_dirs[0], suite_dirs[1])
+        cols = ["harness", "baseline_resolve_rate", "candidate_resolve_rate",
+                "resolve_delta", "baseline_avg_tokens", "candidate_avg_tokens",
+                "token_delta"]
+        print("\t".join(cols))
+        for row in payload["rows"]:
+            before = row["baseline"]
+            after = row["candidate"]
+            rate_delta = (
+                after["resolve_rate"] - before["resolve_rate"]
+                if before["resolve_rate"] is not None and after["resolve_rate"] is not None
+                else None
+            )
+            token_delta = (
+                after["avg_total_tokens"] - before["avg_total_tokens"]
+                if before["avg_total_tokens"] is not None and after["avg_total_tokens"] is not None
+                else None
+            )
+            print("\t".join(str(v) for v in [
+                row["harness"], before["resolve_rate"], after["resolve_rate"],
+                rate_delta, before["avg_total_tokens"], after["avg_total_tokens"],
+                token_delta,
+            ]))
+        return
+
     rows = []
     for d in args.run_dirs:
         p = Path(d) / "report.json"
@@ -137,6 +172,8 @@ def main(argv=None):
 
     c = sub.add_parser("compare", help="compare multiple runs")
     c.add_argument("run_dirs", nargs="+")
+    c.add_argument("--html", nargs="?", const="", default=None,
+                   help="write an interactive HTML comparison (default: <baseline>/comparison.html)")
     c.set_defaults(func=_cmd_compare)
 
     cl = sub.add_parser("clean", help="delete all run directories, keeping the cache")

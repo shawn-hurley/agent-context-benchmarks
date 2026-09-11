@@ -79,8 +79,6 @@ const VERTEX_CACHE_CREATION_HEADER: &str = "x-vertex-ai-cache-creation-input-tok
 const OPENAI_USAGE_PROMPT_TOKENS_HEADER: &str = "x-openai-usage-prompt-tokens";
 const OPENAI_USAGE_COMPLETION_TOKENS_HEADER: &str = "x-openai-usage-completion-tokens";
 
-
-
 /// Benchmark metric record written to JSONL file.
 #[derive(Serialize, Deserialize, Clone, Debug, Default)]
 pub struct BenchmarkMetric {
@@ -189,12 +187,18 @@ impl BenchmarkMetricsFilter {
                 data.output_tokens = v;
             }
         }
-        if let Some(v) = usage.get("cache_read_input_tokens").and_then(|v| v.as_u64()) {
+        if let Some(v) = usage
+            .get("cache_read_input_tokens")
+            .and_then(|v| v.as_u64())
+        {
             if v > 0 || data.cache_read_input_tokens == 0 {
                 data.cache_read_input_tokens = v;
             }
         }
-        if let Some(v) = usage.get("cache_creation_input_tokens").and_then(|v| v.as_u64()) {
+        if let Some(v) = usage
+            .get("cache_creation_input_tokens")
+            .and_then(|v| v.as_u64())
+        {
             if v > 0 || data.cache_creation_input_tokens == 0 {
                 data.cache_creation_input_tokens = v;
             }
@@ -290,7 +294,10 @@ impl BenchmarkMetricsFilter {
                 if let Some(usage) = evt.get("usage") {
                     if let Some(v) = usage.get("output_tokens").and_then(|v| v.as_u64()) {
                         data.output_tokens = v;
-                        debug!(output_tokens = v, "updated output_tokens from message_delta");
+                        debug!(
+                            output_tokens = v,
+                            "updated output_tokens from message_delta"
+                        );
                     }
                 }
             }
@@ -311,7 +318,8 @@ impl BenchmarkMetricsFilter {
                             if let Some(v) = usage.get("prompt_tokens").and_then(|v| v.as_u64()) {
                                 data.input_tokens = v;
                             }
-                            if let Some(v) = usage.get("completion_tokens").and_then(|v| v.as_u64()) {
+                            if let Some(v) = usage.get("completion_tokens").and_then(|v| v.as_u64())
+                            {
                                 data.output_tokens = v;
                             }
                             if data.input_tokens > 0 || data.output_tokens > 0 {
@@ -359,7 +367,7 @@ impl BenchmarkMetricsFilter {
                 // Caller uses None (not Some(empty)) so the stream stays open.
                 warn!("SSE chunk contains invalid UTF-8, deferring");
                 data.sse_partial = combined;
-                return Bytes::new();  // caller converts empty → None
+                return Bytes::new(); // caller converts empty → None
             }
         };
 
@@ -382,9 +390,11 @@ impl BenchmarkMetricsFilter {
                 continue;
             }
             // Peek at the event type before extracting tokens
-            let is_vertex_event = block
-                .lines()
-                .any(|l| l.strip_prefix("event:").map(|v| v.trim() == "vertex_event").unwrap_or(false));
+            let is_vertex_event = block.lines().any(|l| {
+                l.strip_prefix("event:")
+                    .map(|v| v.trim() == "vertex_event")
+                    .unwrap_or(false)
+            });
 
             Self::extract_tokens_from_sse_block(block, data);
 
@@ -519,8 +529,8 @@ impl HttpFilter for BenchmarkMetricsFilter {
             .get(http::header::CONTENT_ENCODING)
             .and_then(|v| v.to_str().ok())
             .unwrap_or("");
-        data.can_parse_body = content_encoding.is_empty()
-            || content_encoding.eq_ignore_ascii_case("identity");
+        data.can_parse_body =
+            content_encoding.is_empty() || content_encoding.eq_ignore_ascii_case("identity");
 
         debug!(
             is_streaming = data.is_streaming,
@@ -558,7 +568,10 @@ impl HttpFilter for BenchmarkMetricsFilter {
             if let Ok(s) = val.to_str() {
                 if let Some(count) = Self::extract_token_count(s) {
                     data.cache_read_input_tokens = count;
-                    debug!(cache_read_input_tokens = count, "extracted from Vertex header");
+                    debug!(
+                        cache_read_input_tokens = count,
+                        "extracted from Vertex header"
+                    );
                 }
             }
         }
@@ -567,7 +580,10 @@ impl HttpFilter for BenchmarkMetricsFilter {
             if let Ok(s) = val.to_str() {
                 if let Some(count) = Self::extract_token_count(s) {
                     data.cache_creation_input_tokens = count;
-                    debug!(cache_creation_input_tokens = count, "extracted from Vertex header");
+                    debug!(
+                        cache_creation_input_tokens = count,
+                        "extracted from Vertex header"
+                    );
                 }
             }
         }
@@ -671,10 +687,16 @@ impl HttpFilter for BenchmarkMetricsFilter {
                 ctx.set_metadata("token.total", metric.total_tokens.to_string());
             }
             if ctx.get_metadata("token.cache_read").is_none() {
-                ctx.set_metadata("token.cache_read", metric.cache_read_input_tokens.to_string());
+                ctx.set_metadata(
+                    "token.cache_read",
+                    metric.cache_read_input_tokens.to_string(),
+                );
             }
             if ctx.get_metadata("token.cache_creation").is_none() {
-                ctx.set_metadata("token.cache_creation", metric.cache_creation_input_tokens.to_string());
+                ctx.set_metadata(
+                    "token.cache_creation",
+                    metric.cache_creation_input_tokens.to_string(),
+                );
             }
 
             debug!(

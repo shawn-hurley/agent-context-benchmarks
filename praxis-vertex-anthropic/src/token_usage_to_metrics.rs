@@ -10,7 +10,9 @@
 use async_trait::async_trait;
 use bytes::Bytes;
 use lazy_static::lazy_static;
-use praxis_filter::{BodyAccess, BodyMode, FilterAction, FilterError, HttpFilter, HttpFilterContext};
+use praxis_filter::{
+    BodyAccess, BodyMode, FilterAction, FilterError, HttpFilter, HttpFilterContext,
+};
 use serde::{Deserialize, Serialize};
 use std::fs::{File, OpenOptions};
 use std::io::{BufRead, BufReader, BufWriter, Write};
@@ -29,7 +31,7 @@ const META_TOKEN_CACHE_READ: &str = "token.cache_read";
 const META_TOKEN_CACHE_CREATION: &str = "token.cache_creation";
 
 /// Classification of request content type
-#[derive(Serialize, Deserialize, Clone, Debug)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
 pub enum ContentType {
     SystemPrompt,
@@ -47,8 +49,19 @@ pub struct RequestClassification {
     pub content_type: ContentType,
     pub tool_name: Option<String>,
     pub tool_detail: Option<String>,
+    pub tools: Vec<ToolIdentity>,
     pub tool_count: Option<u32>,
     pub message_count: Option<u32>,
+}
+
+/// A normalized tool identity extracted from an OpenAI or Anthropic request.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct ToolIdentity {
+    pub name: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub detail: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub call_id: Option<String>,
 }
 
 lazy_static! {
@@ -77,7 +90,7 @@ pub struct BenchmarkMetric {
     pub endpoint: String,
     pub request_body_bytes: usize,
     pub response_body_bytes: usize,
-    
+
     // Content classification fields
     #[serde(skip_serializing_if = "Option::is_none")]
     pub content_type: Option<ContentType>,
@@ -85,6 +98,8 @@ pub struct BenchmarkMetric {
     pub tool_name: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_detail: Option<String>,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub tools: Vec<ToolIdentity>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_count: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -152,14 +167,19 @@ impl TokenUsageToMetricsFilter {
     }
 
     /// Write metric to file if request_id is not already present.
-    fn write_metric_if_unique(&self, metric: &BenchmarkMetric) -> Result<(), Box<dyn std::error::Error>> {
+    fn write_metric_if_unique(
+        &self,
+        metric: &BenchmarkMetric,
+    ) -> Result<(), Box<dyn std::error::Error>> {
         if Self::request_id_exists(&metric.request_id) {
             debug!(request_id = %metric.request_id, "request already in metrics file, skipping");
             return Ok(());
         }
 
         let json = serde_json::to_string(metric)?;
-        let mut file = METRICS_FILE.lock().map_err(|e| format!("lock failed: {e}"))?;
+        let mut file = METRICS_FILE
+            .lock()
+            .map_err(|e| format!("lock failed: {e}"))?;
         writeln!(file, "{}", json)?;
         file.flush()?;
 
@@ -182,11 +202,17 @@ impl HttpFilter for TokenUsageToMetricsFilter {
         BodyMode::Stream
     }
 
-    async fn on_request(&self, _ctx: &mut HttpFilterContext<'_>) -> Result<FilterAction, FilterError> {
+    async fn on_request(
+        &self,
+        _ctx: &mut HttpFilterContext<'_>,
+    ) -> Result<FilterAction, FilterError> {
         Ok(FilterAction::Continue)
     }
 
-    async fn on_response(&self, _ctx: &mut HttpFilterContext<'_>) -> Result<FilterAction, FilterError> {
+    async fn on_response(
+        &self,
+        _ctx: &mut HttpFilterContext<'_>,
+    ) -> Result<FilterAction, FilterError> {
         // Defer all metric writing to on_response_body at end_of_stream,
         // when token metadata has been populated by benchmark_metrics or token_count.
         Ok(FilterAction::Continue)
@@ -221,21 +247,27 @@ impl HttpFilter for TokenUsageToMetricsFilter {
             .unwrap_or(0);
 
         // Extract tokens and cache info from metadata (written by token_count filter or benchmark_metrics)
-        let (input_tokens, output_tokens, total_tokens, cache_read_input_tokens, cache_creation_input_tokens) =
-            Self::extract_tokens_from_metadata(ctx);
+        let (
+            input_tokens,
+            output_tokens,
+            total_tokens,
+            cache_read_input_tokens,
+            cache_creation_input_tokens,
+        ) = Self::extract_tokens_from_metadata(ctx);
 
         // Extract classification from extensions (written during request phase by request_classifier)
-        let (content_type, tool_name, tool_detail, tool_count, message_count) = 
+        let (content_type, tool_name, tool_detail, tools, tool_count, message_count) =
             if let Some(classification) = ctx.extensions.get::<RequestClassification>() {
                 (
                     Some(classification.content_type.clone()),
                     classification.tool_name.clone(),
                     classification.tool_detail.clone(),
+                    classification.tools.clone(),
                     classification.tool_count,
                     classification.message_count,
                 )
             } else {
-                (None, None, None, None, None)
+                (None, None, None, Vec::new(), None, None)
             };
 
         // Build metric record
@@ -255,6 +287,7 @@ impl HttpFilter for TokenUsageToMetricsFilter {
             content_type,
             tool_name,
             tool_detail,
+            tools,
             tool_count,
             message_count,
         };
