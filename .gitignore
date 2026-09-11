@@ -15,7 +15,11 @@ config/
 .config/
 
 # vendored benchmark evaluation artifacts
-SWE-bench/
+# SWE-bench submodule itself is tracked, but ignore its artifacts:
+SWE-bench/.venv/
+SWE-bench/logs/
+SWE-bench/__pycache__/
+SWE-bench/*.egg-info/
 
 bin/
 *_PLAN.md

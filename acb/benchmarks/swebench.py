@@ -41,6 +41,16 @@ def _ensure_swebench_venv() -> Path:
     This keeps docker, modal, unidiff, and the rest of swebench's dep tree
     completely isolated from acb's own venv.
     """
+    # Check if SWE-bench submodule has been initialized
+    if not _SWEBENCH_DIR.exists():
+        raise FileNotFoundError(
+            f"SWE-bench submodule not found at {_SWEBENCH_DIR}\n\n"
+            f"Initialize the submodule with:\n"
+            f"  git submodule update --init\n\n"
+            f"Or clone with --recursive flag:\n"
+            f"  git clone --recursive <repo-url>"
+        )
+    
     python = _SWEBENCH_VENV / "bin" / "python"
     if python.exists():
         return python

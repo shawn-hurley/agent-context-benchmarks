@@ -24,10 +24,10 @@ anything, not just to evaluate — see below.
    podman machine init && podman machine start
    ```
 
-2. **SWE-bench evaluation harness** (vendored dependency):
+2. **SWE-bench evaluation harness** (vendored as git submodule):
    ```bash
-   # Clone the evaluation harness
-   git clone https://github.com/princeton-nlp/SWE-bench.git
+   # Initialize the submodule (if you didn't clone with --recursive)
+   git submodule update --init
    ```
 
 3. **Podman shim for macOS** (SWE-bench's evaluation code shells out to `docker`):
@@ -40,8 +40,16 @@ anything, not just to evaluate — see below.
 ### Install ACB
 
 ```bash
+# If you didn't clone with --recursive, initialize submodules first
+git submodule update --init
+
 pip install -e '.[datasets]'          # datasets extra needed for SWE-bench
-pip install -e ./SWE-bench            # install the vendored evaluation harness
+# Note: SWE-bench venv is created automatically on first evaluation run
+```
+
+**Quick clone with all submodules:**
+```bash
+git clone --recursive https://github.com/shawn-hurley/agent-context-benchmarks.git
 ```
 
 `acb` auto-detects Podman (`container_backend: auto` in `benchmarks.yaml`) and
