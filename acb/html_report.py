@@ -399,11 +399,166 @@ def _content_type_suite_breakdown(runs: list["_RunData"]) -> dict:
     }
 
 
+def _shell_command_breakdown(metrics: list[dict]) -> dict:
+    """Extract and aggregate shell command usage from bash tool calls.
+    
+    Returns:
+        {
+            'rgctl': {'calls': 15, 'results': 15, 'total_tokens': 40000, 'turns': [...]},
+            'git': {'calls': 20, 'results': 20, 'total_tokens': 35000, 'turns': [...]},
+            ...
+        }
+        Sorted by total_tokens (descending)
+    """
+    commands = {}
+    
+    for m in metrics:
+        # Only process bash-executed commands
+        if m.get('tool_detail') == 'bash':
+            cmd = m.get('tool_name', 'unknown')
+            content_type = m.get('content_type')
+            tokens = m.get('input_tokens', 0)
+            turn = m.get('turn_index', 0)
+            
+            if cmd not in commands:
+                commands[cmd] = {
+                    'calls': 0,
+                    'results': 0,
+                    'total_tokens': 0,
+                    'turns': []
+                }
+            
+            if content_type == 'tool_call':
+                commands[cmd]['calls'] += 1
+            elif content_type == 'tool_result':
+                commands[cmd]['results'] += 1
+            
+            commands[cmd]['total_tokens'] += tokens
+            commands[cmd]['turns'].append(turn)
+    
+    # Sort by total tokens (descending)
+    return dict(sorted(commands.items(), key=lambda x: x[1]['total_tokens'], reverse=True))
+
+
+def _calculate_tool_usage_percentage(metrics: list[dict]) -> dict:
+    """Calculate what percentage of tokens are used by tools, averaged per instance.
+    
+    For each instance:
+      - Calculate: (tool_tokens / total_tokens) * 100
+    Then average across all instances.
+    
+    Returns:
+        {
+            'average_percentage': 42.5,
+            'min_percentage': 20.0,
+            'max_percentage': 65.0,
+            'tool_call_tokens': 50000,
+            'tool_result_tokens': 45000,
+            'total_tokens': 225000
+        }
+    """
+    # Group by instance_id
+    by_instance = {}
+    for m in metrics:
+        instance_id = m.get('instance_id', 'unknown')
+        if instance_id not in by_instance:
+            by_instance[instance_id] = {
+                'tool_tokens': 0,
+                'total_tokens': 0,
+                'tool_call_tokens': 0,
+                'tool_result_tokens': 0
+            }
+        
+        tokens = m.get('input_tokens', 0)
+        content_type = m.get('content_type')
+        
+        by_instance[instance_id]['total_tokens'] += tokens
+        
+        if content_type in ['tool_call', 'tool_result']:
+            by_instance[instance_id]['tool_tokens'] += tokens
+            if content_type == 'tool_call':
+                by_instance[instance_id]['tool_call_tokens'] += tokens
+            else:
+                by_instance[instance_id]['tool_result_tokens'] += tokens
+    
+    # Calculate percentages per instance
+    percentages = []
+    for data in by_instance.values():
+        if data['total_tokens'] > 0:
+            pct = (data['tool_tokens'] / data['total_tokens']) * 100
+            percentages.append(pct)
+    
+    # Aggregate stats across all instances
+    total_tool_call = sum(d['tool_call_tokens'] for d in by_instance.values())
+    total_tool_result = sum(d['tool_result_tokens'] for d in by_instance.values())
+    total_all = sum(d['total_tokens'] for d in by_instance.values())
+    
+    return {
+        'average_percentage': sum(percentages) / len(percentages) if percentages else 0.0,
+        'min_percentage': min(percentages) if percentages else 0.0,
+        'max_percentage': max(percentages) if percentages else 0.0,
+        'tool_call_tokens': total_tool_call,
+        'tool_result_tokens': total_tool_result,
+        'total_tokens': total_all
+    }
+
+
+def _shell_command_suite_breakdown(runs: list["_RunData"]) -> dict:
+    """Aggregate shell command data across all harnesses in a suite.
+    
+    Returns:
+        {
+            'rgctl': {
+                'total_calls': 47,
+                'total_tokens': 125000,
+                'by_harness': {
+                    'harness_a': {'calls': 15, 'tokens': 40000},
+                    'harness_b': {'calls': 20, 'tokens': 55000},
+                    'harness_c': {'calls': 12, 'tokens': 30000}
+                }
+            },
+            ...
+        }
+        Sorted by total_tokens (descending)
+    """
+    all_shell_commands = {}
+    
+    for rd in runs:
+        harness_name = rd.harness_name or rd.run_id
+        
+        # Get all requests for this harness
+        harness_requests = []
+        for m in rd.metrics:
+            harness_requests.extend(m.get('requests', []))
+        
+        # Extract shell commands for this harness
+        shell_cmds = _shell_command_breakdown(harness_requests)
+        
+        # Aggregate into all_shell_commands
+        for cmd, data in shell_cmds.items():
+            if cmd not in all_shell_commands:
+                all_shell_commands[cmd] = {
+                    'total_calls': 0,
+                    'total_tokens': 0,
+                    'by_harness': {}
+                }
+            
+            all_shell_commands[cmd]['total_calls'] += data['calls']
+            all_shell_commands[cmd]['total_tokens'] += data['total_tokens']
+            all_shell_commands[cmd]['by_harness'][harness_name] = {
+                'calls': data['calls'],
+                'tokens': data['total_tokens']
+            }
+    
+    # Sort by total tokens (descending)
+    return dict(sorted(all_shell_commands.items(), key=lambda x: x[1]['total_tokens'], reverse=True))
+
+
 # ---------------------------------------------------------------------------
 # Single-run HTML builders
 # ---------------------------------------------------------------------------
 
-def _summary_cards(report: dict, total_cost: float | None) -> str:
+def _summary_cards(report: dict, total_cost: float | None, tool_usage_pct: dict | None = None) -> str:
     if not report:
         return '<p class="muted">No report.json found for this run.</p>'
     fields: list[tuple[str, Any]] = [
@@ -419,6 +574,20 @@ def _summary_cards(report: dict, total_cost: float | None) -> str:
             if report.get("tokens_per_resolved") is not None else "n/a"
         )),
     ]
+    
+    # Add tool usage percentage if available
+    if tool_usage_pct and tool_usage_pct['average_percentage'] > 0:
+        avg_pct = tool_usage_pct['average_percentage']
+        min_pct = tool_usage_pct['min_percentage']
+        max_pct = tool_usage_pct['max_percentage']
+        tc = tool_usage_pct['tool_call_tokens']
+        tr = tool_usage_pct['tool_result_tokens']
+        
+        # Create tooltip text
+        tooltip = f"Tool calls: {tc:,} tokens | Tool results: {tr:,} tokens | Range: {min_pct:.1f}% - {max_pct:.1f}%"
+        
+        fields.append(("Tool usage", f"<span class='tooltip-trigger'>{avg_pct:.1f}%<span class='tooltip-text'>{tooltip}</span></span>"))
+    
     if total_cost is not None:
         fields.append(("Total est. cost", f"${total_cost:,.4f}"))
     cards = "".join(
@@ -668,6 +837,7 @@ def _build_single_run_html(rd: _RunData) -> str:
     # Generate content type visualization if metrics have classification data
     content_type_html = ""
     content_type_js = ""
+    tool_usage_pct = None
     
     # Flatten all per-request records from all instances (from benchmark_metrics.jsonl)
     all_requests = []
@@ -675,6 +845,10 @@ def _build_single_run_html(rd: _RunData) -> str:
         all_requests.extend(m.get('requests', []))
     
     metrics_with_classification = [r for r in all_requests if 'content_type' in r]
+    
+    # Calculate tool usage percentage if we have classification data
+    if metrics_with_classification:
+        tool_usage_pct = _calculate_tool_usage_percentage(metrics_with_classification)
     if metrics_with_classification:
         content_breakdown = _content_type_breakdown(metrics_with_classification)
         timeline_data = _prepare_timeline_data(metrics_with_classification)
@@ -685,13 +859,24 @@ def _build_single_run_html(rd: _RunData) -> str:
     <div class="chart-wrap"><canvas id="contentTimelineChart"></canvas></div>"""
         
         if content_breakdown['tool_usage']:
-            # Build tool usage table
+            # Build tool usage table - sorted by total tokens (descending)
             tool_rows = ""
-            for tool_key, data in sorted(content_breakdown['tool_usage'].items()):
+            sorted_tools = sorted(
+                content_breakdown['tool_usage'].items(),
+                key=lambda x: x[1]['total_tokens'],
+                reverse=True
+            )
+            for tool_key, data in sorted_tools:
                 total_uses = data['calls'] + data['results']
                 avg_tokens = data['total_tokens'] // total_uses if total_uses > 0 else 0
+                
+                # Determine type based on tool_detail
+                tool_type = "Shell" if data.get('tool_detail') == 'bash' else "Agent"
+                row_class = "shell-tool" if tool_type == "Shell" else "agent-tool"
+                
                 tool_rows += f"""
-        <tr>
+        <tr class="{row_class}">
+          <td>{tool_type}</td>
           <td>{data['tool_name']}</td>
           <td>{data['tool_detail'] or '—'}</td>
           <td>{data['calls']}</td>
@@ -705,6 +890,7 @@ def _build_single_run_html(rd: _RunData) -> str:
       <table>
         <thead>
           <tr>
+            <th>Type</th>
             <th>Tool Name</th>
             <th>Detail</th>
             <th>Calls</th>
@@ -718,8 +904,65 @@ def _build_single_run_html(rd: _RunData) -> str:
       </table>
     </div>"""
         
+        # Add shell command pie chart if shell commands exist
+        shell_commands = _shell_command_breakdown(metrics_with_classification)
+        if shell_commands:
+            shell_cmd_labels = list(shell_commands.keys())
+            shell_cmd_tokens = [cmd['total_tokens'] for cmd in shell_commands.values()]
+            
+            content_type_html += """
+    <h3>Shell Command Distribution</h3>
+    <div class="chart-wrap"><canvas id="shellCommandChart"></canvas></div>"""
+        
         content_type_data = json.dumps(content_breakdown['by_type'])
         timeline_data_json = json.dumps(timeline_data)
+        
+        # Build shell command chart JS if shell commands exist
+        shell_cmd_js = ""
+        if shell_commands:
+            shell_cmd_labels = list(shell_commands.keys())
+            shell_cmd_tokens = [cmd['total_tokens'] for cmd in shell_commands.values()]
+            shell_cmd_js = f"""
+    // Shell Command Distribution (Pie Chart)
+    new Chart(document.getElementById('shellCommandChart'), {{
+      type: 'pie',
+      data: {{
+        labels: {json.dumps(shell_cmd_labels)},
+        datasets: [{{
+          data: {json.dumps(shell_cmd_tokens)},
+          backgroundColor: {json.dumps(_COLORS[:len(shell_cmd_labels)])},
+        }}],
+      }},
+      options: {{
+        responsive: true,
+        maintainAspectRatio: true,
+        plugins: {{
+          title: {{
+            display: true,
+            text: 'Shell Command Token Distribution',
+            font: {{ size: 16 }}
+          }},
+          legend: {{
+            position: 'right',
+            labels: {{
+              font: {{ size: 12 }}
+            }}
+          }},
+          tooltip: {{
+            callbacks: {{
+              label: function(context) {{
+                let label = context.label || '';
+                let value = context.parsed || 0;
+                let total = context.dataset.data.reduce((a, b) => a + b, 0);
+                let percentage = ((value / total) * 100).toFixed(1);
+                return label + ': ' + value.toLocaleString() + ' tokens (' + percentage + '%)';
+              }}
+            }}
+          }}
+        }}
+      }}
+    }});
+"""
         
         content_type_js = f"""
     // Content Type Distribution (Pie Chart)
@@ -761,6 +1004,9 @@ def _build_single_run_html(rd: _RunData) -> str:
         }}
       }}
     }});"""
+        
+        # Append shell command chart JS if it exists
+        content_type_js += shell_cmd_js
 
     patches_html, patches_data_js = _patches_section([rd])
     return _render_html(
@@ -768,7 +1014,7 @@ def _build_single_run_html(rd: _RunData) -> str:
         heading=rd.run_id,
         meta=f"{rd.report.get('benchmark', '?')} &middot; {rd.report.get('harness', '?')}"
              f" &middot; {rd.report.get('model', '?')} &middot; proxy: {rd.report.get('proxy', '?')}",
-        summary_html=_summary_cards(rd.report, total_cost),
+        summary_html=_summary_cards(rd.report, total_cost, tool_usage_pct),
         context_datasets=context_datasets,
         turns=turns,
         avg_input=avg_input,
@@ -1129,12 +1375,23 @@ def _build_multi_run_html(runs: list[_RunData], is_suite: bool = False) -> str:
             
             if all_tool_usage:
                 tool_rows = ""
-                for tool_key in sorted(all_tool_usage.keys()):
-                    data = all_tool_usage[tool_key]
+                # Sort by total tokens (descending)
+                sorted_tool_usage = sorted(
+                    all_tool_usage.items(),
+                    key=lambda x: x[1]['total_tokens'],
+                    reverse=True
+                )
+                for tool_key, data in sorted_tool_usage:
                     total_uses = data['calls'] + data['results']
                     avg_tokens = data['total_tokens'] // total_uses if total_uses > 0 else 0
+                    
+                    # Determine type based on tool_detail
+                    tool_type = "Shell" if data.get('tool_detail') == 'bash' else "Agent"
+                    row_class = "shell-tool" if tool_type == "Shell" else "agent-tool"
+                    
                     tool_rows += f"""
-        <tr>
+        <tr class="{row_class}">
+          <td>{tool_type}</td>
           <td>{data['tool_name']}</td>
           <td>{data['tool_detail'] or '—'}</td>
           <td>{data['calls']}</td>
@@ -1148,6 +1405,7 @@ def _build_multi_run_html(runs: list[_RunData], is_suite: bool = False) -> str:
       <table>
         <thead>
           <tr>
+            <th>Type</th>
             <th>Tool Name</th>
             <th>Detail</th>
             <th>Calls</th>
@@ -1157,6 +1415,49 @@ def _build_multi_run_html(runs: list[_RunData], is_suite: bool = False) -> str:
           </tr>
         </thead>
         <tbody>{tool_rows}
+        </tbody>
+      </table>
+    </div>"""
+            
+            # Shell command suite breakdown if available
+            shell_cmd_suite = _shell_command_suite_breakdown(runs)
+            if shell_cmd_suite:
+                shell_rows = ""
+                
+                for cmd, data in shell_cmd_suite.items():
+                    # Build popover data for Chart.js tooltip
+                    harness_breakdown = []
+                    for harness, stats in data['by_harness'].items():
+                        harness_breakdown.append({
+                            'harness': harness,
+                            'calls': stats['calls'],
+                            'tokens': stats['tokens']
+                        })
+                    
+                    # Store in data attribute for Chart.js tooltip
+                    breakdown_json = json.dumps(harness_breakdown).replace('"', '&quot;')
+                    
+                    shell_rows += f"""
+        <tr data-breakdown='{breakdown_json}'>
+          <td>{cmd}</td>
+          <td>{data['total_calls']}</td>
+          <td>{data['total_tokens']:,}</td>
+          <td class="info-cell"><span class="info-icon">ℹ️</span></td>
+        </tr>"""
+                
+                content_type_html += f"""
+    <h3>Shell Command Usage (Suite Total)</h3>
+    <div class="chart-wrap">
+      <table id="shellCommandSuiteTable">
+        <thead>
+          <tr>
+            <th>Command</th>
+            <th>Total Calls</th>
+            <th>Total Tokens</th>
+            <th>Details</th>
+          </tr>
+        </thead>
+        <tbody>{shell_rows}
         </tbody>
       </table>
     </div>"""
@@ -1231,7 +1532,48 @@ def _build_multi_run_html(runs: list[_RunData], is_suite: bool = False) -> str:
           title: {{ display: true, text: 'Content Type Distribution by Harness' }}
         }}
       }}
-    }});"""
+     }});"""
+            
+            # Add JavaScript for shell command suite popover
+            shell_suite_js = """
+    // Custom tooltip for shell command breakdown
+    document.querySelectorAll('#shellCommandSuiteTable tbody tr').forEach(row => {
+      const infoCell = row.querySelector('.info-icon');
+      if (!infoCell) return;
+      
+      const breakdown = JSON.parse(row.getAttribute('data-breakdown'));
+      
+      // Create Chart.js style tooltip on hover
+      infoCell.addEventListener('mouseenter', function(e) {
+        const tooltip = document.createElement('div');
+        tooltip.className = 'chartjs-tooltip';
+        tooltip.style.cssText = 'position: absolute; background: rgba(0,0,0,0.8); color: white; padding: 8px 12px; border-radius: 4px; font-size: 12px; pointer-events: none; z-index: 1000; white-space: nowrap;';
+        
+        let content = '<div style="font-weight: bold; margin-bottom: 4px;">Breakdown by Harness</div>';
+        breakdown.forEach(item => {
+          content += `<div>${item.harness}: ${item.calls} calls, ${item.tokens.toLocaleString()} tokens</div>`;
+        });
+        tooltip.innerHTML = content;
+        
+        document.body.appendChild(tooltip);
+        
+        // Position tooltip
+        const rect = e.target.getBoundingClientRect();
+        tooltip.style.left = (rect.left + window.scrollX - tooltip.offsetWidth - 10) + 'px';
+        tooltip.style.top = (rect.top + window.scrollY) + 'px';
+        
+        infoCell._tooltip = tooltip;
+      });
+      
+      infoCell.addEventListener('mouseleave', function() {
+        if (infoCell._tooltip) {
+          infoCell._tooltip.remove();
+          infoCell._tooltip = null;
+        }
+      });
+    });
+    """
+            content_type_js += shell_suite_js
     
     patches_html, patches_data_js = _patches_section(runs)
 
@@ -1365,13 +1707,64 @@ def _render_html(
    }}
    .patch-col .d2h-wrapper {{ overflow-x: auto; }}
    .patch-col .d2h-file-header {{ font-size: 0.8rem; }}
-   /* --- content type analysis --- */
-   .tool-usage-table {{ width: 100%; border-collapse: collapse; }}
-   .tool-usage-table th,
-   .tool-usage-table td {{ padding: 0.5rem 1rem; text-align: left; border-bottom: 1px solid #eee; }}
-   .tool-usage-table th {{ background: #fafafa; font-size: 0.8rem; text-transform: uppercase; color: #888; }}
-   .tool-usage-table tr:hover {{ background: #f9f9f9; }}
- </style>
+    /* --- content type analysis --- */
+    .tool-usage-table {{ width: 100%; border-collapse: collapse; }}
+    .tool-usage-table th,
+    .tool-usage-table td {{ padding: 0.5rem 1rem; text-align: left; border-bottom: 1px solid #eee; }}
+    .tool-usage-table th {{ background: #fafafa; font-size: 0.8rem; text-transform: uppercase; color: #888; }}
+    .tool-usage-table tr:hover {{ background: #f9f9f9; }}
+    /* Tool type row styling */
+    tr.shell-tool {{ background-color: #f8f9fa; }}
+    tr.agent-tool {{ background-color: #ffffff; }}
+    /* Info icon for shell command breakdown */
+    .info-icon {{
+      cursor: help;
+      font-size: 16px;
+      color: #4e79a7;
+      user-select: none;
+    }}
+    .info-icon:hover {{
+      color: #2b5a8a;
+    }}
+    .info-cell {{
+      text-align: center;
+    }}
+    /* Tooltip styling for summary cards */
+    .tooltip-trigger {{
+      position: relative;
+      cursor: help;
+      border-bottom: 1px dotted #666;
+    }}
+    .tooltip-trigger .tooltip-text {{
+      visibility: hidden;
+      background-color: rgba(0, 0, 0, 0.8);
+      color: #fff;
+      text-align: left;
+      padding: 8px 12px;
+      border-radius: 4px;
+      position: absolute;
+      z-index: 1000;
+      bottom: 125%;
+      left: 50%;
+      transform: translateX(-50%);
+      white-space: nowrap;
+      font-size: 12px;
+      font-weight: normal;
+    }}
+    .tooltip-trigger:hover .tooltip-text {{
+      visibility: visible;
+    }}
+    .tooltip-trigger .tooltip-text::after {{
+      content: "";
+      position: absolute;
+      top: 100%;
+      left: 50%;
+      margin-left: -5px;
+      border-width: 5px;
+      border-style: solid;
+      border-color: rgba(0, 0, 0, 0.8) transparent transparent transparent;
+    }}
+  </style>
 </head>
 <body>
   <h1>{heading}</h1>

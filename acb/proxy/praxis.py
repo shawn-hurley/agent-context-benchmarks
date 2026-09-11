@@ -14,7 +14,7 @@ Praxis writes access-log lines to stdout, which we capture and parse into
 NOTE: verified against praxis 0.5.3 (real binary, not just docs):
 
 * Core praxis has no built-in Anthropic<->OpenAI translation filter (no
-  ``anthropic_to_openai`` filter exists there). Cross-API runs (harness
+  ``anthropic_messages_to_chat_completions`` filter exists there). Cross-API runs (harness
   speaks one API, model backend speaks the other) are therefore rejected up
   front by ``build_config`` unless praxis-ai's translation chain applies --
   see "Anthropic<->OpenAI translation" below. The ``recording`` backend has
@@ -71,7 +71,7 @@ binary (not just docs), both real gaps in this alpha software:
 Anthropic<->OpenAI translation (praxis-ai only, one direction):
 
 praxis-ai (https://github.com/praxis-proxy/ai) ships
-``anthropic_messages_format`` + ``anthropic_to_openai`` + a path rewrite to
+``anthropic_messages_format`` + ``anthropic_messages_to_chat_completions`` + a path rewrite to
 translate an Anthropic Messages-speaking harness onto an OpenAI Chat
 Completions-speaking backend (e.g. claude-code against a local vLLM/Ollama
 server) -- see its own ``examples/configs/anthropic/messages-to-openai.yaml``.
@@ -81,8 +81,8 @@ goose against a real Anthropic backend) isn't implemented since no current
 harness needs it -- ``build_config`` still raises for every other mismatch.
 
 Getting ``token_count`` to see the *untranslated* bytes took care: it must
-run, in response order, *before* ``anthropic_to_openai``/
-``anthropic_stream_events`` rewrite the body into the client's wire shape --
+run, in response order, *before* ``anthropic_messages_to_chat_completions``/
+``anthropic_messages_to_chat_completions_stream`` rewrite the body into the client's wire shape --
 otherwise it parses the wrong format (configured ``provider`` matches the
 backend's native shape, i.e. ``model_spec.api``) and silently extracts
 nothing. Response-phase hooks run in reverse *declared* order, so this means
@@ -355,14 +355,14 @@ def build_config(port: int, model_spec, harness_api: str, include_token_count: b
         # Request-phase: rewrites the Anthropic Messages body into a Chat
         # Completions-shaped body. Response-phase: transforms a compatible
         # non-streaming JSON response back; streaming responses are instead
-        # handled chunk-by-chunk by anthropic_stream_events (declared next,
+        # handled chunk-by-chunk by anthropic_messages_to_chat_completions_stream (declared next,
         # so it runs *before* this filter's own on_response in reverse
         # order -- matching praxis-ai's own reference example).
-        ai_filters.append({"filter": "anthropic_to_openai", "conditions": _messages_only()})
-        ai_filters.append({"filter": "anthropic_stream_events", "conditions": _messages_only()})
+        ai_filters.append({"filter": "anthropic_messages_to_chat_completions", "conditions": _messages_only()})
+        ai_filters.append({"filter": "anthropic_messages_to_chat_completions_stream", "conditions": _messages_only()})
         # Only rewrite the Anthropic-shaped endpoint -- leave anything else
         # under /v1/ (there shouldn't be anything else claude-code calls,
-        # but no reason to rewrite a path anthropic_to_openai didn't touch).
+        # but no reason to rewrite a path anthropic_messages_to_chat_completions didn't touch).
         ai_filters.append({
             "filter": "path_rewrite",
             "replace": {"pattern": "^/v1/messages$", "replacement": "/v1/chat/completions"},

@@ -129,17 +129,29 @@ impl RequestClassifierFilter {
                         .and_then(|n| n.as_str())
                         .map(|s| s.to_string());
 
-                    let tool_detail = if let Some(ref name) = tool_name {
-                        if name == "task" || name == "skill" {
-                            Self::extract_tool_detail(first_call, name)
+                    let (final_tool_name, tool_detail) = if let Some(ref name) = tool_name {
+                        if name == "bash" {
+                            // For bash, extract the actual command being run
+                            if let Some(cmd) = Self::extract_tool_detail(first_call, name) {
+                                // Use extracted command as tool_name, store "bash" as detail
+                                (Some(cmd), Some("bash".to_string()))
+                            } else {
+                                // Fallback if command extraction fails
+                                (tool_name.clone(), None)
+                            }
+                        } else if name == "task" || name == "skill" {
+                            // For task/skill, keep original tool_name and extract detail
+                            let detail = Self::extract_tool_detail(first_call, name);
+                            (tool_name.clone(), detail)
                         } else {
-                            None
+                            // For other tools, no detail extraction
+                            (tool_name.clone(), None)
                         }
                     } else {
-                        None
+                        (None, None)
                     };
 
-                    return (ContentType::ToolCall, tool_name, tool_detail, tool_calls.len() as u32);
+                    return (ContentType::ToolCall, final_tool_name, tool_detail, tool_calls.len() as u32);
                 }
             }
 
@@ -233,17 +245,29 @@ impl RequestClassifierFilter {
                         .and_then(|n| n.as_str())
                         .map(|s| s.to_string());
 
-                    let tool_detail = if let Some(ref name) = tool_name {
-                        if name == "task" || name == "skill" {
-                            Self::extract_tool_detail(first_tool, name)
+                    let (final_tool_name, tool_detail) = if let Some(ref name) = tool_name {
+                        if name == "bash" {
+                            // For bash, extract the actual command being run
+                            if let Some(cmd) = Self::extract_tool_detail(first_tool, name) {
+                                // Use extracted command as tool_name, store "bash" as detail
+                                (Some(cmd), Some("bash".to_string()))
+                            } else {
+                                // Fallback if command extraction fails
+                                (tool_name.clone(), None)
+                            }
+                        } else if name == "task" || name == "skill" {
+                            // For task/skill, keep original tool_name and extract detail
+                            let detail = Self::extract_tool_detail(first_tool, name);
+                            (tool_name.clone(), detail)
                         } else {
-                            None
+                            // For other tools, no detail extraction
+                            (tool_name.clone(), None)
                         }
                     } else {
-                        None
+                        (None, None)
                     };
 
-                    return (ContentType::ToolCall, tool_name, tool_detail, tool_uses.len() as u32);
+                    return (ContentType::ToolCall, final_tool_name, tool_detail, tool_uses.len() as u32);
                 }
 
                 // Assistant has content but no tool_use
@@ -257,6 +281,37 @@ impl RequestClassifierFilter {
         (ContentType::UserMessage, None, None, 0)
     }
 
+    fn extract_primary_command(command: &str) -> Option<String> {
+        // Navigation commands to skip
+        const SKIP_COMMANDS: &[&str] = &["cd", "pushd", "popd"];
+        
+        // Split on shell operators: &&, ||, ;, |
+        // We'll do a simple character-based split for simplicity
+        let parts: Vec<&str> = command
+            .split(&['&', '|', ';'][..])
+            .map(|s| s.trim())
+            .filter(|s| !s.is_empty())
+            .collect();
+        
+        // Find first non-navigation command
+        for part in parts {
+            // Extract first word (command name)
+            if let Some(first_word) = part.split_whitespace().next() {
+                // Skip navigation commands
+                if !SKIP_COMMANDS.contains(&first_word) {
+                    return Some(first_word.to_string());
+                }
+            }
+        }
+        
+        // If all commands were navigation commands, return the first one
+        // Example: "cd /tmp" -> return "cd"
+        command
+            .split_whitespace()
+            .next()
+            .map(|s| s.to_string())
+    }
+
     fn extract_tool_detail(tool_block: &serde_json::Value, tool_name: &str) -> Option<String> {
         let input = tool_block.get("input").or_else(|| tool_block.get("arguments"))?;
 
@@ -264,6 +319,12 @@ impl RequestClassifierFilter {
             input.get("subagent_type").and_then(|v| v.as_str()).map(|s| s.to_string())
         } else if tool_name == "skill" {
             input.get("name").and_then(|v| v.as_str()).map(|s| s.to_string())
+        } else if tool_name == "bash" {
+            // Extract primary command from bash tool call
+            input
+                .get("command")
+                .and_then(|v| v.as_str())
+                .and_then(|cmd| Self::extract_primary_command(cmd))
         } else {
             None
         }

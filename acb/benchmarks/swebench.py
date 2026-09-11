@@ -363,6 +363,18 @@ class SWEBench(Benchmark):
         if tracker and tracker_key:
             tracker.start_verification(tracker_key)
         
+        # Create per-instance swebench working directory to isolate output
+        # SWE-bench writes to relative paths: logs/evaluation/<run_id>/
+        # Using a per-instance directory keeps output organized with the instance data
+        if instance_id:
+            inst_dir = instances_dir / normalize_instance_id_for_path(instance_id)
+            inst_dir.mkdir(parents=True, exist_ok=True)
+            swebench_work_dir = inst_dir / "swebench"
+        else:
+            # Legacy: harness-level directory if not per-instance
+            swebench_work_dir = output_dir / "swebench"
+        swebench_work_dir.mkdir(parents=True, exist_ok=True)
+        
         # Run swebench evaluation
         dataset = self.config.get("dataset", DEFAULT_DATASET)
         swebench_python = _ensure_swebench_venv()
@@ -386,11 +398,12 @@ class SWEBench(Benchmark):
         env.setdefault("DOCKER_BUILDKIT", "0")
         
         # Tail evaluation logs and update tracker activity
-        log_dir_base = _SWEBENCH_DIR / "logs" / "run_evaluation" / run_id
+        # SWE-bench logs are in: <swebench_work_dir>/logs/evaluation/<run_id>/...
+        log_dir_base = swebench_work_dir / "logs" / "evaluation" / run_id
         stop_event = threading.Event()
         tailers: list[threading.Thread] = []
         for p in preds_to_eval:
-            log_path = log_dir_base / p.model_name_or_path / p.instance_id / "run_instance.log"
+            log_path = log_dir_base / p.model_name_or_path.replace("/", "__") / p.instance_id / "run_instance.log"
             # Pass tracker so we can update activity instead of printing
             eval_tracker_key = tracker_key if p.instance_id == instance_id else None
             t = threading.Thread(
@@ -409,7 +422,7 @@ class SWEBench(Benchmark):
             with eval_log_path.open("w") as eval_log:
                 proc = subprocess.Popen(
                     cmd,
-                    cwd=str(_SWEBENCH_DIR),
+                    cwd=str(swebench_work_dir),
                     env=env,
                     stdin=subprocess.DEVNULL,
                     stdout=eval_log,
@@ -433,10 +446,12 @@ class SWEBench(Benchmark):
         
         # Tracker shows verification status - no print needed
         
-        # Parse results
+        # Parse results from swebench output
+        # SWE-bench writes results.json to: logs/evaluation/<run_id>/results.json
         resolved: dict[str, bool] = {}
-        for report in _SWEBENCH_DIR.glob(f"*.{run_id}.json"):
-            data = json.loads(report.read_text())
+        results_file = swebench_work_dir / "logs" / "evaluation" / run_id / "results.json"
+        if results_file.exists():
+            data = json.loads(results_file.read_text())
             for iid in data.get("resolved_ids", []):
                 resolved[iid] = True
             for iid in data.get("unresolved_ids", []):
