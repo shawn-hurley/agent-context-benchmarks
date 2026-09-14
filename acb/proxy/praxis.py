@@ -364,12 +364,16 @@ def build_config(port: int, model_spec, harness_api: str, include_token_count: b
         # order -- matching praxis-ai's own reference example).
         ai_filters.append({"filter": "anthropic_messages_to_chat_completions", "conditions": _messages_only()})
         ai_filters.append({"filter": "anthropic_messages_to_chat_completions_stream", "conditions": _messages_only()})
-        # Only rewrite the Anthropic-shaped endpoint -- leave anything else
-        # under /v1/ (there shouldn't be anything else claude-code calls,
-        # but no reason to rewrite a path anthropic_messages_to_chat_completions didn't touch).
+        # Translate the endpoint and remove Anthropic's beta query parameter.
+        # MLX-LM matches the full request URL, so retaining ?beta=true makes
+        # an otherwise valid chat-completions request return 404.
         ai_filters.append({
-            "filter": "path_rewrite",
-            "replace": {"pattern": "^/v1/messages$", "replacement": "/v1/chat/completions"},
+            "filter": "url_rewrite",
+            "operations": [
+                {"regex_replace": {"pattern": "^/v1/messages$",
+                                   "replacement": "/v1/chat/completions"}},
+                {"strip_query_params": ["beta"]},
+            ],
             "conditions": _messages_only(),
         })
 

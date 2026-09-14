@@ -1,0 +1,47 @@
+# Dockerfile to build rgctl for ARM Linux with GLIBC 2.35 compatibility
+# Uses Ubuntu 22.04 base to match SWE-bench container environment
+#
+# Build command (run from /Users/shurley/repos/skills-mcp-testing/rgctl):
+# podman build --platform linux/arm64 \
+#   -f /Users/shurley/repos/agent-context-benchmarks/Dockerfile.rgctl-build \
+#   -t rgctl-builder:ubuntu22.04 .
+#
+# Copy the compiled binary out of a created container:
+# podman create --name rgctl-builder-container --platform linux/arm64 rgctl-builder:ubuntu22.04
+# podman cp rgctl-builder-container:/output/rgctl /tmp/rgctl-build-output/rgctl
+# podman rm rgctl-builder-container
+
+FROM --platform=linux/arm64 ubuntu:22.04
+
+# Set environment variables
+ENV DEBIAN_FRONTEND=noninteractive \
+    RUST_BACKTRACE=1
+
+# Install build dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    curl \
+    build-essential \
+    pkg-config \
+    libssl-dev \
+    ca-certificates \
+    git \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install Rust using rustup
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+
+# Set PATH to include Cargo
+ENV PATH="/root/.cargo/bin:${PATH}"
+
+WORKDIR /src
+
+# The build context is the rgctl checkout (see the command above).
+COPY . /src
+
+# Compile inside Ubuntu 22.04 so the binary uses compatible system libraries.
+# The optional ONNX Runtime bundle is built against newer libstdc++ symbols,
+# so leave semantic-onnx disabled for this GLIBC 2.35-compatible binary.
+RUN cargo build --release --no-default-features --bin rgctl && \
+    install -Dm755 target/release/rgctl /output/rgctl
+
+CMD ["/bin/true"]

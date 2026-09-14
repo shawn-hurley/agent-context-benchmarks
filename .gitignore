@@ -24,5 +24,4 @@ SWE-bench/*.egg-info/
 bin/
 *_PLAN.md
 target
-
-Dockerfile.rgctl-build
+.rgctl/

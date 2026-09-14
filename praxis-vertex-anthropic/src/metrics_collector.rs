@@ -434,10 +434,14 @@ impl BenchmarkMetricsFilter {
         let normalized = name.to_ascii_lowercase();
         if normalized == "bash" || normalized == "shell" {
             let command = input.get("command")?.as_str()?;
-            return command
-                .split_whitespace()
-                .find(|word| !["cd", "pushd", "popd"].contains(word))
-                .map(str::to_string);
+            for part in command.split(&['&', '|', ';'][..]) {
+                if let Some(word) = part.split_whitespace().next() {
+                    if !["cd", "pushd", "popd"].contains(&word) {
+                        return Some(word.to_string());
+                    }
+                }
+            }
+            return command.split_whitespace().next().map(str::to_string);
         }
         if normalized == "task" {
             return input
@@ -890,5 +894,35 @@ mod tests {
         );
         assert_eq!(data.response_tools[0].call_id.as_deref(), Some("toolu-1"));
         assert_eq!(data.response_tools[0].detail.as_deref(), Some("git"));
+    }
+
+    #[test]
+    fn extracts_shell_detail_across_idless_argument_chunks() {
+        let mut data = MetricsData::default();
+        let first_arguments = r#"{"command":"cd /testbed && sed -n '1,"#;
+        let second_arguments = r#"20p' requests/models.py"}"#;
+        BenchmarkMetricsFilter::extract_response_tools(
+            &json!({
+                "choices": [{"delta": {"tool_calls": [{
+                    "index": 0,
+                    "id": "call-shell-1",
+                    "function": {"name": "shell", "arguments": first_arguments}
+                }]}}]
+            }),
+            &mut data,
+        );
+        BenchmarkMetricsFilter::extract_response_tools(
+            &json!({
+                "choices": [{"delta": {"tool_calls": [{
+                    "index": 0,
+                    "function": {"arguments": second_arguments}
+                }]}}]
+            }),
+            &mut data,
+        );
+        BenchmarkMetricsFilter::finalize_response_tool_details(&mut data);
+        assert_eq!(data.response_tools.len(), 1);
+        assert_eq!(data.response_tools[0].name, "shell");
+        assert_eq!(data.response_tools[0].detail.as_deref(), Some("sed"));
     }
 }

@@ -243,7 +243,7 @@ After loading each skill, you will receive detailed instructions with sections l
 2. Identify the "REQUIRED: Always Follow This Exact Sequence" section
 3. Execute EVERY step in that sequence IN ORDER
 4. Use ONLY the tools and methods the skill specifies
-5. Do NOT use forbidden tools (like find, grep, bash) until the skill says you can
+5. Do NOT substitute find, grep, ripgrep, or broad file browsing for required skill commands; shell/Bash is allowed to execute those commands, builds, tests, and edits
 
 **Critical:** If the skill says "DO NOT use X UNTIL AFTER you...", then using X before completing those steps = automatic task failure, even if your code changes are correct.
 

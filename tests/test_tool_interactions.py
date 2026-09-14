@@ -55,3 +55,13 @@ def test_response_tool_call_is_completed_by_result_metadata():
 
     assert interactions[0]["complete_pair"] is True
     assert interactions[0]["result_only"] is False
+
+
+def test_duplicate_call_ids_are_one_logical_interaction():
+    first = _record("request-call-1", "tool_call", 100, "call-1", name="shell")
+    second = _record("request-call-2", "tool_call", 200, "call-1", name="shell")
+    interactions = _normalize_tool_interactions([first, second])
+
+    assert len(interactions) == 1
+    assert interactions[0]["tokens"] == 300
+    assert interactions[0]["request_ids"] == ["request-call-1", "request-call-2"]

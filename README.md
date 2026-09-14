@@ -172,6 +172,35 @@ podman build --tag acb-praxis-ai:latest .
 the manual command above is only necessary to force a rebuild (e.g. after
 updating the filter source in `praxis-vertex-anthropic/`).
 
+### Building the Linux `rgctl` Binary
+
+The `rgctl` build Dockerfile uses Ubuntu 22.04 to produce an ARM Linux binary
+with compatible GLIBC and C++ ABI versions. Build it from the adjacent
+`skills-mcp-testing/rgctl` checkout. The build disables the optional
+`semantic-onnx` feature because its prebuilt ONNX Runtime dependency requires
+newer C++ ABI symbols than Ubuntu 22.04 provides:
+
+```bash
+cd ../skills-mcp-testing/rgctl
+
+podman build --platform linux/arm64 \
+  --file /Users/shurley/repos/agent-context-benchmarks/Dockerfile.rgctl-build \
+  --tag rgctl-builder:ubuntu22.04 \
+  .
+```
+
+Copy the binary out of the image without starting it:
+
+```bash
+mkdir -p /tmp/rgctl-build-output
+container=$(podman create --platform linux/arm64 rgctl-builder:ubuntu22.04)
+podman cp "$container:/output/rgctl" /tmp/rgctl-build-output/rgctl
+podman rm "$container"
+chmod +x /tmp/rgctl-build-output/rgctl
+```
+
+The resulting binary is `/tmp/rgctl-build-output/rgctl`.
+
 ### When to Rebuild the Praxis-AI Image
 
 The `acb-praxis-ai:latest` image is built once and cached in `podman images`. 

@@ -28,17 +28,17 @@ shell rgctl discover /testbed
 
 ## STEP 3: Use rgctl for ALL Code Analysis (ENFORCED)
 
-### ❌ FORBIDDEN TOOLS - Do NOT Use These
+### ❌ FORBIDDEN for Code Discovery and Structural Search
 
-**You are PROHIBITED from using these tools for code analysis after Step 2:**
+**Do not substitute these tools for rgctl code discovery or structural queries:**
 
 - ❌ `tree` — FORBIDDEN after Step 2
-- ❌ `analyze` — FORBIDDEN after Step 2  
+- ❌ Broad file-reading/analysis to locate code — FORBIDDEN; targeted reads after rgctl are allowed
 - ❌ `grep` — FORBIDDEN after Step 2
 - ❌ `find` — FORBIDDEN after Step 2
-- ❌ `sed` to preview files — FORBIDDEN after Step 2
+- ❌ `rg`/ripgrep, recursive `ls`, and IDE search — FORBIDDEN for code discovery
 
-**If you use any of these AFTER loading rgctl and building the graph, you have FAILED the required workflow.**
+**Using conventional search instead of rgctl violates the required workflow. Shell is allowed for rgctl, builds, tests, and edits.**
 
 ### ✅ REQUIRED rgctl Commands Instead
 
@@ -48,21 +48,21 @@ shell rgctl discover /testbed
 ```bash
 # Instead of: grep -r "prepare_content_length"
 # Use: rgctl to find it
-shell rgctl -f json gql "MATCH (n:Function) WHERE n.name LIKE '*prepare_content_length*' RETURN n"
+shell rgctl -f json query find prepare_content_length
 ```
 
 #### Find Where a Function is Called
 ```bash
 # Instead of: grep "function_name" and reading files
 # Use: rgctl to find all callers
-shell rgctl -f json gql "MATCH (a:Function)-[:CALLS]->(b:Function {name:'prepare_content_length'}) RETURN a, b LIMIT 20"
+shell rgctl -f json query find prepare_content_length --used-by --depth 2
 ```
 
 #### Understand a File's Structure
 ```bash
 # Instead of: analyze or tree
 # Use: rgctl to list functions in a file
-shell rgctl -f json gql "MATCH (n:Function) WHERE n.file_path CONTAINS 'models.py' RETURN n.name, n.line_number"
+shell rgctl -f json query find PreparedRequest --file requests/models.py --contains
 ```
 
 #### Find Dependencies and Imports
@@ -76,7 +76,7 @@ shell rgctl -f json dependencies "/testbed/requests/models.py"
 ```bash
 # Instead of: grepping to find usage
 # Use: rgctl blast-radius to see impact
-shell rgctl -f json blast-radius PreparedRequest --depth 3
+shell rgctl -f json query impact PreparedRequest --depth 3
 ```
 
 #### List All Functions in Repository
@@ -96,7 +96,7 @@ shell rgctl -f json gql --macro-name all_functions unused
 2. ✅ Build graph: `shell rgctl discover /testbed`
 3. ✅ Query rgctl for structural answers
 4. ✅ Identify exact files/lines from rgctl results
-5. ✅ ONLY NOW use `analyze` to read those specific files
+5. ✅ ONLY NOW read the specific source sections identified by rgctl
 6. ✅ Make your fix
 7. ✅ Test your changes
 
