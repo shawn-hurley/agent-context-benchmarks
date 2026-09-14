@@ -347,7 +347,11 @@ def build_config(port: int, model_spec, harness_api: str, include_token_count: b
         # automatically off this metadata + a text/event-stream response,
         # no `response_conditions` needed).
         ai_filters.append({"filter": "anthropic_messages_format", "on_invalid": "continue",
-                            "conditions": _messages_only()})
+                           "conditions": _messages_only()})
+        # Classification must happen before the Anthropic body is rewritten
+        # into OpenAI chat-completions format. The endpoint remains
+        # /v1/messages while the request body is being translated.
+        ai_filters.append({"filter": "request_classifier", "conditions": _messages_only()})
 
     ai_filters.append({"filter": "json_body_field", "field": "model", "header": "X-Model"})
 
@@ -428,9 +432,11 @@ def build_config(port: int, model_spec, harness_api: str, include_token_count: b
 
         # Classify request content type during request phase.
         # Stores classification in ctx.extensions for later retrieval by token_usage_to_metrics.
-        # Must come BEFORE benchmark_metrics so both filters work together.
-        # No path conditions - classify ALL LLM requests (both Anthropic Messages API and OpenAI API)
-        trailing_filters.append({"filter": "request_classifier"})
+        # Translated Anthropic requests are classified above, before body
+        # translation. Native requests are classified in this observability
+        # chain, before benchmark_metrics reads the extension.
+        if not translate:
+            trailing_filters.append({"filter": "request_classifier"})
 
         # Comprehensive token tracking across all backends.
         # Handles both OpenAI and Anthropic response formats automatically,

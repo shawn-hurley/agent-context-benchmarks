@@ -46,3 +46,12 @@ def test_breakdown_reports_unified_tool_call_type():
     assert breakdown["by_type"]["tool_call"]["count"] == 1
     assert breakdown["by_type"]["tool_call"]["total_tokens"] == 300
     assert breakdown["tool_usage"]["bash"]["interactions"] == 1
+
+
+def test_response_tool_call_is_completed_by_result_metadata():
+    call = _record("request-call", "tool_call", 100, "call-1")
+    call["tool_results"] = [{"name": "bash", "call_id": "call-1"}]
+    interactions = _normalize_tool_interactions([call])
+
+    assert interactions[0]["complete_pair"] is True
+    assert interactions[0]["result_only"] is False

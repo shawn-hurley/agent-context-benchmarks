@@ -304,6 +304,12 @@ def _normalize_tool_interactions(metrics: list[dict]) -> list[dict]:
     while retaining the summed token cost of both model requests.
     """
     interactions: dict[str, dict] = {}
+    result_call_ids = {
+        tool.get("call_id")
+        for metric in metrics
+        for tool in (metric.get("tool_results") or [])
+        if tool.get("call_id")
+    }
     anonymous_index = 0
     for metric in metrics:
         if metric.get("content_type") not in {"tool_call", "tool_result"}:
@@ -341,6 +347,8 @@ def _normalize_tool_interactions(metrics: list[dict]) -> list[dict]:
     normalized = []
     for interaction in interactions.values():
         source_types = interaction.pop("source_types")
+        if interaction.get("call_id") in result_call_ids:
+            source_types.add("tool_result")
         interaction["source_types"] = sorted(source_types)
         interaction["complete_pair"] = source_types == {"tool_call", "tool_result"}
         interaction["call_only"] = source_types == {"tool_call"}

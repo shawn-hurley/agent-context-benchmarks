@@ -427,17 +427,18 @@ impl RequestClassifierFilter {
             input
         };
 
-        if tool_name == "task" {
+        let normalized_name = tool_name.to_ascii_lowercase();
+        if normalized_name == "task" {
             input
                 .get("subagent_type")
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string())
-        } else if tool_name == "skill" {
+        } else if normalized_name == "skill" {
             input
                 .get("name")
                 .and_then(|v| v.as_str())
                 .map(|s| s.to_string())
-        } else if tool_name == "bash" || tool_name == "shell" {
+        } else if normalized_name == "bash" || normalized_name == "shell" {
             // Extract primary command from bash tool call
             input
                 .get("command")
@@ -526,6 +527,31 @@ mod tests {
         assert_eq!(classification.tools[0].name, "bash");
         assert_eq!(classification.tools[0].detail.as_deref(), Some("rg"));
         assert_eq!(classification.tools[0].call_id.as_deref(), Some("toolu_1"));
+    }
+
+    #[test]
+    fn classifies_claude_code_capitalized_bash_tool_result() {
+        let body = json!({
+            "system": "You are an agent.",
+            "tools": [{"name": "Bash"}],
+            "messages": [
+                {"role": "assistant", "content": [{
+                    "type": "tool_use", "id": "chatcmpl-tool-1", "name": "Bash",
+                    "input": {"command": "find . -name '*.py'"}
+                }]},
+                {"role": "user", "content": [{
+                    "type": "tool_result", "tool_use_id": "chatcmpl-tool-1", "content": "files"
+                }]}
+            ]
+        });
+        let classification = RequestClassifierFilter::classify_request(
+            &Bytes::from(serde_json::to_vec(&body).unwrap()),
+            "/v1/messages",
+        )
+        .unwrap();
+        assert_eq!(classification.content_type, ContentType::ToolResult);
+        assert_eq!(classification.tools[0].name, "Bash");
+        assert_eq!(classification.tools[0].detail.as_deref(), Some("find"));
     }
 
     #[test]

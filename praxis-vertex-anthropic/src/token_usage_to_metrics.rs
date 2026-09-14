@@ -64,6 +64,10 @@ pub struct ToolIdentity {
     pub call_id: Option<String>,
 }
 
+/// Tool calls observed in the model response for the current request.
+#[derive(Clone, Debug, Default)]
+pub struct ResponseToolCalls(pub Vec<ToolIdentity>);
+
 lazy_static! {
     static ref METRICS_FILE: Mutex<BufWriter<File>> = {
         let file = OpenOptions::new()
@@ -100,6 +104,8 @@ pub struct BenchmarkMetric {
     pub tool_detail: Option<String>,
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub tools: Vec<ToolIdentity>,
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub tool_results: Vec<ToolIdentity>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub tool_count: Option<u32>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -256,19 +262,52 @@ impl HttpFilter for TokenUsageToMetricsFilter {
         ) = Self::extract_tokens_from_metadata(ctx);
 
         // Extract classification from extensions (written during request phase by request_classifier)
-        let (content_type, tool_name, tool_detail, tools, tool_count, message_count) =
-            if let Some(classification) = ctx.extensions.get::<RequestClassification>() {
-                (
-                    Some(classification.content_type.clone()),
-                    classification.tool_name.clone(),
-                    classification.tool_detail.clone(),
-                    classification.tools.clone(),
-                    classification.tool_count,
-                    classification.message_count,
-                )
-            } else {
-                (None, None, None, Vec::new(), None, None)
-            };
+        let response_tools = ctx
+            .extensions
+            .get::<ResponseToolCalls>()
+            .map(|calls| calls.0.clone())
+            .unwrap_or_default();
+        let (
+            content_type,
+            tool_name,
+            tool_detail,
+            mut tools,
+            mut tool_results,
+            tool_count,
+            message_count,
+        ) = if let Some(classification) = ctx.extensions.get::<RequestClassification>() {
+            (
+                Some(classification.content_type.clone()),
+                classification.tool_name.clone(),
+                classification.tool_detail.clone(),
+                classification.tools.clone(),
+                Vec::new(),
+                classification.tool_count,
+                classification.message_count,
+            )
+        } else {
+            (None, None, None, Vec::new(), Vec::new(), None, None)
+        };
+
+        if !response_tools.is_empty() {
+            tool_results = tools;
+            tools = response_tools;
+        }
+        let response_first = tools.first();
+        let content_type = if !tools.is_empty() {
+            Some(ContentType::ToolCall)
+        } else {
+            content_type
+        };
+        let tool_name = response_first.map(|tool| tool.name.clone()).or(tool_name);
+        let tool_detail = response_first
+            .and_then(|tool| tool.detail.clone())
+            .or(tool_detail);
+        let tool_count = if !tools.is_empty() {
+            Some(tools.len() as u32)
+        } else {
+            tool_count
+        };
 
         // Build metric record
         let metric = BenchmarkMetric {
@@ -288,6 +327,7 @@ impl HttpFilter for TokenUsageToMetricsFilter {
             tool_name,
             tool_detail,
             tools,
+            tool_results,
             tool_count,
             message_count,
         };

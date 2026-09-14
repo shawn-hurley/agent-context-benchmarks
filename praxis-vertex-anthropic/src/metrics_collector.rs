@@ -52,6 +52,7 @@
 //! }
 //! ```
 
+use crate::token_usage_to_metrics::{ResponseToolCalls, ToolIdentity};
 use async_trait::async_trait;
 use bytes::{Bytes, BytesMut};
 use praxis_filter::{
@@ -59,6 +60,7 @@ use praxis_filter::{
 };
 use serde::{Deserialize, Serialize};
 use serde_yaml;
+use std::collections::HashMap;
 use std::time::{SystemTime, UNIX_EPOCH};
 use tracing::{debug, info, warn};
 
@@ -119,6 +121,9 @@ struct MetricsData {
     /// Events can straddle TCP chunk boundaries; this buffer ensures we
     /// always parse complete events.
     sse_partial: Vec<u8>,
+    response_tools: Vec<ToolIdentity>,
+    response_tool_arguments: HashMap<String, String>,
+    response_tool_ids_by_index: HashMap<usize, String>,
 }
 
 impl MetricsData {
@@ -221,6 +226,8 @@ impl BenchmarkMetricsFilter {
             }
         };
 
+        Self::extract_response_tools(&value, data);
+
         if let Some(usage) = value.get("usage") {
             // Try Anthropic format first (has "input_tokens")
             if usage.get("input_tokens").is_some() {
@@ -271,6 +278,8 @@ impl BenchmarkMetricsFilter {
                 return;
             }
         };
+
+        Self::extract_response_tools(&evt, data);
 
         match event_type {
             "vertex_event" => {
@@ -337,6 +346,130 @@ impl BenchmarkMetricsFilter {
                 // Other event types: ping, content_block_*, message_stop, etc.
                 // No token extraction for these.
             }
+        }
+    }
+
+    fn extract_response_tools(evt: &serde_json::Value, data: &mut MetricsData) {
+        // Anthropic content_block_start carries the complete tool identity.
+        if evt.get("type").and_then(|v| v.as_str()) == Some("content_block_start") {
+            if let Some(block) = evt.get("content_block") {
+                if block.get("type").and_then(|v| v.as_str()) == Some("tool_use") {
+                    if let (Some(name), Some(id)) = (
+                        block.get("name").and_then(|v| v.as_str()),
+                        block.get("id").and_then(|v| v.as_str()),
+                    ) {
+                        data.response_tools.push(ToolIdentity {
+                            name: name.to_string(),
+                            detail: Self::tool_detail_from_input(block, name),
+                            call_id: Some(id.to_string()),
+                        });
+                    }
+                }
+            }
+        }
+
+        // OpenAI-compatible streams may split function name/arguments across
+        // multiple delta chunks. Keep the identity and accumulate arguments.
+        let Some(choices) = evt.get("choices").and_then(|v| v.as_array()) else {
+            return;
+        };
+        for choice in choices {
+            let Some(tool_calls) = choice
+                .get("delta")
+                .and_then(|v| v.get("tool_calls"))
+                .and_then(|v| v.as_array())
+                .or_else(|| {
+                    choice
+                        .get("message")
+                        .and_then(|v| v.get("tool_calls"))
+                        .and_then(|v| v.as_array())
+                })
+            else {
+                continue;
+            };
+            for (index, call) in tool_calls.iter().enumerate() {
+                let id = call
+                    .get("id")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_string)
+                    .or_else(|| data.response_tool_ids_by_index.get(&index).cloned());
+                let Some(id) = id else {
+                    continue;
+                };
+                data.response_tool_ids_by_index.insert(index, id.clone());
+                let function = call.get("function").cloned().unwrap_or_default();
+                let name = function
+                    .get("name")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_string);
+                if let Some(arguments) = function.get("arguments") {
+                    let arguments = arguments
+                        .as_str()
+                        .map(str::to_string)
+                        .unwrap_or_else(|| arguments.to_string());
+                    data.response_tool_arguments
+                        .entry(id.clone())
+                        .or_default()
+                        .push_str(&arguments);
+                }
+                if let Some(name) = name {
+                    if !data
+                        .response_tools
+                        .iter()
+                        .any(|tool| tool.call_id.as_deref() == Some(id.as_str()))
+                    {
+                        data.response_tools.push(ToolIdentity {
+                            name,
+                            detail: None,
+                            call_id: Some(id),
+                        });
+                    }
+                }
+            }
+        }
+    }
+
+    fn tool_detail_from_input(block: &serde_json::Value, name: &str) -> Option<String> {
+        let input = block.get("input")?;
+        let normalized = name.to_ascii_lowercase();
+        if normalized == "bash" || normalized == "shell" {
+            let command = input.get("command")?.as_str()?;
+            return command
+                .split_whitespace()
+                .find(|word| !["cd", "pushd", "popd"].contains(word))
+                .map(str::to_string);
+        }
+        if normalized == "task" {
+            return input
+                .get("subagent_type")
+                .and_then(|v| v.as_str())
+                .map(str::to_string);
+        }
+        if normalized == "skill" {
+            return input
+                .get("name")
+                .and_then(|v| v.as_str())
+                .map(str::to_string);
+        }
+        None
+    }
+
+    fn finalize_response_tool_details(data: &mut MetricsData) {
+        for tool in &mut data.response_tools {
+            if tool.detail.is_some() {
+                continue;
+            }
+            let Some(id) = tool.call_id.as_deref() else {
+                continue;
+            };
+            let Some(arguments) = data.response_tool_arguments.get(id) else {
+                continue;
+            };
+            let Ok(input) = serde_json::from_str::<serde_json::Value>(arguments) else {
+                continue;
+            };
+            let block = serde_json::json!({"input": input});
+            tool.detail = Self::tool_detail_from_input(&block, &tool.name);
         }
     }
 
@@ -657,6 +790,11 @@ impl HttpFilter for BenchmarkMetricsFilter {
         ctx.extensions.insert(data.clone());
 
         if end_of_stream {
+            Self::finalize_response_tool_details(&mut data);
+            if !data.response_tools.is_empty() {
+                ctx.extensions
+                    .insert(ResponseToolCalls(data.response_tools.clone()));
+            }
             let now_ms = SystemTime::now()
                 .duration_since(UNIX_EPOCH)
                 .unwrap_or_default()
@@ -710,5 +848,47 @@ impl HttpFilter for BenchmarkMetricsFilter {
         }
 
         Ok(FilterAction::Continue)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{BenchmarkMetricsFilter, MetricsData};
+    use serde_json::json;
+
+    #[test]
+    fn extracts_openai_stream_tool_call_and_command_detail() {
+        let mut data = MetricsData::default();
+        let arguments = json!({"command": "rg TODO"}).to_string();
+        BenchmarkMetricsFilter::extract_response_tools(
+            &json!({
+                "choices": [{"delta": {"tool_calls": [{
+                    "id": "call-1",
+                    "function": {"name": "Bash", "arguments": arguments}
+                }]}}]
+            }),
+            &mut data,
+        );
+        BenchmarkMetricsFilter::finalize_response_tool_details(&mut data);
+        assert_eq!(data.response_tools.len(), 1);
+        assert_eq!(data.response_tools[0].name, "Bash");
+        assert_eq!(data.response_tools[0].detail.as_deref(), Some("rg"));
+    }
+
+    #[test]
+    fn extracts_anthropic_tool_use_block() {
+        let mut data = MetricsData::default();
+        BenchmarkMetricsFilter::extract_response_tools(
+            &json!({
+                "type": "content_block_start",
+                "content_block": {
+                    "type": "tool_use", "id": "toolu-1", "name": "Bash",
+                    "input": {"command": "git status"}
+                }
+            }),
+            &mut data,
+        );
+        assert_eq!(data.response_tools[0].call_id.as_deref(), Some("toolu-1"));
+        assert_eq!(data.response_tools[0].detail.as_deref(), Some("git"));
     }
 }
