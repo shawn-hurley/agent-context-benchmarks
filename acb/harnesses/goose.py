@@ -78,6 +78,7 @@ def ensure_linux_binary(
     cache_dir: Path,
     tracker: ProgressTracker | None = None,
     tracker_key: str | None = None,
+    version: str | None = None,
 ) -> Path:
     """Download (once, cached) a Linux goose binary for ``arch``; return its path.
     
@@ -92,7 +93,13 @@ def ensure_linux_binary(
         tracker_key: Optional tracker key for activity updates
     """
     goose_arch = _ARCH_ALIASES.get(arch, arch)
+    if version is not None:
+        import re
+        if not re.fullmatch(r"\d+\.\d+\.\d+", version):
+            raise ValueError("Goose version must be an exact release")
     cache_key = f"goose-{goose_arch}-unknown-linux-gnu"
+    if version:
+        cache_key += f"-{version}"
     dest_dir = cache_dir / cache_key
     dest = dest_dir / "goose"
     
@@ -108,6 +115,8 @@ def ensure_linux_binary(
         
         dest_dir.mkdir(parents=True, exist_ok=True)
         url = _LINUX_RELEASE_URL.format(arch=goose_arch)
+        if version:
+            url = url.replace("/download/stable/", f"/download/v{version}/")
         if tracker and tracker_key:
             tracker.update_activity(tracker_key, f"setup: downloading goose binary ({goose_arch})")
         archive_path = dest_dir / "goose.tar.bz2"
@@ -181,11 +190,17 @@ class Goose(HarnessAdapter):
         binary = ensure_linux_binary(
             arch, cache_dir,
             tracker=getattr(self, '_tracker', None),
-            tracker_key=getattr(self, '_tracker_key', None)
+            tracker_key=getattr(self, '_tracker_key', None),
+            version=self.config.get('version'),
         )
         container_cp_in(container, binary, "/usr/local/bin/goose")
         container_exec_capture(container, ["chmod", "+x", "/usr/local/bin/goose"])
         
+        if self.config.get("version"):
+            actual = container_exec_capture(container, ["/usr/local/bin/goose", "--version"]).strip()
+            if actual.removeprefix("goose ") != self.config["version"]:
+                raise RuntimeError(f"Goose version mismatch: {actual!r}")
+
         # Inject .goosehints if skills are configured
         skills = self.config.get("skills", [])
         if skills:

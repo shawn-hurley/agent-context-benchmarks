@@ -105,7 +105,7 @@ def _parse_json_usage(body: bytes) -> dict:
 
 
 def _parse_openai_usage(body: bytes, streamed: bool) -> dict:
-    """OpenAI chat.completions usage. Cache fields are cloud-only -> left at 0.
+    """OpenAI chat.completions usage with cached input separated from prompt.
 
     Non-streaming: `usage` on the response object.
     Streaming: usage arrives on the final chunk only when the client requested
@@ -114,7 +114,7 @@ def _parse_openai_usage(body: bytes, streamed: bool) -> dict:
     usage = {
         "input_tokens": 0,
         "output_tokens": 0,
-        "cache_read_tokens": 0,  # local OpenAI-compatible servers don't report cache
+        "cache_read_tokens": 0,
         "cache_creation_tokens": 0,
         "request_id": None,
     }
@@ -133,6 +133,9 @@ def _parse_openai_usage(body: bytes, streamed: bool) -> dict:
             u = evt.get("usage")
             if u:
                 usage["input_tokens"] = u.get("prompt_tokens", 0)
+                cached = (u.get("prompt_tokens_details") or {}).get("cached_tokens", 0) or 0
+                usage["cache_read_tokens"] = min(usage["input_tokens"], cached)
+                usage["input_tokens"] -= usage["cache_read_tokens"]
                 usage["output_tokens"] = u.get("completion_tokens", 0)
         return usage
     try:
@@ -142,6 +145,9 @@ def _parse_openai_usage(body: bytes, streamed: bool) -> dict:
     usage["request_id"] = obj.get("id")
     u = obj.get("usage", {})
     usage["input_tokens"] = u.get("prompt_tokens", 0)
+    cached = (u.get("prompt_tokens_details") or {}).get("cached_tokens", 0) or 0
+    usage["cache_read_tokens"] = min(usage["input_tokens"], cached)
+    usage["input_tokens"] -= usage["cache_read_tokens"]
     usage["output_tokens"] = u.get("completion_tokens", 0)
     return usage
 

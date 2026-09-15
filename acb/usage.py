@@ -3,7 +3,8 @@
 The atomic unit of measurement is one *LLM request* (one row in ``usage.jsonl``).
 All four requested context metrics are derived from this stream:
 
-* total tokens        -> sum over rows
+* total tokens        -> fresh input + output + cache creation (cache reads excluded)
+* context tokens      -> input + cache reads + cache creation
 * peak context        -> max prompt size (input + cache_read + cache_creation)
 * per-turn growth     -> prompt size ordered by turn_index
 * cache efficiency    -> cache_read / prompt size
@@ -20,6 +21,28 @@ from pathlib import Path
 from typing import Iterable, Iterator
 
 
+def normalize_benchmark_metric(metric: dict) -> dict:
+    """Normalize OpenAI's inclusive prompt count to exclusive token buckets.
+
+    Anthropic input counts already exclude cache reads/creation. Praxis's
+    OpenAI metrics retain prompt_tokens as input_tokens, so cached reads must
+    be subtracted once. The marker makes repeated normalization idempotent.
+    """
+    result = dict(metric)
+    endpoint = (metric.get("endpoint") or "").split("?", 1)[0].rstrip("/")
+    semantics = metric.get("input_tokens_semantics")
+    inclusive = semantics == "inclusive" or (
+        semantics is None and endpoint.endswith(("/chat/completions", "/completions", "/responses"))
+    )
+    if inclusive:
+        prompt = metric.get("input_tokens", 0) or 0
+        cached = min(prompt, metric.get("cache_read_input_tokens", 0) or 0)
+        result["input_tokens"] = prompt - cached
+        result["cache_read_input_tokens"] = cached
+    result["input_tokens_semantics"] = "exclusive"
+    return result
+
+
 @dataclass
 class UsageRecord:
     """One LLM request observed by the proxy."""
@@ -32,7 +55,8 @@ class UsageRecord:
     instance_id: str
     turn_index: int  # 0-based order of requests within this instance run
 
-    # token accounting (Anthropic naming; OpenAI mapped onto the same fields)
+    # Exclusive token buckets: input_tokens excludes cache read/creation.
+    # OpenAI prompt_tokens (inclusive of cached input) is normalized at ingestion.
     input_tokens: int = 0
     output_tokens: int = 0
     cache_read_tokens: int = 0
@@ -85,17 +109,11 @@ class InstanceMetrics:
     total_output: int = 0
     total_cache_read: int = 0
     total_cache_creation: int = 0
-    total_tokens: int = 0
+    total_tokens: int = 0  # fresh input/creation + output; not a billing total
+    context_tokens: int = 0  # tokens occupying the context window across requests
     peak_context: int = 0
     per_turn_prompt: list[int] = field(default_factory=list)
     cache_efficiency: float = 0.0  # cache_read / total prompt tokens sent
-    # KNOWN GAP (container-mode/Praxis source only): PraxisContainerBackend
-    # never populates cache_read_tokens/cache_creation_tokens (see its
-    # _parse_usage_log() docstring for why -- praxis-ai's token_count filter
-    # discards that breakdown upstream, it's not a parsing bug here) so this
-    # silently reads 0.0 for every Praxis-based run regardless of real cache
-    # reuse -- indistinguishable from "no caching happened" without also
-    # checking the model's own `reports_cache` flag (config/proxy.yaml).
     resolved: bool | None = None  # filled in from benchmark evaluation
 
     @classmethod
@@ -119,8 +137,9 @@ class InstanceMetrics:
             m.per_turn_prompt.append(r.prompt_tokens)
             m.peak_context = max(m.peak_context, r.prompt_tokens)
             prompt_total += r.prompt_tokens
-        m.total_tokens = (
-            m.total_input + m.total_output + m.total_cache_read + m.total_cache_creation
-        )
+        # Cache reads are reused prompt tokens. Keep them in context_tokens for
+        # context/caching analysis, but exclude them from fresh-token totals.
+        m.total_tokens = m.total_input + m.total_output + m.total_cache_creation
+        m.context_tokens = prompt_total
         m.cache_efficiency = (m.total_cache_read / prompt_total) if prompt_total else 0.0
         return m

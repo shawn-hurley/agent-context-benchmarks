@@ -107,6 +107,7 @@ def build_report(usage_path: Path, resolved: dict[str, bool], out_dir: Path, cfg
         "resolved": resolved_n,
         "resolve_rate": resolved_n / n,
         "avg_total_tokens": sum(m.total_tokens for m in metrics) / n,
+        "avg_context_tokens": sum(m.context_tokens for m in metrics) / n,
         "avg_turns": sum(m.turns for m in metrics) / n,
         "avg_peak_context": sum(m.peak_context for m in metrics) / n,
         "avg_cache_efficiency": sum(m.cache_efficiency for m in metrics) / n,
@@ -115,6 +116,12 @@ def build_report(usage_path: Path, resolved: dict[str, bool], out_dir: Path, cfg
             sum(m.total_tokens for m in metrics) / resolved_n if resolved_n else None
         ),
     }
+    integration_manifests = {}
+    for manifest_path in sorted((Path(out_dir) / "instances").glob("*/integrations/*/manifest.json")):
+        instance_id = manifest_path.parents[2].name
+        integration_manifests.setdefault(instance_id, []).append(json.loads(manifest_path.read_text()))
+    if integration_manifests:
+        rollup["integrations"] = integration_manifests
     report_path = Path(out_dir) / "report.json"
     report_path.write_text(json.dumps(rollup, indent=2))
     return report_path

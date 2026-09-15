@@ -26,7 +26,7 @@ from pathlib import Path
 from typing import Any
 
 from acb.costs import ModelCost, estimate_cost, load_cost_table
-from acb.usage import read_records
+from acb.usage import read_records, normalize_benchmark_metric
 
 _CHART_JS_CDN = "https://cdn.jsdelivr.net/npm/chart.js@4"
 
@@ -214,8 +214,7 @@ def _aggregate_benchmark_metrics(records: list[dict]) -> dict:
     Computes totals, averages, and context growth from per-request data.
     Returns a dict compatible with InstanceMetrics structure.
     
-    Note: total_tokens = input + output + cache_read + cache_creation
-    (not the sum of per-request total_tokens, which are just input + output)
+    Note: total_tokens excludes reused cache reads; context_tokens includes them.
     """
     if not records:
         return {
@@ -225,6 +224,7 @@ def _aggregate_benchmark_metrics(records: list[dict]) -> dict:
             'total_cache_read': 0,
             'total_cache_creation': 0,
             'total_tokens': 0,
+            'context_tokens': 0,
             'peak_context': 0,
             'per_turn_prompt': [],
             'cache_efficiency': 0.0,
@@ -232,7 +232,10 @@ def _aggregate_benchmark_metrics(records: list[dict]) -> dict:
         }
     
     # Sort by timestamp to ensure turn order
-    sorted_records = sorted(records, key=lambda r: r.get('timestamp_ms', 0))
+    sorted_records = sorted(
+        (normalize_benchmark_metric(r) for r in records),
+        key=lambda r: r.get('timestamp_ms', 0),
+    )
     
     # Compute aggregates
     total_input = sum(r.get('input_tokens', 0) for r in sorted_records)
@@ -240,8 +243,9 @@ def _aggregate_benchmark_metrics(records: list[dict]) -> dict:
     total_cache_read = sum(r.get('cache_read_input_tokens', 0) for r in sorted_records)
     total_cache_creation = sum(r.get('cache_creation_input_tokens', 0) for r in sorted_records)
     
-    # total_tokens = sum of all components (not sum of per-request total_tokens)
-    total_tokens = total_input + total_output + total_cache_read + total_cache_creation
+    # Usage-style total excludes reused cache reads. Context volume remains
+    # available separately through total_prompt/context metrics.
+    total_tokens = total_input + total_output + total_cache_creation
     
     # Per-turn prompt size (input + cache_read + cache_creation)
     per_turn_prompt = [
@@ -252,6 +256,7 @@ def _aggregate_benchmark_metrics(records: list[dict]) -> dict:
     
     # Cache efficiency: cache_read / total_prompt_tokens
     total_prompt = sum(per_turn_prompt)
+    context_tokens = total_prompt
     cache_efficiency = total_cache_read / total_prompt if total_prompt > 0 else 0.0
     
     return {
@@ -261,6 +266,7 @@ def _aggregate_benchmark_metrics(records: list[dict]) -> dict:
         'total_cache_read': total_cache_read,
         'total_cache_creation': total_cache_creation,
         'total_tokens': total_tokens,
+        'context_tokens': context_tokens,
         'peak_context': peak_context,
         'per_turn_prompt': per_turn_prompt,
         'cache_efficiency': cache_efficiency,
@@ -269,13 +275,13 @@ def _aggregate_benchmark_metrics(records: list[dict]) -> dict:
 
 
 def _metric_total_tokens(metric: dict) -> float:
-    """Return all measured tokens for a classified request."""
+    """Return fresh input/creation and output tokens for a classified request."""
+    metric = normalize_benchmark_metric(metric)
     return sum(
         metric.get(field, 0) or 0
         for field in (
             "input_tokens",
             "output_tokens",
-            "cache_read_input_tokens",
             "cache_creation_input_tokens",
         )
     )

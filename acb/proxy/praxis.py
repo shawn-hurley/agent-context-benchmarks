@@ -143,7 +143,7 @@ from acb.container import (
     container_stop_rm,
 )
 from acb.proxy.base import ProxyBackend
-from acb.usage import UsageRecord, write_records
+from acb.usage import UsageRecord, write_records, normalize_benchmark_metric
 
 # Podman's gvproxy-based user-mode networking resolves this to the macOS
 # host's own network stack, including loopback services -- verified against
@@ -876,7 +876,7 @@ class PraxisContainerBackend(PraxisBackend):
                     model=self.tags.model,
                     instance_id=self.tags.instance_id,
                     turn_index=turn,
-                    input_tokens=metric.get("input_tokens", 0),
+                    input_tokens=normalize_benchmark_metric(metric).get("input_tokens", 0),
                     output_tokens=metric.get("output_tokens", 0),
                     cache_read_tokens=metric.get("cache_read_input_tokens", 0),
                     cache_creation_tokens=metric.get("cache_creation_input_tokens", 0),

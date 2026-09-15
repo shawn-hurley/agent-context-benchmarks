@@ -32,6 +32,7 @@ from acb.benchmarks import make_benchmark, Prediction
 from acb.config import RunConfig, Registries
 from acb.container import build_image, container_stop_rm, image_exists, pod_create, pod_remove
 from acb.harnesses import make_harness
+from acb.integrations import IntegrationContext, IntegrationManager, ModelEndpoint
 from acb.logging_config import setup_acb_logger, log_debug
 from acb.proxy import ProxyTags
 from acb.proxy.praxis import PraxisContainerBackend
@@ -269,6 +270,8 @@ def _run_instance_pipeline(
     arch = _resolve_arch(bench_cfg)
     build_dir = harness_out_dir / "image_build"
     
+    integrations = IntegrationManager(harness_name, harness_cfg)
+
     # Create pod with run_id label for tracking/cleanup
     pod_create(
         pod_name,
@@ -298,6 +301,11 @@ def _run_instance_pipeline(
         harness.setup_container(testbed_container, arch, cache_dir)
         harness.setup_skills(testbed_container, arch, cache_dir)
         harness.setup_mcp_servers(testbed_container, arch, cache_dir)
+        integration_env = integrations.setup(IntegrationContext(
+            container=testbed_container, arch=arch, harness=harness_name,
+            harness_version=harness_cfg.get("version", "unrecorded"),
+            cache_dir=cache_dir, artifact_dir=instance_dir / "integrations",
+        ))
         
         tags = ProxyTags(
             run_id=cfg.run_id, benchmark=cfg.benchmark, harness=harness_name,
@@ -312,11 +320,25 @@ def _run_instance_pipeline(
         )
         
         with praxis_backend:
-            env = harness.build_container_env(praxis_backend.base_url, praxis_backend.api_key)
-            harness.run_container(
-                instance.prompt, testbed_container, cfg.model, env,
-                instance_dir, instance.instance_id,
-            )
+            try:
+                endpoint = integrations.start(ModelEndpoint(
+                    praxis_backend.base_url, praxis_backend.api_key, harness.api,
+                ))
+                env = harness.build_container_env(endpoint.base_url, endpoint.api_key)
+                conflicts = set(env) & set(integration_env)
+                if conflicts:
+                    raise ValueError(f"integration environment conflicts with harness: {sorted(conflicts)}")
+                env.update(integration_env)
+                result = harness.run_container(
+                    instance.prompt, testbed_container, cfg.model, env,
+                    instance_dir, instance.instance_id,
+                )
+                if integrations.entries and (result.exit_code != 0 or result.timed_out):
+                    raise RuntimeError(f"integrated harness failed: exit={result.exit_code}, timed_out={result.timed_out}")
+            finally:
+                integration_cleanup_errors = integrations.finish()
+            if integration_cleanup_errors:
+                raise RuntimeError("integration evidence/cleanup failed: " + "; ".join(integration_cleanup_errors))
         
         prediction = benchmark.collect_prediction_container(instance, testbed_container, cfg.model)
         
@@ -360,6 +382,8 @@ def _run_instance_pipeline(
                         model_name_or_path=cfg.model, error=str(e)), {}
     
     finally:
+        for cleanup_error in integrations.finish():
+            logging.getLogger(__name__).warning("Integration cleanup: %s", cleanup_error)
         if not os.environ.get("ACB_DEBUG_KEEP_CONTAINERS"):
             # Normal cleanup: remove container and pod
             if testbed_container:
@@ -455,6 +479,11 @@ def run(cfg: RunConfig, registries: Registries | None = None, verbose: bool = Fa
     bench_cfg = {**registries.benchmarks.get(cfg.benchmark, {}), **cfg.overrides.get("benchmark", {})}
     proxy_cfg = {**registries.backend_config(cfg.proxy), **cfg.overrides.get("proxy", {})}
     model_spec = registries.model_spec(cfg.model)
+
+    # Validate integration selections before loading datasets or starting pods.
+    for harness_name in cfg.harnesses:
+        harness_config = {**registries.harnesses.get(harness_name, {}), **cfg.overrides.get("harness", {})}
+        IntegrationManager(harness_name, harness_config)
 
     benchmark = make_benchmark(cfg.benchmark, bench_cfg)
     instances = benchmark.load_instances(subset=cfg.subset, limit=cfg.limit)
