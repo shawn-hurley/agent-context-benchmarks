@@ -294,6 +294,7 @@ class Pi(HarnessAdapter):
         """
         pi_dir = ensure_linux_files(
             arch, cache_dir,
+            version=self.config.get("version", DEFAULT_VERSION),
             tracker=getattr(self, '_tracker', None),
             tracker_key=getattr(self, '_tracker_key', None)
         )
@@ -413,6 +414,10 @@ class Pi(HarnessAdapter):
             "--",                   # stop option parsing
             prompt,
         ]
+        extension_args = [arg for path in self.integration_activation.pi_extensions for arg in ("-e", path)]
+        if extension_args:
+            separator = pi_argv.index("--")
+            pi_argv[separator:separator] = extension_args
         # Build combined prompt: system_prompt + skill hints
         combined_prompt = ""
         system_prompt = self.config.get("system_prompt", "")

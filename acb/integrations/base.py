@@ -1,7 +1,7 @@
 """Controller-side lifecycle shared by execution integrations and model middleware."""
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 
@@ -22,6 +22,20 @@ class ModelEndpoint:
     api: str
 
 
+@dataclass(frozen=True)
+class IntegrationActivation:
+    """Reviewed launch additions, composed by the harness at final config construction."""
+
+    env: dict[str, str] = field(default_factory=dict)
+    pi_extensions: tuple[str, ...] = ()
+    opencode_plugins: tuple[str, ...] = ()
+    claude_settings: tuple[str, ...] = ()
+
+
+class IntegrationFailure(RuntimeError):
+    """A required integration failed even if the agent recovered and exited normally."""
+
+
 class Integration:
     name: str
     category: str
@@ -38,7 +52,7 @@ class Integration:
     def install(self, context: IntegrationContext) -> None:
         raise NotImplementedError
 
-    def activate(self, context: IntegrationContext) -> dict[str, str]:
+    def activate(self, context: IntegrationContext) -> IntegrationActivation | dict[str, str]:
         return {}
 
     def verify(self, context: IntegrationContext) -> dict:

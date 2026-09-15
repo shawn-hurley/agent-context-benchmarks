@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import replace
 import json
 
-from .base import Integration, IntegrationContext, ModelEndpoint
+from .base import Integration, IntegrationActivation, IntegrationContext, IntegrationFailure, ModelEndpoint
 from .rtk import RTKIntegration
 
 REGISTRY: dict[str, type[Integration]] = {"rtk": RTKIntegration}
@@ -12,6 +12,8 @@ CATEGORIES = ("execution_integrations", "model_middleware")
 
 class IntegrationManager:
     def __init__(self, harness: str, config: dict):
+        self.harness = harness
+        self.activation = IntegrationActivation()
         self.entries: list[Integration] = []
         self.contexts: dict[str, IntegrationContext] = {}
         self.states: dict[str, dict] = {}
@@ -55,7 +57,12 @@ class IntegrationManager:
             (context.artifact_dir / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
 
     def setup(self, context: IntegrationContext) -> dict[str, str]:
+        if context.harness != self.harness:
+            raise ValueError("integration context harness does not match configuration")
         env: dict[str, str] = {}
+        pi_extensions: tuple[str, ...] = ()
+        opencode_plugins: tuple[str, ...] = ()
+        claude_settings: tuple[str, ...] = ()
         for entry in self.entries:
             self.contexts[entry.name] = replace(context, artifact_dir=context.artifact_dir / entry.name)
         self._write()
@@ -66,7 +73,12 @@ class IntegrationManager:
                 self.states[entry.name]["status"] = "installing"
                 self._write()
                 entry.install(current)
-                additions = entry.activate(current)
+                activation = entry.activate(current)
+                if isinstance(activation, dict):
+                    activation = IntegrationActivation(env=activation)
+                if not isinstance(activation, IntegrationActivation):
+                    raise ValueError("invalid integration activation")
+                additions = activation.env
                 if not isinstance(additions, dict) or any(
                     not isinstance(k, str) or not isinstance(v, str) for k, v in additions.items()
                 ):
@@ -77,7 +89,24 @@ class IntegrationManager:
                 overlap = set(additions) & (set(env) | forbidden)
                 if overlap:
                     raise ValueError(f"integration environment conflict: {sorted(overlap)}")
+                for target, paths, existing in (
+                    ("pi", activation.pi_extensions, pi_extensions),
+                    ("opencode", activation.opencode_plugins, opencode_plugins),
+                    ("claude-code", activation.claude_settings, claude_settings),
+                ):
+                    if not isinstance(paths, tuple) or any(not isinstance(p, str) or not p.startswith("/") for p in paths):
+                        raise ValueError("integration assets require absolute paths")
+                    if paths and context.harness != target:
+                        raise ValueError(f"{target} activation cannot be used with {context.harness}")
+                    if len(set(paths)) != len(paths) or set(paths) & set(existing):
+                        raise ValueError("duplicate integration activation asset")
+                pi_extensions += activation.pi_extensions
+                opencode_plugins += activation.opencode_plugins
+                claude_settings += activation.claude_settings
+                if len(claude_settings) > 1:
+                    raise ValueError("Claude Code requires one composed integration settings file")
                 env.update(additions)
+                self.activation = IntegrationActivation(dict(env), pi_extensions, opencode_plugins, claude_settings)
                 self.states[entry.name]["verification"] = entry.verify(current)
                 self.states[entry.name]["status"] = "ready"
                 self._write()
@@ -116,9 +145,17 @@ class IntegrationManager:
             for operation in (entry.collect, entry.stop):
                 try:
                     operation(context)
+                    if operation == entry.collect and "activity" in entry.metadata:
+                        activity = entry.metadata["activity"]
+                        self.states[entry.name].setdefault("verification", {}).update(
+                            agent_tool_verified=activity["agent_tool_verified"],
+                            adapter_loaded=activity["adapter_loaded"],
+                        )
                 except Exception as exc:
                     errors.append(f"{entry.name} {operation.__name__}: {exc}")
                     self.states[entry.name].setdefault("cleanup_errors", []).append(str(exc))
+                    if isinstance(exc, IntegrationFailure):
+                        self.states[entry.name].update(status="failed", error=str(exc))
             if self.states[entry.name]["status"] != "failed":
                 self.states[entry.name]["status"] = "finished" if not self.states[entry.name].get("cleanup_errors") else "cleanup_failed"
         try:

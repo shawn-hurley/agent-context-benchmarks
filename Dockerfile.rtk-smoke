@@ -1,0 +1,35 @@
+# Self-contained fixture image, native Linux ARM64 or x86-64.
+# Build from the repo root; no sibling checkouts or host RTK installation.
+FROM ubuntu:22.04 AS rtk-build
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates curl git build-essential pkg-config libssl-dev \
+    && rm -rf /var/lib/apt/lists/*
+RUN curl --proto '=https' --tlsv1.2 -fsSL https://sh.rustup.rs -o /tmp/rustup.sh \
+    && sh /tmp/rustup.sh -y --profile minimal --default-toolchain 1.91.0
+ENV PATH="/root/.cargo/bin:${PATH}"
+# Upstream v0.48.0, immutable source; Cargo.lock pins crate dependencies.
+RUN git init /src && git -C /src remote add origin https://github.com/rtk-ai/rtk.git \
+    && git -C /src fetch --depth 1 origin fde0a8f185945556f51718de0f4c430bb62b3df6 \
+    && git -C /src checkout --detach FETCH_HEAD
+WORKDIR /src
+RUN cargo build --release --locked --bin rtk \
+    && test "$(target/release/rtk --version)" = 'rtk 0.48.0'
+
+FROM ubuntu:22.04
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    ca-certificates curl git bzip2 \
+    && rm -rf /var/lib/apt/lists/*
+# Published installer hashes: https://repo.anaconda.com/miniconda/
+RUN case "$(uname -m)" in \
+      aarch64) installer_arch=aarch64; installer_sha=edc03373d75b3a06de594a7f819ad351bd2fa7602854f392107998e62468c783 ;; \
+      x86_64) installer_arch=x86_64; installer_sha=188b5d94ab3acefdeaebd7cb470d2fb74a3280563c77075de6e3e1d58d84ab0a ;; \
+      *) exit 1 ;; \
+    esac \
+    && curl -fsSL "https://repo.anaconda.com/miniconda/Miniconda3-py312_25.7.0-2-Linux-${installer_arch}.sh" -o /tmp/miniconda.sh \
+    && printf '%s  /tmp/miniconda.sh\n' "$installer_sha" | sha256sum -c - \
+    && bash /tmp/miniconda.sh -b -p /opt/miniconda3 \
+    && /opt/miniconda3/bin/conda create --offline -y -n testbed --clone base \
+    && rm /tmp/miniconda.sh
+COPY --from=rtk-build /src/target/release/rtk /opt/acb-fixture/rtk
+WORKDIR /testbed
+CMD ["tail", "-f", "/dev/null"]

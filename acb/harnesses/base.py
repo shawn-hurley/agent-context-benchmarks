@@ -31,6 +31,8 @@ from abc import ABC, abstractmethod
 from dataclasses import dataclass
 from pathlib import Path
 
+from acb.integrations.base import IntegrationActivation
+
 
 @dataclass
 class HarnessResult:
@@ -46,6 +48,7 @@ class HarnessAdapter(ABC):
 
     def __init__(self, config: dict | None = None):
         self.config = config or {}
+        self.integration_activation = IntegrationActivation()
 
     def build_container_env(self, base_url: str, api_key: str) -> dict[str, str]:
         """Env passed to the harness process inside the container (as

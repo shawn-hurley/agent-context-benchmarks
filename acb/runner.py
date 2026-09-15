@@ -306,6 +306,7 @@ def _run_instance_pipeline(
             harness_version=harness_cfg.get("version", "unrecorded"),
             cache_dir=cache_dir, artifact_dir=instance_dir / "integrations",
         ))
+        harness.integration_activation = integrations.activation
         
         tags = ProxyTags(
             run_id=cfg.run_id, benchmark=cfg.benchmark, harness=harness_name,

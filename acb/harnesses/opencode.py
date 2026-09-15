@@ -180,11 +180,21 @@ class OpenCode(HarnessAdapter):
         """
         binary = ensure_linux_binary(
             arch, cache_dir,
+            version=self.config.get("version", DEFAULT_VERSION),
             tracker=getattr(self, '_tracker', None),
             tracker_key=getattr(self, '_tracker_key', None)
         )
         container_cp_in(container, binary, "/usr/local/bin/opencode")
         container_exec_capture(container, ["chmod", "+x", "/usr/local/bin/opencode"])
+        # Both baseline and RTK arms get the same dependency state. A configured
+        # plugin otherwise waits for npm/network bootstrap during generation.
+        from .opencode_runtime import VERSION, ensure_plugin_runtime
+        if self.config.get("version", DEFAULT_VERSION) == VERSION:
+            runtime = ensure_plugin_runtime(cache_dir)
+            config_dir = "/root/.config/opencode"
+            container_exec_capture(container, ["mkdir", "-p", config_dir])
+            for name in ("node_modules", "package.json", "package-lock.json", "acb-runtime-manifest.json"):
+                container_cp_in(container, runtime / name, config_dir + "/" + name)
 
     def _generate_skill_hints(self, skills: list[dict]) -> str:
         """Generate MANDATORY skill loading instructions for OpenCode.
@@ -331,6 +341,15 @@ Skills provide optimized workflows tested specifically for this benchmark. The s
             })
             opencode_model = f"acb/{model}"
 
+        config_data = json.loads(config)
+        # MCP and native plugins must compose here, after provider/model routing.
+        for key, value in getattr(self, "_mcp_config", {}).items():
+            if key in config_data:
+                raise ValueError(f"OpenCode MCP configuration conflict: {key}")
+            config_data[key] = value
+        if self.integration_activation.opencode_plugins:
+            config_data["plugin"] = ["file://" + path for path in self.integration_activation.opencode_plugins]
+        config = json.dumps(config_data)
         env = {**env, "OPENCODE_CONFIG_CONTENT": config,
                "OPENCODE_DISABLE_AUTOUPDATE": "1"}
 
@@ -411,7 +430,7 @@ Skills provide optimized workflows tested specifically for this benchmark. The s
         """Write MCP server configuration for OpenCode.
 
         OpenCode MCP servers are configured in OPENCODE_CONFIG_CONTENT JSON
-        under the 'mcpServers' key. Since this is embedded in a JSON string
+        under the 'mcp' key. Since this is embedded in a JSON string
         passed via environment variable, we note this for documentation.
         
         The actual injection happens in run_container() where OPENCODE_CONFIG_CONTENT
@@ -434,7 +453,7 @@ Skills provide optimized workflows tested specifically for this benchmark. The s
 
         logger.info(
             f"OpenCode MCP servers will be configured via OPENCODE_CONFIG_CONTENT: "
-            f"{list(config_data.get('mcpServers', {}).keys())}"
+            f"{list(config_data.get('mcp', {}).keys())}"
         )
         
         # For OpenCode, the MCP config will be merged into OPENCODE_CONFIG_CONTENT

@@ -48,6 +48,13 @@ Confirmed live (real `claude -p ... --bare --verbose --output-format
 stream-json`, real binary, not just docs): the `system/init` event's own
 `tools` field is exactly `["Bash","Edit","Read"]` in bare mode.
 
+The opt-in `isolated-hooks` launch profile enables explicit ACB-owned hooks.
+Release 2.1.241 ignores even explicit hooks under `--bare`, so both baseline
+and RTK use this separate profile: empty settings sources, isolated agent
+configuration, disabled project instructions/auto-memory, and explicit
+Bash/Edit/Read exposure with no discovered MCP servers or slash commands.
+Historical bare runs need a new matched baseline for these comparisons.
+
 Permissions: NOT `--permission-mode bypassPermissions` /
 `--dangerously-skip-permissions`, despite Anthropic's own docs describing
 that mode as "Recommended... for sandboxes with no internet access" (which
@@ -346,6 +353,11 @@ class ClaudeCode(HarnessAdapter):
     name = "claude-code"
     api = "anthropic"
 
+    def __init__(self, config: dict | None = None):
+        super().__init__(config)
+        if self.config.get("launch_profile", "bare") not in ("bare", "isolated-hooks"):
+            raise ValueError("Claude Code launch_profile must be bare or isolated-hooks")
+
     def effective_api(self, model_api: str) -> str:
         """Always speaks Anthropic Messages -- locked regardless of model backend.
 
@@ -363,6 +375,7 @@ class ClaudeCode(HarnessAdapter):
         cache_dir is shared across all runs under the output directory."""
         binary = ensure_linux_binary(
             arch, cache_dir,
+            version=self.config.get("version", DEFAULT_VERSION),
             tracker=getattr(self, '_tracker', None),
             tracker_key=getattr(self, '_tracker_key', None)
         )
@@ -382,7 +395,6 @@ class ClaudeCode(HarnessAdapter):
         claude_argv = [
             binary,
             "-p", prompt,
-            "--bare",
             "--verbose",  # required together with -p + --output-format stream-json
             "--output-format", "stream-json",
             "--model", model,
@@ -409,6 +421,18 @@ class ClaudeCode(HarnessAdapter):
             "--allowedTools", "Bash,Edit,Read",
             "--no-session-persistence",
         ]
+        profile = self.config.get("launch_profile", "bare")
+        if profile == "bare":
+            if self.integration_activation.claude_settings:
+                raise ValueError("Claude Code hooks require launch_profile: isolated-hooks")
+            claude_argv += ["--bare"]
+        else:
+            settings = self.integration_activation.claude_settings
+            # The baseline uses the same profile, with an empty explicit settings object.
+            claude_argv += ["--settings", settings[0] if settings else "{}",
+                            "--setting-sources", "", "--tools", "Bash,Edit,Read",
+                            "--disable-slash-commands", "--strict-mcp-config",
+                            "--mcp-config", '{"mcpServers":{}}']
         # Build combined prompt: system_prompt + skill hints
         combined_prompt = ""
         system_prompt = self.config.get("system_prompt", "")
@@ -463,6 +487,10 @@ class ClaudeCode(HarnessAdapter):
             "DISABLE_AUTOUPDATER": "1",
             "CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC": "1",
         })
+        if self.config.get("launch_profile", "bare") == "isolated-hooks":
+            env.update(CLAUDE_CONFIG_DIR="/tmp/acb-claude-agent",
+                       CLAUDE_CODE_DISABLE_AUTO_MEMORY="1",
+                       CLAUDE_CODE_DISABLE_CLAUDE_MDS="1")
         return env
 
     def _write_mcp_config(self, container: str, servers: list[dict]) -> None:

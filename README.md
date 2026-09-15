@@ -57,6 +57,13 @@ the `bin/docker` shim makes SWE-bench's evaluation subprocess work seamlessly.
 
 ## Configure
 
+For optional RTK shell-output compression in Goose, Pi, OpenCode, and Claude Code, see
+[RTK configuration and compatibility tests](RTK.md).
+
+Verify all four RTK integrations with a self-contained fixture image (no model
+server required): `bash scripts/run_rtk_smoke.sh`. See the RTK guide for setup
+requirements on macOS and Linux ARM64.
+
 Copy the example configuration files and customize them:
 
 ```bash

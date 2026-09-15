@@ -120,25 +120,7 @@ class MCPServerManager:
         return {"mcpServers": mcp_servers}
 
     def _generate_opencode_config(self, servers: list[dict]) -> dict:
-        """Generate OpenCode MCP servers config.
-
-        OpenCode embeds MCP config in OPENCODE_CONFIG_CONTENT JSON:
-        {
-          "provider": {...},
-          "mcpServers": {
-            "memory": {
-              "command": "npx",
-              "args": ["-y", "@modelcontextprotocol/server-memory"]
-            }
-          }
-        }
-
-        Args:
-            servers: List of MCP server configs
-
-        Returns:
-            Dict with 'mcpServers' key (merged into OPENCODE_CONFIG_CONTENT)
-        """
+        """Generate OpenCode's native `mcp` map for final config composition."""
         mcp_servers = {}
 
         for server in servers:
@@ -147,17 +129,17 @@ class MCPServerManager:
                 logger.warning("MCP server missing 'name' field, skipping")
                 continue
 
-            mcp_servers[server_name] = {
-                "command": server.get("command"),
-                "args": server.get("args", []),
-            }
+            command = server.get("command")
+            if not isinstance(command, str) or not command:
+                raise ValueError(f"OpenCode MCP server {server_name!r} requires a command")
+            mcp_servers[server_name] = {"type": "local", "command": [command, *server.get("args", [])]}
 
             # Add env if present
             env = server.get("env", {})
             if env:
-                mcp_servers[server_name]["env"] = env
+                mcp_servers[server_name]["environment"] = env
 
-        return {"mcpServers": mcp_servers}
+        return {"mcp": mcp_servers}
 
     def _generate_claude_code_config(self, servers: list[dict]) -> dict:
         """Generate Claude Code MCP servers config.

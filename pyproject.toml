@@ -19,6 +19,11 @@ acb = "acb.cli:main"
 [tool.setuptools.packages.find]
 include = ["acb*"]
 
+[tool.setuptools.package-data]
+"acb" = ["goose-container-config.yaml", "goosehints-templates/*.md"]
+"acb.integrations" = ["assets/rtk/*.mjs", "assets/rtk/*.ts", "assets/rtk/*.py"]
+"acb.harnesses" = ["assets/*.json"]
+
 [build-system]
 requires = ["setuptools>=68"]
 build-backend = "setuptools.build_meta"
