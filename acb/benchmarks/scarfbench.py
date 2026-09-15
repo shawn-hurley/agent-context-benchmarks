@@ -62,7 +62,10 @@ from acb.utils import normalize_instance_id_for_path
 # prepare step excludes the same set (confirmed from prepare.rs in the scarf
 # CLI source).  They are NOT copied into the agent's working directory; scarf
 # validate later copies the TARGET framework's equivalents in for grading.
-_HARNESS_FILES = {"smoke.py", "smoke", "Makefile", "makefile", "Dockerfile", ".dockerignore"}
+_HARNESS_FILES = {
+    "smoke.py", "smoke", "Makefile", "makefile", "Dockerfile",
+    ".dockerignore", "test.sh",
+}
 
 # Framework names the scarf validate Metadata struct accepts (snake_case, from
 # the Framework enum in validate/types.rs with `serde(rename_all="snake_case")`).
@@ -201,6 +204,62 @@ def _write_metadata_json(path: Path, *, agent: str, app: str, layer: str,
         "model": model,
     }
     path.write_text(json.dumps(metadata, indent=2))
+
+
+def _ensure_validation_harness(benchmark_dir: Path, *, layer: str, app: str,
+                                framework: str) -> None:
+    """Fill the validator files omitted by ScarfBench v0.1.2 benchmark pulls.
+
+    The released benchmark contains ``Dockerfile`` and ``test.sh`` but the
+    validator contract expects a ``Makefile`` and target-framework
+    ``metadata.json``.  Generate those two small compatibility files only
+    when they are absent; official harness files always win.
+    """
+    framework_dir = benchmark_dir / layer / app / framework
+    test_script = framework_dir / "test.sh"
+    if not test_script.exists():
+        return
+
+    makefile = framework_dir / "Makefile"
+    if not makefile.exists():
+        # Run the benchmark's supplied health check inside the application
+        # container.  Dockerfile CMD starts the app; test.sh checks its
+        # framework-specific port.  Polling avoids racing slow Maven/Liberty
+        # startup while keeping the validator's required `make test` entrypoint.
+        image = f"scarfbench-{app}-{framework}:latest"
+        container = f"scarfbench-{app}-{framework}-validation-$${{PPID}}"
+        health_url = (
+            "http://localhost:9080/cart/health"
+            if framework == "jakarta"
+            else "http://localhost:8080/api/cart/health"
+        )
+        makefile.write_text(
+            f"IMAGE_NAME ?= {image}\n"
+            f"CONTAINER_NAME ?= {container}\n\n"
+            "build:\n"
+            "\tdocker build -t $(IMAGE_NAME) .\n"
+            "\t@echo BUILD SUCCESS\n\n"
+            "up: build\n"
+            "\t-docker rm -f $(CONTAINER_NAME) >/dev/null 2>&1\n"
+            "\tdocker run -d --name $(CONTAINER_NAME) $(IMAGE_NAME)\n"
+            "\t@echo 'Application started and ready.'\n\n"
+            "down:\n"
+            "\t-docker rm -f $(CONTAINER_NAME) >/dev/null 2>&1\n\n"
+            "test: up\n"
+            "\tstatus=1; trap '$(MAKE) down >/dev/null 2>&1' EXIT; "
+            "for i in $$(seq 1 90); do "
+            f"if docker exec -e BASE_URL={health_url} $(CONTAINER_NAME) bash /app/test.sh; "
+            "then status=0; break; fi; "
+            "sleep 1; done; "
+            "if [ $$status -eq 0 ]; then echo '===== 1 passed ====='; fi; "
+            "exit $$status\n"
+        )
+
+    smoke_metadata = framework_dir / "metadata.json"
+    if not smoke_metadata.exists():
+        # test.sh is a single aggregate health check, so it represents one
+        # smoke test for ScarfBench's leaderboard metadata.
+        smoke_metadata.write_text(json.dumps({"num_smoke_tests": 1}, indent=2))
 
 
 class ScarfBench(Benchmark):
@@ -621,6 +680,34 @@ class ScarfBench(Benchmark):
 
         scarf_eval_dir = self._scarf_eval_dir(output_dir)
         benchmark_cache_dir = self._benchmark_cache_dir()
+
+        # ScarfBench v0.1.2's published benchmark tree contains test.sh but
+        # omits the Makefile and smoke-test metadata expected by `scarf
+        # validate`.  Materialize compatibility files before validation; this
+        # is idempotent and leaves any official files untouched.
+        for pred in preds_to_eval:
+            run_meta = Path(pred.output) / "metadata.json" if pred.output else None
+            if run_meta and run_meta.exists():
+                run_metadata = json.loads(run_meta.read_text())
+                _ensure_validation_harness(
+                    benchmark_cache_dir,
+                    layer=run_metadata["layer"],
+                    app=run_metadata["app"],
+                    framework=run_metadata["target_framework"],
+                )
+                # `scarf validate` copies Makefile/Dockerfile/metadata.json
+                # itself, but not test.sh.  Stage the target framework's
+                # script explicitly; otherwise a source-framework script can
+                # probe the wrong port (e.g. Jakarta 9080 vs Quarkus 8080).
+                target_test = (
+                    benchmark_cache_dir / run_metadata["layer"] /
+                    run_metadata["app"] / run_metadata["target_framework"] /
+                    "test.sh"
+                )
+                if target_test.exists():
+                    output_tree = run_meta.parent / "output"
+                    output_tree.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(target_test, output_tree / "test.sh")
 
         cmd = [
             scarf_binary, "validate",
