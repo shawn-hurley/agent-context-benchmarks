@@ -1,0 +1,12 @@
+# Build the Java/Maven base first:
+# podman build -t scarfbench:latest acb/scarfbench
+# podman build -f Dockerfile.rtk-scarfbench -t localhost/acb-scarfbench-rtk:1 .
+FROM scarfbench:latest
+RUN dnf install -y python3 util-linux openssl-libs \
+    && dnf clean all \
+    && mkdir -p /opt/miniconda3/bin \
+    && ln -s /usr/bin/python3 /opt/miniconda3/bin/python
+# The pinned Claude RTK adapter uses this interpreter path. This is a
+# standard-library Python shim, not a conda environment; conda_env stays null.
+RUN /opt/miniconda3/bin/python -c 'import json,selectors,subprocess,hashlib' \
+    && command -v script

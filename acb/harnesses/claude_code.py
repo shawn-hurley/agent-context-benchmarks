@@ -460,11 +460,14 @@ class ClaudeCode(HarnessAdapter):
         # doesn't source `/root/.bashrc`, so the testbed's conda env (where
         # the repo and its test deps actually live) has to be activated
         # explicitly before exec'ing claude.
-        activate = "source /opt/miniconda3/etc/profile.d/conda.sh && conda activate testbed"
+        workdir = self.config.get("workdir", "/testbed")
+        conda_env = self.config.get("conda_env", "testbed")
+        preamble = ("source /opt/miniconda3/etc/profile.d/conda.sh && conda activate "
+                    + shlex.quote(conda_env) + " && ") if conda_env else ""
         inner = " ".join(shlex.quote(a) for a in claude_argv)
         exec_cmd += [
-            "--workdir", "/testbed", container,
-            "bash", "-c", f"{activate} && exec {inner}",
+            "--workdir", workdir, container,
+            "bash", "-c", f"{preamble}exec {inner}",
         ]
         # out_dir is now the per-instance directory (instances/{test_id}/)
         transcript_path = Path(out_dir) / "transcript.jsonl"

@@ -454,13 +454,16 @@ class Pi(HarnessAdapter):
         # 3. Streams clean JSON output to stdout for _streaming.py to capture
         # The -q flag suppresses "Script started/done" messages, -f flushes output
         # immediately, and -c runs the command directly. Verified live: 31-turn run.
-        activate = "source /opt/miniconda3/etc/profile.d/conda.sh && conda activate testbed"
+        workdir = self.config.get("workdir", "/testbed")
+        conda_env = self.config.get("conda_env", "testbed")
+        preamble = ("source /opt/miniconda3/etc/profile.d/conda.sh && conda activate "
+                    + shlex.quote(conda_env) + " && ") if conda_env else ""
         inner = " ".join(shlex.quote(a) for a in pi_argv)
         # Wrap inner command with script to provide filtered TTY
         wrapped = f"script -qfc {shlex.quote(inner)} /dev/null"
         exec_cmd += [
-            "--workdir", "/testbed", container,
-            "bash", "-c", f"{activate} && exec {wrapped}",
+            "--workdir", workdir, container,
+            "bash", "-c", f"{preamble}exec {wrapped}",
         ]
         # out_dir is now the per-instance directory (instances/{test_id}/)
         transcript_path = Path(out_dir) / "transcript.jsonl"
