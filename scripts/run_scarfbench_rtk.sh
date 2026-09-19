@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Run the four locally configured RTK harnesses against ScarfBench cart.
+# Run the four locally configured RTK harnesses against discovered ScarfBench migrations.
 set -euo pipefail
 repo_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_dir"

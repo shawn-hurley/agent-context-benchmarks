@@ -1,3 +1,5 @@
+schema_version: 2
+config_dir: ..
 # Single-instance paired RTK pilot. Fill in binary_path and sha256 for the target Linux build.
 run_id: claude-code-baseline-psf-requests-1142
 benchmark: swebench
@@ -8,7 +10,7 @@ subset:
   - psf__requests-1142
 limit: 1
 max_workers: 1
-output_dir: runs
+output_dir: ../../runs
 overrides:
   harness:
     version: "2.1.241"

@@ -1,0 +1,17 @@
+schema_version: 2
+config_dir: config
+run_id: legacy-baseline
+benchmark: swebench-lite
+harness:
+- goose
+- pi
+- opencode
+model: local-qwen
+subset:
+- psf__requests-1142
+execution:
+  max_workers: 1
+  timeout: 300
+output_dir: runs
+skills: []
+extensions: []

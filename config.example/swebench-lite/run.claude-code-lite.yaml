@@ -1,3 +1,5 @@
+schema_version: 2
+config_dir: ..
 # SWE-bench Lite run with claude-code harness
 #
 # Lite variant: 534 curated instances for faster iteration
@@ -17,4 +19,4 @@ model: mlx-community/Qwen3-Coder-30B-A3B-Instruct-4bit-dwq-v2  # key in proxy.ya
 proxy: praxis                               # key in proxy.yaml `backends`
 limit: 20                                   # optional: run first 20 instances (remove or adjust as needed)
 max_workers: 2                              # optional: parallel workers
-output_dir: runs
+output_dir: ../../runs

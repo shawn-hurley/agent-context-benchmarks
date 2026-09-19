@@ -85,12 +85,17 @@ livecodebench:
 scarfbench:
   # Implemented - requires `scarf` CLI and `scarf bench pull` setup.
   # See acb/benchmarks/scarfbench.py for configuration details.
-  # Example minimal config:
-  #   benchmark_cache_dir: /path/to/scarf-bench-output
-  #   scarf_binary: scarf  # or full path
+  # Discover all apps for this directed migration pair. The run's limit selects
+  # the first N apps. Run configs can override the pair under
+  # overrides.benchmark, e.g. source: spring and target: jakarta.
+  # Pair-specific example prompts are bundled in acb/scarfbench/prompts/.
+  source: jakarta
+  target: quarkus
+  # benchmark_cache_dir: /path/to/scarf-bench-output
+  # scarf_binary: scarf  # or full path
+  # An explicit instances list takes precedence over source/target:
   #   instances:
   #     - layer: business_domain
   #       app: cart
   #       source: jakarta
   #       target: quarkus
-  {}
