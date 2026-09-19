@@ -71,8 +71,10 @@ import urllib.request
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from acb.downloads import download_file
 from acb.container import container_cp_in, container_exec_capture
-from acb.harnesses._cache import binary_cache_lock
+from acb.transport import command as environment_command
+from acb.harnesses._cache import binary_cache_lock, harness_cache_ready, staged_harness_cache
 from acb.harnesses._streaming import execute
 from acb.harnesses.base import HarnessAdapter, HarnessResult
 
@@ -133,25 +135,25 @@ def ensure_linux_files(
     pi_subdir = dest_dir / "pi"  # tarball extracts to pi/ subdirectory
     
     # Quick check without lock (common case: already cached)
-    if pi_subdir.exists() and (pi_subdir / "pi").exists():
+    if harness_cache_ready(dest_dir, "pi/pi"):
         return pi_subdir
     
     # Acquire lock for download to prevent concurrent race conditions
     with _DOWNLOAD_LOCK, binary_cache_lock(cache_dir, cache_key):
         # Double-check after acquiring lock: another thread may have finished download
-        if pi_subdir.exists() and (pi_subdir / "pi").exists():
+        if harness_cache_ready(dest_dir, "pi/pi"):
             return pi_subdir
         
-        dest_dir.mkdir(parents=True, exist_ok=True)
         url = _RELEASE_URL.format(version=version, arch=pi_arch)
         if tracker and tracker_key:
             tracker.update_activity(tracker_key, f"setup: downloading pi binary ({pi_arch})")
-        archive_path = dest_dir / "pi.tar.gz"
-        urllib.request.urlretrieve(url, archive_path)  # noqa: S310
-        with tarfile.open(archive_path) as tf:
-            tf.extractall(dest_dir, filter="data")  # extracts pi/ subdirectory
-        archive_path.unlink()
-        (pi_subdir / "pi").chmod(0o755)
+        with staged_harness_cache(dest_dir, "pi/pi", url) as staging:
+            archive_path = staging / "pi.tar.gz"
+            download_file(url, archive_path)  # noqa: S310
+            with tarfile.open(archive_path) as tf:
+                tf.extractall(staging, filter="data")  # extracts pi/ subdirectory
+            archive_path.unlink()
+            (staging / "pi/pi").chmod(0o755)
         return pi_subdir
 
 
@@ -437,9 +439,6 @@ class Pi(HarnessAdapter):
                        ["--append-system-prompt", combined_prompt] +
                        pi_argv[pi_argv.index("--"):])
 
-        exec_cmd = ["podman", "exec", "-i"]  # Removed -t: script provides TTY
-        for key, value in env.items():
-            exec_cmd += ["-e", f"{key}={value}"]
         # Same conda activation as the other harnesses: podman exec doesn't
         # source /root/.bashrc, so testbed conda env must be activated
         # explicitly for pi's bash tool to run in the right environment.
@@ -461,10 +460,9 @@ class Pi(HarnessAdapter):
         inner = " ".join(shlex.quote(a) for a in pi_argv)
         # Wrap inner command with script to provide filtered TTY
         wrapped = f"script -qfc {shlex.quote(inner)} /dev/null"
-        exec_cmd += [
-            "--workdir", workdir, container,
-            "bash", "-c", f"{preamble}exec {wrapped}",
-        ]
+        exec_cmd = environment_command(
+            container, ["bash", "-c", f"{preamble}exec {wrapped}"], env, workdir,
+        )
         # out_dir is now the per-instance directory (instances/{test_id}/)
         transcript_path = Path(out_dir) / "transcript.jsonl"
         label = f"[pi:{instance_id}]"
@@ -475,41 +473,15 @@ class Pi(HarnessAdapter):
                        tracker_key=getattr(self, '_tracker_key', None))
 
     def _write_mcp_config(self, container: str, servers: list[dict]) -> None:
-        """Write MCP server configuration to Pi's config directory.
+        """Reject MCP selections until an executable Pi extension is available.
 
-        Pi reads mcp_servers from PI_CODING_AGENT_DIR/mcp_servers.json.
-        This method generates the config and writes it to the container.
-
-        Args:
-            container: Podman container ID
-            servers: List of MCP server configurations from harnesses.yaml
+        The pinned Pi release has no native MCP client. Writing a JSON file
+        alone silently runs the benchmark without its selected tools.
         """
         if not servers:
             return
-
-        from acb.mcp import MCPServerManager
-
-        mcp_mgr = MCPServerManager()
-        config_data = mcp_mgr.generate_config(servers, "pi")
-
-        # Pi reads from PI_CODING_AGENT_DIR which is /tmp/pi-agent in the container
-        container_agent_dir = _CONTAINER_AGENT_DIR
-        
-        # Ensure config directory exists
-        container_exec_capture(container, ["mkdir", "-p", container_agent_dir])
-
-        # Write config to temp file as JSON
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
-            json.dump(config_data, f, indent=2)
-            tmp_path = Path(f.name)
-
-        try:
-            # Copy config file to container
-            container_cp_in(
-                container, 
-                tmp_path, 
-                f"{container_agent_dir}/mcp_servers.json"
-            )
-            logger.info(f"MCP config written to {container_agent_dir}/mcp_servers.json")
-        finally:
-            tmp_path.unlink(missing_ok=True)
+        raise NotImplementedError(
+            "Pi MCP delivery requires an ACB extension; the pinned Pi release "
+            "does not load mcp_servers.json. Remove the MCP selection or use "
+            "another harness until the bridge is implemented."
+        )

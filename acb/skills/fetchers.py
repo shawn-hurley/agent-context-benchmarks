@@ -17,6 +17,7 @@ import time
 import urllib.error
 import urllib.request
 from pathlib import Path
+from acb.downloads import download_file, open_url, require_network
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -99,7 +100,7 @@ def _resolve_github_latest_version(
         api_url = f"https://api.github.com/repos/{owner}/{repo}/releases/latest"
         
         logger.info(f"Resolving 'latest' version from GitHub API: {api_url}")
-        with urllib.request.urlopen(api_url) as response:  # noqa: S310
+        with open_url(api_url) as response:  # noqa: S310
             data = json.loads(response.read().decode("utf-8"))
             version = data.get("tag_name")
             
@@ -172,7 +173,7 @@ def _fetch_release_assets(source_url: str, version: str) -> list[str]:
         owner, repo = _extract_owner_repo(source_url)
         api_url = f"https://api.github.com/repos/{owner}/{repo}/releases/tags/{version}"
         
-        with urllib.request.urlopen(api_url) as response:  # noqa: S310
+        with open_url(api_url) as response:  # noqa: S310
             data = json.loads(response.read())
             return [asset["name"] for asset in data.get("assets", [])]
     except Exception as e:
@@ -262,6 +263,26 @@ def _build_helpful_404_error(
 
 
 def fetch_github_release(config: dict, cache_dir: Path, arch: str) -> Path:
+    from acb.skills.cache import cached_skill
+    resolved = dict(config)
+    if resolved.get("version", "latest") == "latest":
+        resolved["version"] = _resolve_github_latest_version(
+            resolved["source_url"], cache_dir / ".github_versions.json")
+    source = {key: resolved.get(key) for key in
+              ("name", "version", "source_url", "binary_pattern", "binary_name", "skill_md_url")}
+    source.update(kind="github_release", architecture=_map_architecture(arch))
+    def fetch(staging):
+        directory = _fetch_github_release_contents(resolved, staging, arch)
+        if resolved.get("binary_pattern"):
+            candidates = ([directory / resolved["binary_name"]] if resolved.get("binary_name") else
+                          list(directory.rglob("*")))
+            if not any(path.is_file() and path.stat().st_mode & 0o111 for path in candidates):
+                raise ValueError("downloaded skill release is missing its executable binary")
+        return directory
+    return cached_skill(cache_dir, source, fetch)
+
+
+def _fetch_github_release_contents(config: dict, cache_dir: Path, arch: str) -> Path:
     """Fetch skill binary and SKILL.md from GitHub releases.
 
     For skills like rgctl that distribute as GitHub releases:
@@ -303,7 +324,7 @@ def fetch_github_release(config: dict, cache_dir: Path, arch: str) -> Path:
     mapped_arch = _map_architecture(arch)
 
     # Create cache directory with resolved version
-    cache_key = f"{skill_name}-{version}-{mapped_arch}"
+    cache_key = "release"
     skill_dir = cache_dir / cache_key
     skill_dir.mkdir(parents=True, exist_ok=True)
 
@@ -360,12 +381,8 @@ def fetch_github_release(config: dict, cache_dir: Path, arch: str) -> Path:
         # Check if it's a tarball that needs extraction
         if binary_path.suffix in [".gz", ".bz2", ".tar"]:
             logger.debug(f"Extracting {binary_path}")
-            if binary_path.suffix == ".gz" or binary_path.name.endswith(".tar.gz"):
-                with tarfile.open(binary_path) as tf:
-                    tf.extractall(skill_dir)
-            elif binary_path.suffix == ".bz2" or binary_path.name.endswith(".tar.bz2"):
-                with tarfile.open(binary_path) as tf:
-                    tf.extractall(skill_dir)
+            with tarfile.open(binary_path) as tf:
+                tf.extractall(skill_dir, filter="data")
             binary_path.unlink()  # Remove archive after extraction
 
     # Download SKILL.md or AGENTS.md
@@ -391,6 +408,13 @@ def fetch_github_release(config: dict, cache_dir: Path, arch: str) -> Path:
 
 
 def fetch_git_repo(config: dict, cache_dir: Path) -> Path:
+    from acb.skills.cache import cached_skill
+    source = {"kind": "git", "name": config.get("name"),
+              "source_url": config.get("source_url"), "ref": config.get("ref", "main")}
+    return cached_skill(cache_dir, source, lambda staging: _fetch_git_contents(config, staging))
+
+
+def _fetch_git_contents(config: dict, cache_dir: Path) -> Path:
     """Fetch skill from git repository.
 
     Args:
@@ -412,7 +436,7 @@ def fetch_git_repo(config: dict, cache_dir: Path) -> Path:
     if not source_url:
         raise ValueError("Git config missing 'source_url'")
 
-    cache_key = f"{skill_name}-git"
+    cache_key = "repository"
     skill_dir = cache_dir / cache_key
 
     # Check if already cached
@@ -420,6 +444,7 @@ def fetch_git_repo(config: dict, cache_dir: Path) -> Path:
         logger.debug(f"Using cached skill at {skill_dir}")
         return skill_dir
 
+    require_network(source_url)
     logger.info(f"Cloning {skill_name} from {source_url}")
 
     try:
@@ -428,6 +453,7 @@ def fetch_git_repo(config: dict, cache_dir: Path) -> Path:
             ["git", "clone", "--depth", "1", "--branch", ref, source_url, str(skill_dir)],
             check=True,
             capture_output=True,
+            timeout=120,
         )
     except subprocess.CalledProcessError as e:
         raise RuntimeError(
@@ -483,7 +509,7 @@ def _download_file(url: str, dest: Path) -> None:
     """
     try:
         logger.debug(f"Downloading {url} to {dest}")
-        urllib.request.urlretrieve(url, dest)  # noqa: S310
+        download_file(url, dest)  # noqa: S310
     except urllib.error.HTTPError as e:
         # Preserve HTTP error code for caller to detect 404s
         raise RuntimeError(f"HTTP Error {e.code}: {e.reason}") from e
@@ -505,7 +531,7 @@ def _fetch_text(url: str) -> str:
     """
     try:
         logger.debug(f"Fetching {url}")
-        with urllib.request.urlopen(url) as response:  # noqa: S310
+        with open_url(url) as response:  # noqa: S310
             return response.read().decode("utf-8")
     except Exception as e:
         raise RuntimeError(f"Failed to fetch {url}: {str(e)}") from e

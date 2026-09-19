@@ -2,11 +2,12 @@
 name = "agent-context-benchmarks"
 version = "0.1.0"
 description = "Measure context/token usage across agent harnesses on coding benchmarks"
-requires-python = ">=3.10"
+requires-python = ">=3.12"
 dependencies = [
     "pyyaml>=6.0",
     "google-auth>=2.0",
     "rich>=13.0",
+    "harbor==0.23.0",
 ]
 
 [project.optional-dependencies]
@@ -20,8 +21,8 @@ acb = "acb.cli:main"
 include = ["acb*"]
 
 [tool.setuptools.package-data]
-"acb" = ["goose-container-config.yaml", "goosehints-templates/*.md"]
-"acb.integrations" = ["assets/rtk/*.mjs", "assets/rtk/*.ts", "assets/rtk/*.py"]
+"acb" = ["goose-container-config.yaml", "goosehints-templates/*.md", "catalog/*.yaml", "catalog/caveman/*", "scarfbench/prompts/*.md", "assets/praxis/Containerfile", "assets/praxis/praxis-vertex-anthropic/Cargo.*", "assets/praxis/praxis-vertex-anthropic/src/*.rs"]
+"acb.integrations" = ["assets/rtk/*.mjs", "assets/rtk/*.ts", "assets/rtk/*.py", "assets/caveman/*.py", "assets/caveman/*.ts", "assets/caveman/Containerfile"]
 "acb.harnesses" = ["assets/*.json"]
 
 [build-system]

@@ -68,7 +68,7 @@ class RTKIntegration(Integration):
     root = "/opt/acb/rtk"
 
     def validate(self, harness: str, harness_config: dict) -> None:
-        allowed = {"name", "version", "mode", "binary_path", "sha256", "experimental"}
+        allowed = {"name", "version", "mode", "binary_path", "sha256", "experimental", "python_path"}
         if set(self.config) - allowed:
             raise ValueError(f"unknown RTK options: {sorted(set(self.config) - allowed)}")
         mode = self.config.get("mode")
@@ -92,6 +92,9 @@ class RTKIntegration(Integration):
         path = self.config.get("binary_path")
         if not isinstance(path, str) or not Path(path).expanduser().is_file():
             raise ValueError("RTK binary_path must point to a predownloaded target Linux binary")
+        self.python_path = self.config.get("python_path", CLAUDE_PYTHON)
+        if not isinstance(self.python_path, str) or not self.python_path.startswith("/"):
+            raise ValueError("RTK python_path must be an absolute interpreter path")
         self.harness = harness
         self.harness_version = harness_config["version"]
 
@@ -125,7 +128,7 @@ class RTKIntegration(Integration):
                     container_cp_in(context.container, staged_asset, self.root + "/native/" + name)
                     asset_hashes[name] = hashlib.sha256(asset).hexdigest()
                 if self.harness == "claude-code":
-                    command = CLAUDE_PYTHON + " " + self.root + "/native/claude_hook.py"
+                    command = shlex.quote(self.python_path) + " " + self.root + "/native/claude_hook.py"
                     hooks = {event: [{**({"matcher": "Bash"} if event != "SessionStart" else {}),
                                       "hooks": [{"type": "command", "command": command, "timeout": 5}]}]
                              for event in ("SessionStart", "PreToolUse", "PostToolUse", "PostToolUseFailure")}
@@ -150,10 +153,12 @@ class RTKIntegration(Integration):
                     raise ValueError("OpenCode plugin runtime lock/version mismatch")
                 self.metadata["plugin_runtime"] = runtime
             if self.harness == "claude-code":
-                container_exec_capture(context.container, [CLAUDE_PYTHON, "-c", "import json,selectors,subprocess,hashlib"])
-                container_exec_capture(context.container, ["test", "!", "-e", "/usr/local/bin/rtk"])
-                container_exec_capture(context.container, ["ln", "-s", self.root + "/rtk", "/usr/local/bin/rtk"])
-                self.metadata.update(launch_profile="isolated-hooks", hook_interpreter=CLAUDE_PYTHON,
+                container_exec_capture(context.container, [self.python_path, "-c", "import json,selectors,subprocess,hashlib"])
+                container_exec_capture(context.container, ["/bin/bash", "-c",
+                    'if test -e /usr/local/bin/rtk || test -L /usr/local/bin/rtk; then '
+                    'test "$(readlink /usr/local/bin/rtk)" = /opt/acb/rtk/rtk; '
+                    'else ln -s /opt/acb/rtk/rtk /usr/local/bin/rtk; fi'])
+                self.metadata.update(launch_profile="isolated-hooks", hook_interpreter=self.python_path,
                                      rtk_path_activation="/usr/local/bin/rtk")
         container_exec_capture(context.container, ["/bin/bash", "-n", self.root + "/shell/bash"])
         self.metadata.update(version=self.config["version"], sha256=digest,
@@ -188,22 +193,23 @@ class RTKIntegration(Integration):
         env["ACB_RTK_DECISIONS"] = self.root + "/preflight-decisions.jsonl"
         env["RTK_DB_PATH"] = self.root + "/preflight.db"
         # Rewritten command spells `rtk`, so make its directory available on PATH.
-        script = "export PATH=" + shlex.quote(self.root) + ':"$PATH"; exec ' + shlex.quote(env["GOOSE_SHELL"]) + " -c 'git --version'"
+        script = "export PATH=" + shlex.quote(self.root) + ':"$PATH"; exec ' + shlex.quote(env["GOOSE_SHELL"]) + " -c 'printf acb-preflight'"
         if self.harness == "claude-code":
             script = "cd " + shlex.quote(self.root + "/native") + "; " + script
         cmd = ["env", *[f"{k}={v}" for k, v in env.items()], "/bin/bash", "-c", script]
         output = container_exec_capture(context.container, cmd)
-        # git --version may pass through; use a temporary repository for status.
-        status_script = 'export PATH=' + shlex.quote(self.root) + ':"$PATH"; repo=$(mktemp -d); git -C "$repo" init -q; cd "$repo"; exec ' + shlex.quote(env["GOOSE_SHELL"]) + " -c 'git status'"
+        # Tasks need not contain Git. Exercise a rewrite using the adapter's own
+        # directory, without installing tools or modifying the task workspace.
+        status_script = 'export PATH=' + shlex.quote(self.root) + ':"$PATH"; cd ' + shlex.quote(self.root) + '; exec ' + shlex.quote(env["GOOSE_SHELL"]) + " -c 'ls'"
         compact_output = container_exec_capture(context.container, ["env", *[f"{k}={v}" for k, v in env.items()], "/bin/bash", "-c", status_script])
         evidence = container_exec_capture(context.container, ["cat", env["ACB_RTK_DECISIONS"]])
         records = [json.loads(line) for line in evidence.splitlines() if line]
         if not records or records[-1]["decision"] != "rewrite":
-            raise RuntimeError("RTK preflight did not rewrite git status")
+            raise RuntimeError("RTK preflight did not rewrite ls")
         return {"installed_wrapper": self.harness == "goose", "installed_binary": True,
                 "adapter_loaded": False, "rewrite_observed": True,
                 "agent_tool_verified": False, "preflight_output": output.strip(),
-                "preflight_git_status": compact_output.strip()}
+                "preflight_ls": compact_output.strip()}
 
     def collect(self, context: IntegrationContext) -> None:
         context.artifact_dir.mkdir(parents=True, exist_ok=True)

@@ -1,0 +1,5 @@
+services:
+  fixture-model:
+    build:
+      context: .
+    command: ["/opt/miniconda3/bin/python", "/fixture-server.py"]

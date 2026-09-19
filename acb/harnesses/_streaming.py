@@ -28,6 +28,7 @@ from pathlib import Path
 from typing import Callable
 
 from acb.harnesses.base import HarnessResult
+from acb.transport import EnvironmentCommand
 
 HEARTBEAT_INTERVAL = 10  # seconds
 ACTIVITY_TEXT_TAIL = 160  # chars of rolling assistant-text preview to keep
@@ -140,6 +141,10 @@ def execute(cmd: list[str], env: dict[str, str] | None, cwd: str | None,
         tracker: Optional ProgressTracker for updating UI with activity
         tracker_key: Composite key {harness}-{instance_id} for tracker updates
     """
+    if isinstance(cmd, EnvironmentCommand):
+        return cmd.transport.execute(cmd, transcript_path=transcript_path,
+                                     timeout=timeout, describe_event=describe_event,
+                                     tracker=tracker, tracker_key=tracker_key)
     proc = subprocess.Popen(
         cmd, cwd=cwd, env=env,
         stdout=subprocess.PIPE, stderr=subprocess.STDOUT,

@@ -1,0 +1,7 @@
+version = "1.0"
+[environment]
+workdir = "/work"
+[[steps]]
+name = "first"
+[[steps]]
+name = "second"

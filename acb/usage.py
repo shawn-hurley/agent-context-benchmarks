@@ -63,6 +63,8 @@ class UsageRecord:
     cache_creation_tokens: int = 0
 
     # request context
+    step_name: str | None = None
+    step_turn_index: int | None = None
     request_id: str | None = None
     endpoint: str | None = None
     status_code: int | None = None
@@ -143,3 +145,36 @@ class InstanceMetrics:
         m.context_tokens = prompt_total
         m.cache_efficiency = (m.total_cache_read / prompt_total) if prompt_total else 0.0
         return m
+
+
+def is_model_request(record):
+    path = (record.get("endpoint") or "").split("?", 1)[0].rstrip("/")
+    return path.endswith(("/chat/completions", "/messages", "/responses", "/completions"))
+
+
+def parse_measurements(raw: str):
+    """Validate observations before zero-default normalization.
+
+    Model requests must report input and output, including explicit zeroes.
+    Absent cache buckets remain optional for collectors/providers without cache
+    reporting. Discovery and token-count probes need no model-usage fields.
+    """
+    records, errors = [], []
+    for number, line in enumerate(raw.splitlines(), 1):
+        if not line.strip():
+            continue
+        try:
+            value = json.loads(line)
+            if not isinstance(value, dict) or not isinstance(value.get("endpoint"), str):
+                raise ValueError("expected a request record with an endpoint")
+            if is_model_request(value):
+                missing = [key for key in ("input_tokens", "output_tokens") if key not in value]
+                if missing:
+                    raise ValueError(f"model usage missing required fields: {', '.join(missing)}")
+            for key in ("input_tokens", "output_tokens", "cache_read_input_tokens", "cache_creation_input_tokens", "total_tokens"):
+                if key in value and (type(value[key]) is not int or value[key] < 0):
+                    raise ValueError(f"invalid {key}")
+            records.append(value)
+        except (ValueError, TypeError) as error:
+            errors.append(f"metrics line {number}: {error}")
+    return records, errors

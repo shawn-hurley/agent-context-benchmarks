@@ -144,8 +144,10 @@ import urllib.request
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from acb.downloads import download_file
 from acb.container import container_cp_in, container_exec_capture
-from acb.harnesses._cache import binary_cache_lock
+from acb.transport import command as environment_command
+from acb.harnesses._cache import binary_cache_lock, harness_cache_ready, staged_harness_cache
 from acb.harnesses._streaming import execute
 from acb.harnesses.base import HarnessAdapter, HarnessResult
 
@@ -213,27 +215,27 @@ def ensure_linux_binary(
     dest = dest_dir / "claude"
     
     # Quick check without lock (common case: already cached)
-    if dest.exists():
+    if harness_cache_ready(dest_dir, "claude"):
         return dest
     
     # Acquire lock for download to prevent concurrent race conditions
     with _DOWNLOAD_LOCK, binary_cache_lock(cache_dir, cache_key):
         # Double-check after acquiring lock: another thread may have finished download
-        if dest.exists():
+        if harness_cache_ready(dest_dir, "claude"):
             return dest
         
-        dest_dir.mkdir(parents=True, exist_ok=True)
         url = _REGISTRY_TARBALL_URL.format(npm_arch=npm_arch, version=version)
         if tracker and tracker_key:
             tracker.update_activity(tracker_key, f"setup: downloading claude-code binary ({npm_arch})")
-        archive_path = dest_dir / "claude-code.tgz"
-        urllib.request.urlretrieve(url, archive_path)  # noqa: S310
-        with tarfile.open(archive_path) as tf:
-            member = tf.getmember("package/claude")
-            member.name = "claude"  # extract flat into dest_dir, not package/claude
-            tf.extract(member, dest_dir, filter="data")  # noqa: S202
-        archive_path.unlink()
-        dest.chmod(0o755)
+        with staged_harness_cache(dest_dir, "claude", url) as staging:
+            archive_path = staging / "claude-code.tgz"
+            download_file(url, archive_path)  # noqa: S310
+            with tarfile.open(archive_path) as tf:
+                member = tf.getmember("package/claude")
+                member.name = "claude"  # extract flat into staging, not package/claude
+                tf.extract(member, staging, filter="data")  # noqa: S202
+            archive_path.unlink()
+            (staging / "claude").chmod(0o755)
         return dest
 
 
@@ -431,8 +433,15 @@ class ClaudeCode(HarnessAdapter):
             # The baseline uses the same profile, with an empty explicit settings object.
             claude_argv += ["--settings", settings[0] if settings else "{}",
                             "--setting-sources", "", "--tools", "Bash,Edit,Read",
-                            "--disable-slash-commands", "--strict-mcp-config",
-                            "--mcp-config", '{"mcpServers":{}}']
+                            "--disable-slash-commands"]
+        if self.config.get("mcp_servers"):
+            claude_argv += ["--strict-mcp-config", "--mcp-config", "/tmp/acb-claude-mcp.json"]
+            # MCP tools need explicit permission in non-interactive runs. Limit
+            # that permission to the configured servers; retain built-in policy.
+            allowed = claude_argv.index("--allowedTools") + 1
+            claude_argv[allowed] += ''.join(',mcp__' + server['name'] for server in self.config['mcp_servers'])
+        elif profile == "isolated-hooks":
+            claude_argv += ["--strict-mcp-config", "--mcp-config", '{"mcpServers":{}}']
         # Build combined prompt: system_prompt + skill hints
         combined_prompt = ""
         system_prompt = self.config.get("system_prompt", "")
@@ -452,9 +461,6 @@ class ClaudeCode(HarnessAdapter):
         if max_budget := self.config.get("max_budget_usd"):
             claude_argv += ["--max-budget-usd", str(max_budget)]
 
-        exec_cmd = ["podman", "exec", "-i"]
-        for key, value in env.items():
-            exec_cmd += ["-e", f"{key}={value}"]
         # Same conda-activation need as goose's run_container() (see that
         # module's own comment for the full rationale): `podman exec`
         # doesn't source `/root/.bashrc`, so the testbed's conda env (where
@@ -465,10 +471,9 @@ class ClaudeCode(HarnessAdapter):
         preamble = ("source /opt/miniconda3/etc/profile.d/conda.sh && conda activate "
                     + shlex.quote(conda_env) + " && ") if conda_env else ""
         inner = " ".join(shlex.quote(a) for a in claude_argv)
-        exec_cmd += [
-            "--workdir", workdir, container,
-            "bash", "-c", f"{preamble}exec {inner}",
-        ]
+        exec_cmd = environment_command(
+            container, ["bash", "-c", f"{preamble}exec {inner}"], env, workdir,
+        )
         # out_dir is now the per-instance directory (instances/{test_id}/)
         transcript_path = Path(out_dir) / "transcript.jsonl"
         label = f"[claude-code:{instance_id}]"
@@ -497,10 +502,7 @@ class ClaudeCode(HarnessAdapter):
         return env
 
     def _write_mcp_config(self, container: str, servers: list[dict]) -> None:
-        """Write MCP server configuration to Claude Code's config directory.
-
-        Claude Code reads MCP servers from ~/.claude/mcp_servers.json.
-        This method generates the config and writes it to the container.
+        """Write the explicit MCP config passed by run_container().
 
         Args:
             container: Podman container ID
@@ -517,12 +519,6 @@ class ClaudeCode(HarnessAdapter):
         mcp_mgr = MCPServerManager()
         config_data = mcp_mgr.generate_config(servers, "claude-code")
 
-        # Claude Code reads MCP servers from ~/.claude/mcp_servers.json
-        claude_config_dir = "/root/.claude"
-        
-        # Ensure config directory exists
-        container_exec_capture(container, ["mkdir", "-p", claude_config_dir])
-
         # Write config to temp file as JSON
         with tempfile.NamedTemporaryFile(mode="w", suffix=".json", delete=False) as f:
             json.dump(config_data, f, indent=2)
@@ -533,8 +529,8 @@ class ClaudeCode(HarnessAdapter):
             container_cp_in(
                 container,
                 tmp_path,
-                f"{claude_config_dir}/mcp_servers.json"
+                "/tmp/acb-claude-mcp.json"
             )
-            logger.info(f"MCP config written to {claude_config_dir}/mcp_servers.json")
+            logger.info("MCP config written to /tmp/acb-claude-mcp.json")
         finally:
             tmp_path.unlink(missing_ok=True)

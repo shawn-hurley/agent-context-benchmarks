@@ -5,8 +5,9 @@ import json
 
 from .base import Integration, IntegrationActivation, IntegrationContext, IntegrationFailure, ModelEndpoint
 from .rtk import RTKIntegration
+from .caveman import CavemanIntegration
 
-REGISTRY: dict[str, type[Integration]] = {"rtk": RTKIntegration}
+REGISTRY: dict[str, type[Integration]] = {"rtk": RTKIntegration, "caveman": CavemanIntegration}
 CATEGORIES = ("execution_integrations", "model_middleware")
 
 
@@ -44,6 +45,11 @@ class IntegrationManager:
                 names.add(name)
                 self.entries.append(integration)
                 self.states[name] = {"name": name, "category": category, "status": "configured"}
+        if {"rtk", "caveman"} <= names:
+            next(entry for entry in self.entries if entry.name == "caveman").metadata["composition"] = {
+                "order": ["rtk", "caveman"],
+                "recovery": "exact bytes after RTK; pre-RTK output is not reconstructed",
+            }
 
     def _write(self) -> None:
         for entry in self.entries:
@@ -86,6 +92,17 @@ class IntegrationManager:
                 forbidden = {"HOME", "ANTHROPIC_BASE_URL", "ANTHROPIC_API_KEY", "OPENAI_BASE_URL",
                              "OPENAI_API_KEY", "OPENAI_HOST", "ANTHROPIC_HOST", "PI_CODING_AGENT_DIR",
                              "OPENCODE_CONFIG_CONTENT"}
+                # Reviewed Goose composition: capture the output of RTK's shell
+                # wrapper, then annotate successful output for the gateway.
+                # Other environment collisions remain errors.
+                if (self.harness == "goose" and entry.name == "caveman"
+                        and additions.get("GOOSE_SHELL") == "/opt/acb/caveman/goose.py"
+                        and env.get("GOOSE_SHELL") == "/opt/acb/rtk/shell/bash"):
+                    additions = {**additions, "ACB_CAVEMAN_INNER_SHELL": env.pop("GOOSE_SHELL")}
+                    entry.metadata["composition"] = {
+                        "order": ["rtk", "caveman"],
+                        "recovery": "exact bytes after RTK; pre-RTK output is not reconstructed",
+                    }
                 overlap = set(additions) & (set(env) | forbidden)
                 if overlap:
                     raise ValueError(f"integration environment conflict: {sorted(overlap)}")
@@ -151,6 +168,8 @@ class IntegrationManager:
                             agent_tool_verified=activity["agent_tool_verified"],
                             adapter_loaded=activity["adapter_loaded"],
                         )
+                        if "compression_verified" in activity:
+                            self.states[entry.name]["verification"]["compression_verified"] = activity["compression_verified"]
                 except Exception as exc:
                     errors.append(f"{entry.name} {operation.__name__}: {exc}")
                     self.states[entry.name].setdefault("cleanup_errors", []).append(str(exc))

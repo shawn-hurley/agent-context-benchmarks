@@ -49,6 +49,11 @@ def aggregate_per_instance_files(harness_out_dir: Path) -> None:
         for instance_dir in sorted(instances_dir.iterdir()):
             if instance_dir.is_dir():
                 instance_id = instance_dir.name
+                instance_usage = instance_dir / "usage.jsonl"
+                if instance_usage.exists():
+                    first = next((line for line in instance_usage.read_text().splitlines() if line.strip()), None)
+                    if first:
+                        instance_id = json.loads(first).get("instance_id", instance_id)
                 instance_bm = instance_dir / "benchmark_metrics.jsonl"
                 if instance_bm.exists():
                     for line in instance_bm.read_text().strip().split('\n'):

@@ -52,8 +52,10 @@ import urllib.request
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from acb.downloads import download_file
 from acb.container import container_cp_in, container_exec_capture
-from acb.harnesses._cache import binary_cache_lock
+from acb.transport import command as environment_command
+from acb.harnesses._cache import binary_cache_lock, harness_cache_ready, staged_harness_cache
 from acb.harnesses._streaming import execute
 from acb.harnesses.base import HarnessAdapter, HarnessResult
 
@@ -104,26 +106,26 @@ def ensure_linux_binary(
     dest = dest_dir / "opencode"
     
     # Quick check without lock (common case: already cached)
-    if dest.exists():
+    if harness_cache_ready(dest_dir, "opencode"):
         return dest
     
     # Acquire lock for download to prevent concurrent race conditions
     with _DOWNLOAD_LOCK, binary_cache_lock(cache_dir, cache_key):
         # Double-check after acquiring lock: another thread may have finished download
-        if dest.exists():
+        if harness_cache_ready(dest_dir, "opencode"):
             return dest
         
-        dest_dir.mkdir(parents=True, exist_ok=True)
         url = _RELEASE_URL.format(version=version, arch=oc_arch)
         if tracker and tracker_key:
             tracker.update_activity(tracker_key, f"setup: downloading opencode binary ({oc_arch})")
-        archive_path = dest_dir / "opencode.tar.gz"
-        urllib.request.urlretrieve(url, archive_path)  # noqa: S310
-        with tarfile.open(archive_path) as tf:
-            member = tf.getmember("opencode")   # single file at tarball root
-            tf.extract(member, dest_dir, filter="data")  # noqa: S202
-        archive_path.unlink()
-        dest.chmod(0o755)
+        with staged_harness_cache(dest_dir, "opencode", url) as staging:
+            archive_path = staging / "opencode.tar.gz"
+            download_file(url, archive_path)  # noqa: S310
+            with tarfile.open(archive_path) as tf:
+                member = tf.getmember("opencode")   # single file at tarball root
+                tf.extract(member, staging, filter="data")  # noqa: S202
+            archive_path.unlink()
+            (staging / "opencode").chmod(0o755)
         return dest
 
 
@@ -392,9 +394,6 @@ Skills provide optimized workflows tested specifically for this benchmark. The s
             finally:
                 tmp_path.unlink(missing_ok=True)
 
-        exec_cmd = ["podman", "exec", "-i"]  # Removed -t: script provides TTY
-        for key, value in env.items():
-            exec_cmd += ["-e", f"{key}={value}"]
         # Same conda activation as goose/claude-code: podman exec doesn't
         # source /root/.bashrc, so the testbed conda env must be activated
         # explicitly so opencode's bash tool runs in the right environment.
@@ -416,10 +415,9 @@ Skills provide optimized workflows tested specifically for this benchmark. The s
         inner = " ".join(shlex.quote(a) for a in opencode_argv)
         # Wrap inner command with script to provide filtered TTY
         wrapped = f"script -qfc {shlex.quote(inner)} /dev/null"
-        exec_cmd += [
-            "--workdir", workdir, container,
-            "bash", "-c", f"{preamble}exec {wrapped}",
-        ]
+        exec_cmd = environment_command(
+            container, ["bash", "-c", f"{preamble}exec {wrapped}"], env, workdir,
+        )
         # out_dir is now the per-instance directory (instances/{test_id}/)
         transcript_path = Path(out_dir) / "transcript.jsonl"
         label = f"[opencode:{instance_id}]"

@@ -1,0 +1,45 @@
+revision: 1
+harnesses:
+  goose:
+    version: 1.50.1
+    timeout: 1800
+  pi:
+    version: 0.84.3
+    timeout: 1800
+  opencode:
+    version: 1.18.22
+    timeout: 1800
+  claude-code:
+    version: 2.1.241
+    timeout: 1800
+    launch_profile: isolated-hooks
+benchmarks:
+  rh-swe-bench:
+    execution_backend: harbor
+    dataset: rounakbende/rh-swe-bench
+    revision: a31c36f6cb6d2c9f3caea36745564b3f4958239c
+    task_root: tasks
+    reward_metric: reward
+    success_value: 1
+    attempts: 1
+  harbor:
+    execution_backend: harbor
+    attempts: 1
+extensions:
+  rtk:
+    version: 0.48.0
+    source_commit: fde0a8f185945556f51718de0f4c430bb62b3df6
+    status: experimental; live compatibility gates required
+  caveman:
+    status: experimental; protocol and recovery live gates required
+    version: ed37ab132393899c129bbeef2b9743ff3af19c68
+    options:
+      mode: record
+skills:
+  caveman:
+    version: ed37ab132393899c129bbeef2b9743ff3af19c68
+    sha256: 0bf09a0a9a017d004a81d4b693e5a2d830e1a28230a5885df773e1ed9c0571cc
+    source_url: https://github.com/JuliusBrussee/caveman
+    options:
+      intensity: lite
+mcp_servers: {}

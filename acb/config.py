@@ -7,7 +7,7 @@ matrix (which harness x which model x which benchmark) declarative.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, fields
 from pathlib import Path
 from typing import Any
 
@@ -20,7 +20,12 @@ def _load_yaml(path: Path) -> dict[str, Any]:
     if not path.exists():
         return {}
     with path.open(encoding="utf-8") as f:
-        return yaml.safe_load(f) or {}
+        value = yaml.safe_load(f)
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise ValueError(f"{path}: expected a mapping")
+    return value
 
 
 @dataclass
@@ -36,6 +41,20 @@ class RunConfig:
     output_dir: str = "runs"
     # free-form overrides merged into the harness/benchmark/proxy config
     overrides: dict[str, Any] = field(default_factory=dict)
+    schema_version: int = 2
+    skills: list | None = None
+    mcp_servers: list | None = None
+    extensions: list | None = None
+    execution: dict[str, Any] = field(default_factory=dict)
+    config_dir: str | None = None
+    source_file: str | None = field(default=None, repr=False)
+
+    def __post_init__(self):
+        self.validate_schema()
+
+    def validate_schema(self) -> None:
+        if type(self.schema_version) is not int or self.schema_version != 2:
+            raise ValueError("schema_version must be 2; older configuration schemas are unsupported")
 
     @property
     def harnesses(self) -> list[str]:
@@ -43,6 +62,23 @@ class RunConfig:
         if isinstance(self.harness, str):
             return [self.harness]
         return list(self.harness) if self.harness else []
+
+    def output_path(self) -> Path:
+        """Resolve run output relative to the invocation directory."""
+        if not isinstance(self.output_dir, str) or not self.output_dir:
+            raise ValueError("output_dir must be a nonempty path string")
+        return Path(self.output_dir).expanduser().resolve()
+
+    def registry_dir(self) -> Path:
+        """Find registries using the run file's schema and declaring directory."""
+        from acb.resolver import discover_config_dir
+        self.validate_schema()
+        origin = Path(self.source_file).parent if self.source_file else Path.cwd()
+        if self.config_dir:
+            path = Path(self.config_dir).expanduser()
+            path = origin / path
+            return path.absolute()
+        return discover_config_dir(origin)
 
     @classmethod
     def from_file(cls, path: str | Path) -> "RunConfig":
@@ -56,6 +92,10 @@ class RunConfig:
             # actual problem.
             raise FileNotFoundError(f"run config not found: {path}")
         data = _load_yaml(path)
+        unknown = set(data) - {item.name for item in fields(cls) if item.name != "source_file"}
+        if unknown:
+            raise ValueError(f"run config {path}: unknown fields {sorted(unknown, key=str)}")
+        data["source_file"] = str(path.resolve())
         try:
             return cls(**data)
         except TypeError as e:
@@ -104,13 +144,27 @@ class Registries:
     harnesses: dict[str, Any]
     benchmarks: dict[str, Any]
     proxy: dict[str, Any]  # full proxy.yaml: {models: {...}, backends: {...}}
+    models: dict[str, Any] = field(default_factory=dict)
+    skills: dict[str, Any] = field(default_factory=dict)
+    mcp_servers: dict[str, Any] = field(default_factory=dict)
+    extensions: dict[str, Any] = field(default_factory=dict)
+    machine: dict[str, Any] = field(default_factory=dict)
+    sources: list[str] = field(default_factory=list)
 
     @classmethod
-    def load(cls, config_dir: Path = CONFIG_DIR) -> "Registries":
+    def load(cls, config_dir: Path | None = None) -> "Registries":
+        from acb.resolver import discover_config_dir
+        config_dir = Path(config_dir) if config_dir else discover_config_dir()
         return cls(
             harnesses=_load_yaml(config_dir / "harnesses.yaml"),
             benchmarks=_load_yaml(config_dir / "benchmarks.yaml"),
             proxy=_load_yaml(config_dir / "proxy.yaml"),
+            models=_load_yaml(config_dir / "models.yaml"),
+            skills=_load_yaml(config_dir / "skills.yaml"),
+            mcp_servers=_load_yaml(config_dir / "mcp.yaml"),
+            extensions=_load_yaml(config_dir / "extensions.yaml"),
+            machine=_load_yaml(config_dir / "machine.yaml"),
+            sources=[str(p.resolve()) for p in sorted(config_dir.glob("*.yaml"))],
         )
 
     def model_spec(self, model: str) -> ModelSpec:

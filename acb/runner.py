@@ -19,17 +19,17 @@ import hashlib
 import json
 import logging
 import os
-import platform as _platform
-import re
 import threading
 import traceback
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
-from dataclasses import asdict
+from dataclasses import asdict, replace
+from copy import deepcopy
 
 from acb.benchmarks import make_benchmark, Prediction
-from acb.config import RunConfig, Registries
+from acb.config import RunConfig, Registries, ModelSpec
+from acb.run_paths import reserve_run_directory as _resolve_run_dir
 from acb.container import build_image, container_stop_rm, image_exists, pod_create, pod_remove
 from acb.harnesses import make_harness
 from acb.integrations import IntegrationContext, IntegrationManager, ModelEndpoint
@@ -51,8 +51,6 @@ PRAXIS_IMAGE_DEFAULT = "acb-praxis-ai:latest"
 # Used as the build context for the self-contained Containerfile that compiles
 # praxis-ai with the praxis-vertex-anthropic filter baked in.
 _REPO_ROOT = Path(__file__).parent.parent
-
-_ARCH_MAP = {"arm64": "arm64", "aarch64": "arm64", "x86_64": "amd64", "amd64": "amd64"}
 
 
 def _write_per_instance_prediction(prediction: Prediction, instance_dir: Path) -> None:
@@ -84,10 +82,8 @@ def _write_per_instance_metrics(instance_dir: Path, cfg) -> None:
 
 
 def _resolve_arch(bench_cfg: dict) -> str:
-    arch = bench_cfg.get("image_arch", "auto")
-    if arch != "auto":
-        return arch
-    return _ARCH_MAP.get(_platform.machine(), "amd64")
+    from acb.preparation import legacy_architecture
+    return legacy_architecture(bench_cfg)
 
 
 def _ensure_praxis_image(bench_cfg: dict) -> str:
@@ -220,7 +216,7 @@ def _run_instance_pipeline(
     harness_name: str,
     harness_out_dir: Path,
     cfg: RunConfig,
-    registries: Registries,
+    harness_cfg: dict,
     benchmark,
     bench_cfg: dict,
     model_spec,
@@ -238,7 +234,7 @@ def _run_instance_pipeline(
         harness_name: Name of harness to use
         harness_out_dir: Harness output directory
         cfg: Run configuration
-        registries: Loaded registries
+        harness_cfg: Prepared settings for this harness
         benchmark: Benchmark instance
         bench_cfg: Benchmark configuration
         model_spec: Model specification
@@ -249,7 +245,7 @@ def _run_instance_pipeline(
     Returns:
         (prediction, {instance_id: resolved_bool})
     """
-    harness_cfg = {**registries.harnesses.get(harness_name, {}), **cfg.overrides.get("harness", {})}
+    harness_cfg = deepcopy(harness_cfg)
     instances_dir = harness_out_dir / "instances"
     instance_dir = instances_dir / normalize_instance_id_for_path(instance.instance_id)
     usage_path = instance_dir / "usage.jsonl"
@@ -282,6 +278,7 @@ def _run_instance_pipeline(
         }
     )
     testbed_container = None
+    integration_transport = None
     
     try:
         if cfg.proxy != "praxis":
@@ -290,19 +287,29 @@ def _run_instance_pipeline(
                 "implementation; only `praxis` does today."
             )
         
+        testbed_container = benchmark.prepare_container(
+            instance, pod_name, build_dir, arch,
+        )
+        from acb.integrations.runtime import prepare_legacy_rtk_runtime, prepare_legacy_caveman_runtime
+        harness_cfg = prepare_legacy_rtk_runtime(
+            testbed_container, harness_name, harness_cfg, arch, instance_dir)
+        harness_cfg = prepare_legacy_caveman_runtime(testbed_container, harness_cfg, instance_dir)
+        if harness_cfg.get("model_middleware"):
+            from acb.integrations.legacy import LegacyIntegrationTransport
+            integration_transport = LegacyIntegrationTransport(
+                testbed_container, pod_name, bench_cfg["caveman_image"])
+            integration_transport.start()
+        integrations = IntegrationManager(harness_name, harness_cfg)
         harness = make_harness(harness_name, harness_cfg)
         harness.api = harness.effective_api(model_spec.api)
         harness._tracker = tracker
         harness._tracker_key = tracker_key  # Composite key {harness}-{instance_id} for activity updates
         
-        testbed_container = benchmark.prepare_container(
-            instance, pod_name, build_dir, arch,
-        )
         harness.setup_container(testbed_container, arch, cache_dir)
         harness.setup_skills(testbed_container, arch, cache_dir)
         harness.setup_mcp_servers(testbed_container, arch, cache_dir)
         integration_env = integrations.setup(IntegrationContext(
-            container=testbed_container, arch=arch, harness=harness_name,
+            container=integration_transport or testbed_container, arch=arch, harness=harness_name,
             harness_version=harness_cfg.get("version", "unrecorded"),
             cache_dir=cache_dir, artifact_dir=instance_dir / "integrations",
         ))
@@ -318,6 +325,7 @@ def _run_instance_pipeline(
             pod=pod_name, image=_ensure_praxis_image(bench_cfg),
             extra_env=_praxis_extra_env(model_spec),
             instance_dir=instance_dir,
+            port=18880 if integration_transport else None,
         )
         
         with praxis_backend:
@@ -341,6 +349,11 @@ def _run_instance_pipeline(
             if integration_cleanup_errors:
                 raise RuntimeError("integration evidence/cleanup failed: " + "; ".join(integration_cleanup_errors))
         
+        measurement_path = instance_dir / "measurement.json"
+        if measurement_path.exists() and (result.exit_code != 0 or result.timed_out):
+            measurement = json.loads(measurement_path.read_text())
+            measurement.update(complete=False, accounting_caveat="agent aborted; in-flight requests may lack final usage")
+            measurement_path.write_text(json.dumps(measurement, indent=2))
         prediction = benchmark.collect_prediction_container(instance, testbed_container, cfg.model)
         
         # Write per-instance files immediately
@@ -369,6 +382,7 @@ def _run_instance_pipeline(
         # Don't print - traceback is captured in tb and written to error.json
         # This prevents stderr output from bypassing Live display
         
+        instance_dir.mkdir(parents=True, exist_ok=True)
         error_path = instance_dir / "error.json"
         error_path.write_text(json.dumps({
             "instance_id": instance.instance_id,
@@ -385,6 +399,8 @@ def _run_instance_pipeline(
     finally:
         for cleanup_error in integrations.finish():
             logging.getLogger(__name__).warning("Integration cleanup: %s", cleanup_error)
+        if integration_transport:
+            integration_transport.close()
         if not os.environ.get("ACB_DEBUG_KEEP_CONTAINERS"):
             # Normal cleanup: remove container and pod
             if testbed_container:
@@ -417,37 +433,6 @@ def _run_instance_pipeline(
         return prediction, {}
 
 
-def _resolve_run_dir(output_dir: str, run_id: str) -> tuple[Path, str]:
-    """Pick a unique output directory for this run, appending ``-N`` on collision.
-
-    First run:  ``runs/<run_id>/``        (no suffix)
-    Second run: ``runs/<run_id>-1/``
-    Third run:  ``runs/<run_id>-2/``
-    …and so on.
-
-    Returns ``(out_dir, effective_run_id)`` — the caller should use
-    ``effective_run_id`` everywhere (reports, usage records, pod names)
-    so metadata stays consistent with the on-disk path.
-    """
-    base = Path(output_dir).resolve()
-    candidate = base / run_id
-    if not candidate.exists():
-        return candidate, run_id
-
-    # Scan for existing <run_id>-N directories to find the next number.
-    pattern = re.compile(rf"^{re.escape(run_id)}-(\d+)$")
-    max_n = 0  # 0 means only the unsuffixed dir exists → next is -1
-    for entry in base.iterdir():
-        if entry.is_dir():
-            m = pattern.match(entry.name)
-            if m:
-                max_n = max(max_n, int(m.group(1)))
-
-    next_n = max_n + 1
-    effective_id = f"{run_id}-{next_n}"
-    return base / effective_id, effective_id
-
-
 def _setup_logging(out_dir: Path, verbose: bool = False) -> logging.Logger:
     """Setup logging to file and optionally to console.
     
@@ -465,34 +450,39 @@ def _setup_logging(out_dir: Path, verbose: bool = False) -> logging.Logger:
 
 
 def run(cfg: RunConfig, registries: Registries | None = None, verbose: bool = False) -> Path:
-    registries = registries or Registries.load()
-    # Absolute: SWE-bench's evaluation subprocess runs with cwd=SWE-bench/, so
-    # any relative paths must resolve correctly even from that different directory.
-    out_dir, effective_run_id = _resolve_run_dir(cfg.output_dir, cfg.run_id)
-    if effective_run_id != cfg.run_id:
+    from acb.resolver import resolve
+    from acb.preparation import prepare
+    plan = resolve(cfg, registries)
+    if plan.to_dict()["execution_backend"] == "harbor":
+        from acb.harbor.backend import run_plan
+        return run_plan(plan, verbose=verbose)
+    document = prepare(plan)
+    return _run_legacy(cfg, document, verbose)
+
+
+def _run_legacy(requested: RunConfig, document: dict, verbose: bool = False) -> Path:
+    """Execute prepared settings without consulting configuration registries."""
+    document = deepcopy(document)
+    cfg = replace(requested, benchmark=document["benchmark"],
+                  harness=list(document["harnesses"]), model=document["model"]["name"],
+                  proxy=document["proxy"], max_workers=document["max_workers"],
+                  subset=document["subset"], limit=document["limit"],
+                  output_dir=document["output_dir"], overrides={})
+    out_dir, effective_run_id = _resolve_run_dir(document["output_dir"], document["run_id"])
+    cfg = replace(cfg, run_id=effective_run_id)
+    if effective_run_id != document["run_id"]:
         print(f"[acb] previous run exists, using {effective_run_id}")
-        cfg = RunConfig(**{**cfg.__dict__, "run_id": effective_run_id})
-    
-    # Create output directory first, then setup logging to file
-    out_dir.mkdir(parents=True, exist_ok=True)
+    from acb.provenance import save_configuration
+    document = save_configuration(out_dir, document, effective_run_id=effective_run_id)
     _setup_logging(out_dir, verbose=verbose)
 
-    bench_cfg = {**registries.benchmarks.get(cfg.benchmark, {}), **cfg.overrides.get("benchmark", {})}
-    proxy_cfg = {**registries.backend_config(cfg.proxy), **cfg.overrides.get("proxy", {})}
-    model_spec = registries.model_spec(cfg.model)
-
-    # Validate integration selections before loading datasets or starting pods.
-    for harness_name in cfg.harnesses:
-        harness_config = {**registries.harnesses.get(harness_name, {}), **cfg.overrides.get("harness", {})}
-        IntegrationManager(harness_name, harness_config)
-
-    benchmark = make_benchmark(cfg.benchmark, bench_cfg)
-    instances = benchmark.load_instances(subset=cfg.subset, limit=cfg.limit)
-    
-    harnesses_to_run = cfg.harnesses
-
-    # Create output-dir-level cache directory, shared by all runs under it.
-    cache_dir = (Path(cfg.output_dir).resolve() / ".cache").resolve()
+    bench_cfg = document["benchmark_config"]
+    proxy_cfg = document["proxy_config"]
+    model_spec = ModelSpec(**document["model"])
+    benchmark = make_benchmark(document["benchmark"], deepcopy(bench_cfg))
+    instances = benchmark.load_instances(subset=document["subset"], limit=document["limit"])
+    harnesses_to_run = list(document["harnesses"])
+    cache_dir = Path(document["cache_dir"])
     cache_dir.mkdir(parents=True, exist_ok=True)
 
     # Create a single tracker for all harnesses (single or multi)
@@ -596,7 +586,7 @@ def run(cfg: RunConfig, registries: Registries | None = None, verbose: bool = Fa
                 future = ex.submit(
                     _run_instance_pipeline,
                     instance, harness_name, harness_out_dir,
-                    cfg, registries, benchmark, bench_cfg,
+                    cfg, deepcopy(document["harnesses"][harness_name]), benchmark, deepcopy(bench_cfg),
                     model_spec, proxy_cfg, cache_dir,
                     tracker=tracker,
                 )
@@ -682,7 +672,10 @@ def run(cfg: RunConfig, registries: Registries | None = None, verbose: bool = Fa
         
         # Build per-harness report
         usage_path = harness_out_dir / "usage.jsonl"
-        report_path = build_report(usage_path, harness_resolved, harness_out_dir, cfg)
+        report_path = build_report(usage_path, harness_resolved, harness_out_dir, replace(cfg, harness=harness_name))
+        from acb.comparison import legacy_provenance
+        if report_path.exists():
+            legacy_provenance(report_path, document, harness_name, instances)
         console = tracker.console if tracker else None
         if console:
             console.print(f"[green]✅ {harness_name} report:[/green] {report_path}")
@@ -695,10 +688,9 @@ def run(cfg: RunConfig, registries: Registries | None = None, verbose: bool = Fa
         
         # Build per-harness HTML report
         try:
-            from acb.html_report import build_html_report
-            html_content = build_html_report(harness_out_dir)
+            from acb.comparison_html import write_reports
             html_path = harness_out_dir / "report.html"
-            html_path.write_text(html_content)
+            write_reports(harness_out_dir, html_path)
             if console:
                 console.print(f"[green]✅ {harness_name} HTML report:[/green] {html_path}")
             else:
@@ -721,10 +713,9 @@ def run(cfg: RunConfig, registries: Registries | None = None, verbose: bool = Fa
         
         # Build suite-level HTML report
         try:
-            from acb.html_report import build_html_report
-            html_content = build_html_report(out_dir)
+            from acb.comparison_html import write_reports
             html_path = out_dir / "report.html"
-            html_path.write_text(html_content)
+            write_reports(out_dir, html_path)
             if console:
                 console.print(f"[green]✅ Suite HTML report:[/green] {html_path}")
             else:

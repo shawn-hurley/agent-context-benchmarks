@@ -19,6 +19,7 @@ import os
 import shutil
 import subprocess
 from pathlib import Path
+from acb.transport import EnvironmentTransport
 
 
 def podman_socket() -> str | None:
@@ -221,6 +222,9 @@ def container_cp_in(container: str, host_path, container_path: str) -> None:
     
     Includes diagnostic logging to track potential screen blanking issues.
     """
+    if isinstance(container, EnvironmentTransport):
+        container.upload(Path(host_path), container_path)
+        return
     from acb.logging_config import log_debug
     import os
     if os.environ.get("ACB_DEBUG_UI"):
@@ -240,6 +244,9 @@ def container_cp_out(container: str, container_path: str, host_path) -> None:
     
     Includes diagnostic logging to track potential screen blanking issues.
     """
+    if isinstance(container, EnvironmentTransport):
+        container.download(container_path, Path(host_path))
+        return
     from acb.logging_config import log_debug
     import os
     if os.environ.get("ACB_DEBUG_UI"):
@@ -289,6 +296,8 @@ def container_exec_capture(container: str, cmd: list[str], workdir: str | None =
     Returns:
         Command stdout as string
     """
+    if isinstance(container, EnvironmentTransport):
+        return container.capture(cmd, workdir)
     full = ["podman", "exec"]
     if workdir:
         full += ["--workdir", workdir]

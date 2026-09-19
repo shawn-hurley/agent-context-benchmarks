@@ -3,6 +3,8 @@
 ACB_RTK_LIVE=1 ACB_RTK_BINARY=/path/to/linux/rtk uv run --with pytest python -m pytest tests/test_rtk_native_live.py -v
 Set ACB_RTK_IMAGE to a locally available SWE-bench image with the testbed conda env.
 Artifacts are retained under runs/rtk-native-smoke; only test-owned containers are removed.
+Both paired arms include the prepared Caveman response skill. These checks cover
+shared preparation and native adapters, not full benchmark scheduling/grading.
 """
 import hashlib
 from copy import deepcopy
@@ -27,7 +29,7 @@ def podman(*args):
     return subprocess.run(["podman", *args], check=True, text=True, capture_output=True, timeout=60).stdout.strip()
 
 
-@pytest.mark.parametrize("harness,version", [("goose", "1.50.0"), ("pi", "0.84.3"), ("opencode", "1.18.22"), ("claude-code", "2.1.241")])
+@pytest.mark.parametrize("harness,version", [("goose", "1.50.1"), ("pi", "0.84.3"), ("opencode", "1.18.22"), ("claude-code", "2.1.241")])
 def test_real_native_interception_and_model_context(harness, version):
     binary = Path(os.environ["ACB_RTK_BINARY"]).resolve()
     image = os.environ.get("ACB_RTK_IMAGE", "localhost/acb-rtk-smoke:0.48.0")
@@ -37,18 +39,29 @@ def test_real_native_interception_and_model_context(harness, version):
         name = "acb-rtk-smoke-" + uuid.uuid4().hex[:12]
         out = REPO / "runs/rtk-native-smoke" / harness / name
         out.mkdir(parents=True)
-        config = {"version": version, "timeout": 90}
-        if harness == "claude-code":
-            config["launch_profile"] = "isolated-hooks"
-        if enabled:
-            config["execution_integrations"] = [{"name": "rtk", "version": "0.48.0", "mode": "shell-wrapper" if harness == "goose" else "native", "experimental": True,
-                                                  "binary_path": str(binary), "sha256": hashlib.sha256(binary.read_bytes()).hexdigest()}]
+        from acb.config import RunConfig, Registries
+        from acb.resolver import resolve
+        from acb.preparation import prepare
+        from acb.integrations.runtime import prepare_legacy_rtk_runtime
+        cfg = RunConfig(run_id=name, benchmark="fixture", harness=harness, model="fixture",
+                        skills=["caveman"], extensions=([{"name": "rtk", "options": {
+                            "binary_path": str(binary), "sha256": hashlib.sha256(binary.read_bytes()).hexdigest()}}] if enabled else []),
+                        execution={"timeout": 90}, overrides={"harness": {"version": version}},
+                        output_dir=str(REPO / 'runs'))
+        registries = Registries({}, {"fixture": {"image_arch": arch}}, {},
+            models={"fixture": {"model": "fixture-model", "api": "openai", "endpoint": "localhost:18080"}})
+        prepared = prepare(resolve(cfg, registries))
+        config = prepared['harnesses'][harness]
+        (out / 'prepared.json').write_text(json.dumps(prepared, indent=2))
         lifecycle = IntegrationManager(harness, config)
         podman("run", "-d", "--name", name, "--network", "none", image, "tail", "-f", "/dev/null")
         try:
+            config = prepare_legacy_rtk_runtime(name, harness, config, arch, out)
+            lifecycle = IntegrationManager(harness, config)
             adapter = make_harness(harness, config)
             adapter.api = adapter.effective_api("openai")
             adapter.setup_container(name, arch, REPO / "runs/.cache")
+            adapter.setup_skills(name, arch, REPO / "runs/.cache")
             if harness == "claude-code":
                 sentinel = out / "CLAUDE.md"
                 sentinel.write_text("ACB_UNWANTED_PROJECT_PROMPT_SENTINEL")
@@ -73,6 +86,17 @@ def test_real_native_interception_and_model_context(harness, version):
             assert lifecycle.finish() == []
             container_cp_out(name, "/tmp/acb-rtk-requests.jsonl", out / "requests.jsonl")
             requests = [json.loads(line) for line in (out / "requests.jsonl").read_text().splitlines()]
+            ledger = json.dumps(requests)
+            assert "Caveman response style, intensity=lite" in ledger
+            assert "Selected intensity: lite" in ledger
+            skill_hash = config['skills'][0]['sha256']
+            installed = container_exec_capture(name, ['bash', '-c',
+                "find /root -path '*/caveman/SKILL.md' -exec sha256sum {} +"])
+            assert skill_hash in installed, installed
+            (out / 'skill-check.json').write_text(json.dumps({
+                'passed': True, 'sha256': skill_hash, 'installed': installed,
+                'additive_instructions_reached_model': True,
+                'model_compliance': 'not tested; deterministic API fixture'}, indent=2))
             tool_results = [message for request in requests for message in request.get("messages", []) if message.get("role") == "tool"]
             if harness == "claude-code":
                 tool_results = [block for request in requests for message in request.get("messages", []) for block in message.get("content", [])

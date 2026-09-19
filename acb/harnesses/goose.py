@@ -51,8 +51,10 @@ import urllib.request
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from acb.downloads import download_file
 from acb.container import container_cp_in, container_exec_capture
-from acb.harnesses._cache import binary_cache_lock
+from acb.transport import command as environment_command
+from acb.harnesses._cache import binary_cache_lock, harness_cache_ready, staged_harness_cache
 
 if TYPE_CHECKING:
     from acb.ui import ProgressTracker
@@ -104,27 +106,27 @@ def ensure_linux_binary(
     dest = dest_dir / "goose"
     
     # Quick check without lock (common case: already cached)
-    if dest.exists():
+    if harness_cache_ready(dest_dir, "goose"):
         return dest
     
     # Acquire lock for download to prevent concurrent race conditions
     with _DOWNLOAD_LOCK, binary_cache_lock(cache_dir, cache_key):
         # Double-check after acquiring lock: another thread may have finished download
-        if dest.exists():
+        if harness_cache_ready(dest_dir, "goose"):
             return dest
         
-        dest_dir.mkdir(parents=True, exist_ok=True)
         url = _LINUX_RELEASE_URL.format(arch=goose_arch)
         if version:
             url = url.replace("/download/stable/", f"/download/v{version}/")
         if tracker and tracker_key:
             tracker.update_activity(tracker_key, f"setup: downloading goose binary ({goose_arch})")
-        archive_path = dest_dir / "goose.tar.bz2"
-        urllib.request.urlretrieve(url, archive_path)  # noqa: S310
-        with tarfile.open(archive_path) as tf:
-            tf.extractall(dest_dir)  # noqa: S202
-        archive_path.unlink()
-        dest.chmod(0o755)
+        with staged_harness_cache(dest_dir, "goose", url) as staging:
+            archive_path = staging / "goose.tar.bz2"
+            download_file(url, archive_path)  # noqa: S310
+            with tarfile.open(archive_path) as tf:
+                tf.extractall(staging, filter="data")  # noqa: S202
+            archive_path.unlink()
+            (staging / "goose").chmod(0o755)
         return dest
 
 
@@ -237,9 +239,6 @@ class Goose(HarnessAdapter):
         if max_reps := self.config.get("max_tool_repetitions"):
             goose_argv += ["--max-tool-repetitions", str(max_reps)]
 
-        exec_cmd = ["podman", "exec", "-i"]
-        for key, value in env.items():
-            exec_cmd += ["-e", f"{key}={value}"]
         # `workdir`: the directory inside the container that goose should work
         # in.  Defaults to `/testbed` (SWE-bench layout); set to `/work` for
         # ScarfBench via harness config overrides (`overrides.harness.workdir`
@@ -257,14 +256,13 @@ class Goose(HarnessAdapter):
         if conda_env:
             preamble = (
                 f"source /opt/miniconda3/etc/profile.d/conda.sh "
-                f"&& conda activate {conda_env} && "
+                f"&& conda activate {shlex.quote(conda_env)} && "
             )
         else:
             preamble = ""
-        exec_cmd += [
-            "--workdir", workdir, container,
-            "bash", "-c", f"{preamble}exec {inner}",
-        ]
+        exec_cmd = environment_command(
+            container, ["bash", "-c", f"{preamble}exec {inner}"], env, workdir,
+        )
         # out_dir is now the per-instance directory (instances/{test_id}/)
         transcript_path = Path(out_dir) / "transcript.jsonl"
         label = f"[goose:{instance_id}]"
@@ -296,8 +294,8 @@ class Goose(HarnessAdapter):
             env["OPENAI_API_KEY"] = api_key
         return env
 
-    @staticmethod
     def _inject_goose_config(
+        self,
         container: str,
         tracker: ProgressTracker | None = None,
         tracker_key: str | None = None,
@@ -316,29 +314,22 @@ class Goose(HarnessAdapter):
         config_src = Path(__file__).parent.parent / "goose-container-config.yaml"
         config_dst = "/root/.config/goose/config.yaml"
         
-        if not config_src.exists():
-            if tracker and tracker_key:
-                tracker.update_activity(tracker_key, "setup: goose config not found, skipping")
-            return
-        
+        import yaml
+        from acb.mcp import MCPServerManager
+        config = yaml.safe_load(config_src.read_text())
+        selected = MCPServerManager().generate_config(self.config.get('mcp_servers', []), 'goose')['extensions']
+        conflicts = set(selected) & set(config['extensions'])
+        if conflicts:
+            raise ValueError(f'MCP servers conflict with Goose built-ins: {sorted(conflicts)}')
+        config['extensions'].update(selected)
+        container_exec_capture(container, ["mkdir", "-p", "/root/.config/goose"])
+        with tempfile.NamedTemporaryFile(mode='w', suffix='.yaml', delete=False) as stream:
+            yaml.safe_dump(config, stream)
+            path = Path(stream.name)
         try:
-            # Ensure target directory exists in container
-            subprocess.run(
-                ["podman", "exec", "-u", "root", container, "mkdir", "-p", "/root/.config/goose"],
-                check=True,
-                capture_output=True,
-            )
-            # Copy config file into container
-            subprocess.run(
-                ["podman", "cp", str(config_src), f"{container}:{config_dst}"],
-                check=True,
-                capture_output=True,
-            )
-            if tracker and tracker_key:
-                tracker.update_activity(tracker_key, "setup: injected goose config")
-        except subprocess.CalledProcessError as e:
-            if tracker and tracker_key:
-                tracker.update_activity(tracker_key, "setup: goose config injection failed")
+            container_cp_in(container, path, config_dst)
+        finally:
+            path.unlink(missing_ok=True)
 
     def _inject_goosehints(self, container: str, skills: list[dict]) -> None:
         """Inject .goosehints file into container to instruct Goose to load skills.
@@ -362,7 +353,7 @@ class Goose(HarnessAdapter):
             try:
                 # Copy .goosehints to container at /testbed/.goosehints
                 # This is where Goose will find it at session startup
-                container_cp_in(container, hints_file, "/testbed/.goosehints")
+                container_cp_in(container, hints_file, self.config.get("workdir", "/testbed") + "/.goosehints")
                 logger = logging.getLogger(__name__)
                 logger.info(f"Injected .goosehints with {len(skills)} skill(s)")
             finally:
@@ -401,53 +392,6 @@ class Goose(HarnessAdapter):
         return "".join(hints)
 
     def _write_mcp_config(self, container: str, servers: list[dict]) -> None:
-        """Write MCP server configuration to Goose's config.yaml.
-
-        Goose MCP servers are configured in ~/.config/goose/config.yaml under
-        the 'extensions' section. This method generates the extensions config
-        and writes it to the container.
-
-        Args:
-            container: Podman container ID
-            servers: List of MCP server configurations from harnesses.yaml
-        """
-        if not servers:
-            return
-
-        from acb.mcp import MCPServerManager
-
-        mcp_mgr = MCPServerManager()
-        config_data = mcp_mgr.generate_config(servers, "goose")
-
-        # Ensure config directory exists
-        container_exec_capture(container, ["mkdir", "-p", "/root/.config/goose"])
-
-        # Write config to temp file as YAML
-        with tempfile.NamedTemporaryFile(mode="w", suffix=".yaml", delete=False) as f:
-            # Import yaml here to avoid hard dependency
-            try:
-                import yaml
-
-                yaml.dump(config_data, f)
-            except ImportError:
-                # Fallback: write as JSON-like YAML
-                f.write("extensions:\n")
-                for ext_name, ext_config in config_data.get("extensions", {}).items():
-                    f.write(f"  {ext_name}:\n")
-                    for key, value in ext_config.items():
-                        if isinstance(value, list):
-                            f.write(f"    {key}:\n")
-                            for item in value:
-                                f.write(f"      - {item}\n")
-                        elif isinstance(value, dict):
-                            f.write(f"    {key}: {value}\n")
-                        else:
-                            f.write(f"    {key}: {value}\n")
-
-            tmp_path = Path(f.name)
-
-        try:
-            # Copy config file to container
-            container_cp_in(container, tmp_path, "/root/.config/goose/config.yaml")
-        finally:
-            tmp_path.unlink(missing_ok=True)
+        """Compose selected MCP servers with Goose's required base configuration."""
+        if servers:
+            self._inject_goose_config(container)

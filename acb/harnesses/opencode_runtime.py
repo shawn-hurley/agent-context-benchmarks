@@ -15,6 +15,7 @@ from pathlib import Path
 import tarfile
 import tempfile
 import urllib.request
+from acb.downloads import open_url
 
 from ._cache import binary_cache_lock
 
@@ -45,7 +46,7 @@ def ensure_plugin_runtime(cache_dir: Path) -> Path:
                 integrity = package["integrity"]
                 if not url.startswith("https://registry.npmjs.org/") or not integrity.startswith("sha512-"):
                     raise ValueError("OpenCode runtime requires pinned npm tarballs with SHA-512 integrity")
-                with urllib.request.urlopen(url, timeout=30) as response:
+                with open_url(url, timeout=30) as response:
                     data = response.read()
                 actual = "sha512-" + base64.b64encode(hashlib.sha512(data).digest()).decode()
                 if actual != integrity:

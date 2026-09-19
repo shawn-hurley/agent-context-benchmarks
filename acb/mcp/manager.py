@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
@@ -16,9 +17,9 @@ class MCPServerManager:
 
     Each harness has different configuration requirements:
     - Goose: YAML format in ~/.config/goose/config.yaml
-    - Pi: JSON in PI_CODING_AGENT_DIR/mcp_servers.json
+    - Pi: reserved JSON format; runtime delivery requires an extension
     - OpenCode: JSON embedded in OPENCODE_CONFIG_CONTENT
-    - Claude Code: JSON in ~/.claude/mcp_servers.json
+    - Claude Code: JSON explicitly passed with --mcp-config
     """
 
     def generate_config(self, servers: list[dict], harness_name: str) -> dict | str:
@@ -31,6 +32,22 @@ class MCPServerManager:
         Returns:
             Harness-specific configuration structure
         """
+        seen = set()
+        for server in servers:
+            if not isinstance(server, dict):
+                raise ValueError("MCP servers must be mappings")
+            name = server.get('name')
+            if not isinstance(name, str) or not re.fullmatch(r'[A-Za-z0-9_-]+', name) or name in seen:
+                raise ValueError(f'MCP server name must be unique and contain only letters, digits, underscore or hyphen: {name!r}')
+            seen.add(name)
+            if server.get('transport', 'stdio') != 'stdio' or server.get('url'):
+                raise ValueError(f'MCP server {name}: only stdio transport is currently supported by ACB adapters')
+            if not isinstance(server.get('command'), str) or not server['command']:
+                raise ValueError(f'MCP server {name}: command is required')
+            if not isinstance(server.get('args', []), list) or any(not isinstance(arg, str) for arg in server.get('args', [])):
+                raise ValueError(f'MCP server {name}: args must be strings')
+            if not isinstance(server.get('env', {}), dict) or any(not isinstance(k, str) or not isinstance(v, str) for k,v in server.get('env', {}).items()):
+                raise ValueError(f'MCP server {name}: env must map strings to strings')
         if harness_name == "goose":
             return self._generate_goose_config(servers)
         elif harness_name == "pi":
@@ -144,7 +161,7 @@ class MCPServerManager:
     def _generate_claude_code_config(self, servers: list[dict]) -> dict:
         """Generate Claude Code MCP servers config.
 
-        Claude Code config format (JSON, ~/.claude/mcp_servers.json):
+        Claude Code config format (JSON passed with --mcp-config):
         {
           "mcpServers": {
             "memory": {

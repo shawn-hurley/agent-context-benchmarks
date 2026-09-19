@@ -1,19 +1,8 @@
-"""Self-contained HTML visualization of one or more run reports + usage data.
+"""Individual benchmark charts and backwards-compatible in-memory rendering.
 
-Single-run mode (`build_html_report(run_dir)`):
-  Reads `report.json`, `metrics.jsonl`, `usage.jsonl` from that directory and
-  renders per-instance charts (context growth = one line per instance, etc.).
-
-Multi-run mode (`build_html_report([run_dir_a, run_dir_b, ...])`):
-  Loads the same files from each directory and renders a combined comparison
-  view.  Context-growth and cost charts overlay *all* per-instance lines from
-  all runs (labelled "{run_id}: {instance_id}").  Token-per-turn and duration
-  charts show one averaged series per run.  A summary comparison table
-  replaces the single-run metric cards, and per-instance tables are grouped
-  under a heading for each run.
-
-Charts render via Chart.js loaded from a CDN -- viewing the report needs
-internet access for the charts; everything else is inline.
+Comparison semantics live in acb.comparison; acb.comparison_html writes bundles
+with standalone benchmark pages. Chart.js and optional patch rendering use CDN
+assets; captured raw evidence and tables remain readable offline.
 """
 
 from __future__ import annotations
@@ -25,8 +14,15 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+def _script_json(value, **kwargs):
+    """JSON safe inside an HTML script element, including arbitrary tool output."""
+    return (json.dumps(value, **kwargs).replace('&', '\\u0026')
+            .replace('<', '\\u003c').replace('>', '\\u003e')
+            .replace(chr(0x2028), '\\u2028').replace(chr(0x2029), '\\u2029'))
+
+
 from acb.costs import ModelCost, estimate_cost, load_cost_table
-from acb.usage import read_records, normalize_benchmark_metric
+from acb.usage import read_records, normalize_benchmark_metric, is_model_request
 
 _CHART_JS_CDN = "https://cdn.jsdelivr.net/npm/chart.js@4"
 
@@ -103,6 +99,8 @@ class _RunData:
             # or fall back to using index if instance_id not present)
             instances: dict[str, list] = defaultdict(list)
             for rec in benchmark_metrics:
+                if rec.get('endpoint') and not is_model_request(rec):
+                    continue
                 iid = rec.get('instance_id')
                 if iid:
                     instances[iid].append(rec)
@@ -237,6 +235,9 @@ def _aggregate_benchmark_metrics(records: list[dict]) -> dict:
         key=lambda r: r.get('timestamp_ms', 0),
     )
     
+    for index, record in enumerate(sorted_records):
+        record['turn_index'] = index
+
     # Compute aggregates
     total_input = sum(r.get('input_tokens', 0) for r in sorted_records)
     total_output = sum(r.get('output_tokens', 0) for r in sorted_records)
@@ -311,7 +312,7 @@ def _normalize_tool_interactions(metrics: list[dict]) -> list[dict]:
     """
     interactions: dict[str, dict] = {}
     result_call_ids = {
-        tool.get("call_id")
+        (metric.get("instance_id"), metric.get("step_name"), tool.get("call_id"))
         for metric in metrics
         for tool in (metric.get("tool_results") or [])
         if tool.get("call_id")
@@ -327,7 +328,7 @@ def _normalize_tool_interactions(metrics: list[dict]) -> list[dict]:
         for tool_index, tool in enumerate(tools):
             call_id = tool.get("call_id")
             if call_id:
-                key = f"call:{call_id}"
+                key = str((metric.get("instance_id"), metric.get("step_name"), call_id))
             else:
                 key = f"record:{metric.get('request_id', anonymous_index)}:{tool_index}"
                 anonymous_index += 1
@@ -335,6 +336,7 @@ def _normalize_tool_interactions(metrics: list[dict]) -> list[dict]:
                 "name": tool.get("name") or "unknown",
                 "detail": tool.get("detail"),
                 "call_id": call_id,
+                "scope": (metric.get("instance_id"), metric.get("step_name")),
                 "request_ids": [],
                 "source_types": set(),
                 "tokens": 0.0,
@@ -353,7 +355,7 @@ def _normalize_tool_interactions(metrics: list[dict]) -> list[dict]:
     normalized = []
     for interaction in interactions.values():
         source_types = interaction.pop("source_types")
-        if interaction.get("call_id") in result_call_ids:
+        if (*interaction["scope"], interaction.get("call_id")) in result_call_ids:
             source_types.add("tool_result")
         interaction["source_types"] = sorted(source_types)
         interaction["complete_pair"] = source_types == {"tool_call", "tool_result"}
@@ -461,42 +463,8 @@ def _prepare_timeline_data(metrics: list[dict]) -> dict:
         })
     
     return {
-        'labels': [f"Turn {t}" for t in turns],
+        'labels': [f"Request {t}" for t in turns],
         'datasets': datasets
-    }
-
-
-def _content_type_suite_breakdown(runs: list["_RunData"]) -> dict:
-    """Aggregate content type data across all harnesses in a suite.
-    
-    Returns:
-        {
-            'by_harness': { harness_name: content_breakdown },
-            'aggregate': aggregate_breakdown,
-        }
-    """
-    by_harness = {}
-    all_requests_aggregate = []
-    
-    for rd in runs:
-        # Flatten all per-request records from this harness
-        harness_requests = []
-        for m in rd.metrics:
-            harness_requests.extend(m.get('requests', []))
-        
-        all_requests_aggregate.extend(harness_requests)
-        
-        # Aggregate for this harness
-        if harness_requests:
-            harness_breakdown = _content_type_breakdown(harness_requests)
-            by_harness[rd.run_id] = harness_breakdown
-    
-    # Aggregate across all harnesses
-    aggregate_breakdown = _content_type_breakdown(all_requests_aggregate) if all_requests_aggregate else {'by_type': {}, 'tool_usage': {}}
-    
-    return {
-        'by_harness': by_harness,
-        'aggregate': aggregate_breakdown,
     }
 
 
@@ -604,61 +572,6 @@ def _calculate_tool_usage_percentage(metrics: list[dict]) -> dict:
     }
 
 
-def _shell_command_suite_breakdown(runs: list["_RunData"]) -> dict:
-    """Aggregate shell command data across all harnesses in a suite.
-    
-    Returns:
-        {
-            'rgctl': {
-                'total_calls': 47,
-                'total_tokens': 125000,
-                'by_harness': {
-                    'harness_a': {'calls': 15, 'tokens': 40000},
-                    'harness_b': {'calls': 20, 'tokens': 55000},
-                    'harness_c': {'calls': 12, 'tokens': 30000}
-                }
-            },
-            ...
-        }
-        Sorted by total_tokens (descending)
-    """
-    all_shell_commands = {}
-    
-    for rd in runs:
-        harness_name = rd.harness_name or rd.run_id
-        
-        # Get all requests for this harness
-        harness_requests = []
-        for m in rd.metrics:
-            harness_requests.extend(m.get('requests', []))
-        
-        # Extract shell commands for this harness
-        shell_cmds = _shell_command_breakdown(harness_requests)
-        
-        # Aggregate into all_shell_commands
-        for cmd, data in shell_cmds.items():
-            if cmd not in all_shell_commands:
-                all_shell_commands[cmd] = {
-                    'total_calls': 0,
-                    'total_tokens': 0,
-                    'by_harness': {}
-                }
-            
-            all_shell_commands[cmd]['total_calls'] += data['calls']
-            all_shell_commands[cmd]['total_tokens'] += data['total_tokens']
-            all_shell_commands[cmd]['by_harness'][harness_name] = {
-                'calls': data['calls'],
-                'tokens': data['total_tokens']
-            }
-    
-    # Sort by total tokens (descending)
-    return dict(sorted(all_shell_commands.items(), key=lambda x: x[1]['total_tokens'], reverse=True))
-
-
-# ---------------------------------------------------------------------------
-# Single-run HTML builders
-# ---------------------------------------------------------------------------
-
 def _summary_cards(report: dict, total_cost: float | None, tool_usage_pct: dict | None = None) -> str:
     if not report:
         return '<p class="muted">No report.json found for this run.</p>'
@@ -703,7 +616,7 @@ def _instance_table(metrics: list[dict]) -> str:
     if not metrics:
         return '<p class="muted">No metrics.jsonl found for this run.</p>'
     rows = "".join(
-        f"<tr><td>{m['instance_id']}</td>"
+        f"<tr><td>{html.escape(m['instance_id'])}</td>"
         f"<td>{'✓' if m.get('resolved') else '✗' if m.get('resolved') is False else '-'}</td>"
         f"<td>{m['turns']}</td><td>{m['total_tokens']:,}</td>"
         f"<td>{m['peak_context']:,}</td><td>{m['cache_efficiency'] * 100:.1f}%</td></tr>"
@@ -711,8 +624,8 @@ def _instance_table(metrics: list[dict]) -> str:
     )
     return f"""
     <table>
-      <thead><tr><th>Instance</th><th>Resolved</th><th>Turns</th>
-        <th>Total tokens</th><th>Peak context</th><th>Cache eff.</th></tr></thead>
+      <thead><tr><th>Instance</th><th>Resolved</th><th>Model requests</th>
+        <th>Fresh input + output + cache creation</th><th>Peak context</th><th>Cache eff.</th></tr></thead>
       <tbody>{rows}</tbody>
     </table>"""
 
@@ -807,7 +720,7 @@ def _patches_section(runs: list["_RunData"]) -> tuple[str, str]:
 
     patches_data_js = (
         "<script>\n"
-        f"window.ACB_PATCHES = {json.dumps(patches_data, ensure_ascii=False)};\n"
+        f"window.ACB_PATCHES = {_script_json(patches_data, ensure_ascii=False)};\n"
         "</script>"
     )
 
@@ -826,7 +739,7 @@ def _patches_section(runs: list["_RunData"]) -> tuple[str, str]:
             else:
                 cls, sym = "badge-unknown", "?"
             badges.append(
-                f'<span class="badge {cls}">{rd.run_id} {sym}</span>'
+                f'<span class="badge {cls}">{html.escape(rd.run_id)} {sym}</span>'
             )
         badges_html = f'<span class="run-badges">{"".join(badges)}</span>'
 
@@ -838,12 +751,12 @@ def _patches_section(runs: list["_RunData"]) -> tuple[str, str]:
                 # Placeholder div -- diff2html fills it in on first expand
                 inner = (
                     f'<div class="diff-target" '
-                    f'data-run="{rd.run_id}" data-iid="{iid}"></div>'
+                    f'data-run="{html.escape(rd.run_id, quote=True)}" data-iid="{html.escape(iid, quote=True)}"></div>'
                 )
             else:
                 inner = '<div class="no-patch">no patch produced</div>'
             cols.append(
-                f'<div class="patch-col"><h4>{rd.run_id}</h4>{inner}</div>'
+                f'<div class="patch-col"><h4>{html.escape(rd.run_id)}</h4>{inner}</div>'
             )
         grid = (
             f'<div class="patch-grid" '
@@ -854,8 +767,8 @@ def _patches_section(runs: list["_RunData"]) -> tuple[str, str]:
 
         safe_id = iid.replace("/", "-").replace("_", "-")
         blocks.append(
-            f'<details class="patch-block" id="patch-{safe_id}">'
-            f"<summary>{iid} {badges_html}</summary>"
+            f'<details class="patch-block" id="patch-{html.escape(safe_id, quote=True)}">'
+            f"<summary>{html.escape(iid)} {badges_html}</summary>"
             f"{grid}"
             f"</details>"
         )
@@ -863,7 +776,7 @@ def _patches_section(runs: list["_RunData"]) -> tuple[str, str]:
     return "\n".join(blocks), patches_data_js
 
 
-def _build_single_run_html(rd: _RunData) -> str:
+def _build_single_run_html(rd: _RunData, *, include_summary: bool = True) -> str:
     """Identical to the original single-run HTML report."""
     context_datasets = _context_growth_datasets(rd.metrics)
     turns, avg_input, avg_output, avg_duration = _per_turn_averages(rd.usage_rows)
@@ -878,16 +791,16 @@ def _build_single_run_html(rd: _RunData) -> str:
     duration_chart_js = ""
     if has_duration:
         duration_chart_html = """
-    <h2>Request duration per turn (avg across instances)</h2>
+    <h2>Duration per model request (avg across instances)</h2>
     <div class="chart-wrap"><canvas id="durationChart"></canvas></div>"""
         duration_chart_js = f"""
     new Chart(document.getElementById('durationChart'), {{
       type: 'line',
       data: {{
-        labels: {json.dumps(turns)},
+        labels: {_script_json(turns)},
         datasets: [{{
           label: 'avg duration (ms)',
-          data: {json.dumps(avg_duration)},
+          data: {_script_json(avg_duration)},
           borderColor: '{_color(2)}',
           backgroundColor: '{_color(2)}',
           spanGaps: true,
@@ -897,7 +810,7 @@ def _build_single_run_html(rd: _RunData) -> str:
       options: {{
         responsive: true,
         scales: {{
-          x: {{ title: {{ display: true, text: 'turn index' }} }},
+          x: {{ title: {{ display: true, text: 'model request index' }} }},
           y: {{ title: {{ display: true, text: 'duration (ms)' }}, beginAtZero: true }},
         }},
       }},
@@ -911,13 +824,13 @@ def _build_single_run_html(rd: _RunData) -> str:
     new Chart(document.getElementById('costChart'), {{
       type: 'line',
       data: {{
-        labels: {json.dumps(list(range(max((len(d["data"]) for d in cost_datasets), default=0))))},
-        datasets: {json.dumps(cost_datasets)},
+        labels: {_script_json(list(range(max((len(d["data"]) for d in cost_datasets), default=0))))},
+        datasets: {_script_json(cost_datasets)},
       }},
       options: {{
         responsive: true,
         scales: {{
-          x: {{ title: {{ display: true, text: 'turn index' }} }},
+          x: {{ title: {{ display: true, text: 'model request index' }} }},
           y: {{
             title: {{ display: true, text: 'cumulative cost (USD)' }},
             beginAtZero: true,
@@ -972,8 +885,8 @@ def _build_single_run_html(rd: _RunData) -> str:
                 avg_tokens = data['total_tokens'] / interactions if interactions else 0
                 tool_rows += f"""
         <tr>
-          <td>{data['tool_name']}</td>
-          <td>{data['tool_detail'] or '—'}</td>
+          <td>{html.escape(str(data['tool_name']))}</td>
+          <td>{html.escape(str(data['tool_detail'] or '—'))}</td>
           <td>{interactions}</td>
           <td>{data['complete_pairs']}</td>
           <td>{data['call_only']}</td>
@@ -1012,8 +925,8 @@ def _build_single_run_html(rd: _RunData) -> str:
     <h3>Shell Command Distribution</h3>
     <div class="chart-wrap"><canvas id="shellCommandChart"></canvas></div>"""
         
-        content_type_data = json.dumps(content_breakdown['by_type'])
-        timeline_data_json = json.dumps(timeline_data)
+        content_type_data = _script_json(content_breakdown['by_type'])
+        timeline_data_json = _script_json(timeline_data)
         
         # Build shell command chart JS if shell commands exist
         shell_cmd_js = ""
@@ -1025,10 +938,10 @@ def _build_single_run_html(rd: _RunData) -> str:
     new Chart(document.getElementById('shellCommandChart'), {{
       type: 'pie',
       data: {{
-        labels: {json.dumps(shell_cmd_labels)},
+        labels: {_script_json(shell_cmd_labels)},
         datasets: [{{
-          data: {json.dumps(shell_cmd_tokens)},
-          backgroundColor: {json.dumps(_COLORS[:len(shell_cmd_labels)])},
+          data: {_script_json(shell_cmd_tokens)},
+          backgroundColor: {_script_json(_COLORS[:len(shell_cmd_labels)])},
         }}],
       }},
       options: {{
@@ -1067,9 +980,9 @@ def _build_single_run_html(rd: _RunData) -> str:
     new Chart(document.getElementById('contentTypeChart'), {{
       type: 'pie',
       data: {{
-        labels: {json.dumps(list(content_breakdown['by_type'].keys()))},
+        labels: {_script_json(list(content_breakdown['by_type'].keys()))},
         datasets: [{{
-          data: {json.dumps([v['total_tokens'] for v in content_breakdown['by_type'].values()])},
+          data: {_script_json([v['total_tokens'] for v in content_breakdown['by_type'].values()])},
           backgroundColor: ['#4e79a7', '#f28e2b', '#e15759', '#76b7b2', '#59a14f', '#edc948', '#999999'],
         }}],
       }},
@@ -1096,7 +1009,7 @@ def _build_single_run_html(rd: _RunData) -> str:
         plugins: {{
           tooltip: {{
             callbacks: {{
-              title: function(context) {{ return 'Turn ' + context[0].label; }}
+              title: function(context) {{ return 'Request ' + context[0].label; }}
             }}
           }}
         }}
@@ -1110,9 +1023,9 @@ def _build_single_run_html(rd: _RunData) -> str:
     return _render_html(
         title=title,
         heading=rd.run_id,
-        meta=f"{rd.report.get('benchmark', '?')} &middot; {rd.report.get('harness', '?')}"
-             f" &middot; {rd.report.get('model', '?')} &middot; proxy: {rd.report.get('proxy', '?')}",
-        summary_html=_summary_cards(rd.report, total_cost, tool_usage_pct),
+        meta=f"{html.escape(str(rd.report.get('benchmark', '?')))} &middot; {html.escape(str(rd.report.get('harness', '?')))}"
+             f" &middot; {html.escape(str(rd.report.get('model', '?')))} &middot; proxy: {html.escape(str(rd.report.get('proxy', '?')))}",
+        summary_html=_summary_cards(rd.report, total_cost, tool_usage_pct) if include_summary else "",
         context_datasets=context_datasets,
         turns=turns,
         avg_input=avg_input,
@@ -1134,580 +1047,6 @@ def _build_single_run_html(rd: _RunData) -> str:
 
 # ---------------------------------------------------------------------------
 # Multi-run HTML builders
-# ---------------------------------------------------------------------------
-
-def _comparison_table(runs: list[_RunData], is_suite: bool = False) -> str:
-    """Summary table with one row per run (or harness in suite mode)."""
-    if is_suite:
-        # Suite mode: focus on harness name instead of generic "Run"
-        cols = [
-            ("Harness", lambda r: r.run_id),
-            ("Instances", lambda r: str(r.report.get("instances", "-"))),
-            ("Resolved", lambda r: str(r.report.get("resolved", "-"))),
-            ("Resolve rate", lambda r: f"{r.report.get('resolve_rate', 0) * 100:.0f}%"),
-            ("Avg total tokens", lambda r: f"{r.report.get('avg_total_tokens', 0):,.0f}"),
-            ("Avg turns", lambda r: f"{r.report.get('avg_turns', 0):.1f}"),
-            ("Avg peak context", lambda r: f"{r.report.get('avg_peak_context', 0):,.0f}"),
-            ("Avg cache eff.", lambda r: f"{r.report.get('avg_cache_efficiency', 0) * 100:.1f}%"),
-            ("Tokens/resolved", lambda r: (
-                f"{r.report['tokens_per_resolved']:,.0f}"
-                if r.report.get("tokens_per_resolved") is not None else "n/a"
-            )),
-        ]
-    else:
-        # Multi-run mode: include run-specific columns
-        cols = [
-            ("Run", lambda r: r.run_id),
-            ("Harness", lambda r: r.report.get("harness", "-")),
-            ("Model", lambda r: r.report.get("model", "-")),
-            ("Benchmark", lambda r: r.report.get("benchmark", "-")),
-            ("Instances", lambda r: str(r.report.get("instances", "-"))),
-            ("Resolved", lambda r: str(r.report.get("resolved", "-"))),
-            ("Resolve rate", lambda r: f"{r.report.get('resolve_rate', 0) * 100:.0f}%"),
-            ("Avg total tokens", lambda r: f"{r.report.get('avg_total_tokens', 0):,.0f}"),
-            ("Avg turns", lambda r: f"{r.report.get('avg_turns', 0):.1f}"),
-            ("Avg peak context", lambda r: f"{r.report.get('avg_peak_context', 0):,.0f}"),
-            ("Avg cache eff.", lambda r: f"{r.report.get('avg_cache_efficiency', 0) * 100:.1f}%"),
-            ("Tokens/resolved", lambda r: (
-                f"{r.report['tokens_per_resolved']:,.0f}"
-                if r.report.get("tokens_per_resolved") is not None else "n/a"
-            )),
-        ]
-    headers = "".join(f"<th>{h}</th>" for h, _ in cols)
-    body_rows = "".join(
-        "<tr>" + "".join(f"<td>{fn(rd)}</td>" for _, fn in cols) + "</tr>"
-        for rd in runs
-    )
-    return f"""
-    <table style="width:100%;max-width:none">
-      <thead><tr>{headers}</tr></thead>
-      <tbody>{body_rows}</tbody>
-    </table>"""
-
-
-def _resolve_rate_bar_chart(runs: list[_RunData]) -> str:
-    """Build HTML for a resolve rate bar chart (suite view)."""
-    harnesses = [r.run_id for r in runs]
-    rates = [r.report.get("resolve_rate", 0) * 100 for r in runs]
-    
-    chart_html = """
-    <h2>Resolve Rate by Harness</h2>
-    <div class="chart-wrap"><canvas id="resolveRateChart"></canvas></div>"""
-    
-    chart_js = f"""
-    new Chart(document.getElementById('resolveRateChart'), {{
-      type: 'bar',
-      data: {{
-        labels: {json.dumps(harnesses)},
-        datasets: [{{
-          label: 'resolve rate',
-          data: {json.dumps(rates)},
-          backgroundColor: {json.dumps([_color(i) for i in range(len(runs))])},
-        }}],
-      }},
-      options: {{
-        indexAxis: 'y',
-        responsive: true,
-        scales: {{
-          x: {{
-            title: {{ display: true, text: 'resolve rate (%)' }},
-            min: 0,
-            max: 100,
-            ticks: {{ callback: (v) => v + '%' }},
-          }},
-        }},
-      }},
-    }});"""
-    
-    return chart_html, chart_js
-
-
-def _unified_instance_table(runs: list[_RunData]) -> str:
-    """Build a unified table comparing all instances across all harnesses.
-    
-    Rows are instances, columns are harnesses. Each cell shows resolve status
-    and token count.
-    """
-    # Collect all instance IDs across all harnesses
-    all_instances: dict[str, None] = {}
-    for rd in runs:
-        for m in rd.metrics:
-            all_instances[m["instance_id"]] = None
-    instance_ids = list(all_instances.keys())
-    
-    if not instance_ids:
-        return "<p class='muted'>No instance metrics found.</p>"
-    
-    # Build harness columns
-    harness_headers = "".join(f"<th>{r.run_id}</th>" for r in runs)
-    
-    # Build rows
-    rows = []
-    for iid in instance_ids:
-        cells = [f"<td>{iid}</td>"]
-        for rd in runs:
-            # Find metric for this instance in this harness
-            metric = next((m for m in rd.metrics if m["instance_id"] == iid), None)
-            if metric:
-                status = "✓" if metric.get("resolved") else "✗" if metric.get("resolved") is False else "?"
-                tokens = f"{metric.get('total_tokens', 0):,}"
-                cells.append(f"<td>{status} {tokens}</td>")
-            else:
-                cells.append("<td>-</td>")
-        rows.append("<tr>" + "".join(cells) + "</tr>")
-    
-    return f"""
-    <table style="width:100%;max-width:none">
-      <thead><tr><th>Instance</th>{harness_headers}</tr></thead>
-      <tbody>{"".join(rows)}</tbody>
-    </table>"""
-
-
-def _build_multi_run_html(runs: list[_RunData], is_suite: bool = False) -> str:
-    """Combined report with all runs overlaid on the same charts.
-    
-    If is_suite=True, treats runs as harnesses in a suite and adjusts labels
-    and structure accordingly.
-    """
-    # --- context growth: all per-instance lines from all runs ---
-    context_datasets: list[dict] = []
-    color_idx = 0
-    for rd in runs:
-        for m in rd.metrics:
-            per_turn = m.get("per_turn_prompt") or []
-            if is_suite:
-                label = f"{rd.run_id}: {m['instance_id']}"
-            else:
-                label = f"{rd.run_id}: {m['instance_id']}"
-            context_datasets.append({
-                "label": label,
-                "data": per_turn,
-                "borderColor": _color(color_idx),
-                "backgroundColor": _color(color_idx),
-                "fill": False,
-                "tension": 0.15,
-            })
-            color_idx += 1
-
-    # --- tokens per turn: one avg pair (input/output) per run ---
-    tokens_datasets: list[dict] = []
-    all_turns: set[int] = set()
-    run_turn_data: list[tuple[str, list[int], list[float], list[float]]] = []
-    for i, rd in enumerate(runs):
-        t_turns, avg_input, avg_output, _ = _per_turn_averages(rd.usage_rows)
-        all_turns.update(t_turns)
-        run_turn_data.append((rd.run_id, t_turns, avg_input, avg_output))
-    turns = sorted(all_turns)
-
-    for i, (run_id, t_turns, avg_input, avg_output) in enumerate(run_turn_data):
-        # pad to common length; missing turns default to 0
-        turn_to_input = dict(zip(t_turns, avg_input))
-        turn_to_output = dict(zip(t_turns, avg_output))
-        padded_input = [turn_to_input.get(t, 0) for t in turns]
-        padded_output = [turn_to_output.get(t, 0) for t in turns]
-        tokens_datasets.append({
-            "label": f"{run_id} input",
-            "data": padded_input,
-            "backgroundColor": _color(i * 2),
-        })
-        tokens_datasets.append({
-            "label": f"{run_id} output",
-            "data": padded_output,
-            "backgroundColor": _color(i * 2 + 1),
-        })
-
-    # --- duration: one averaged line per run ---
-    duration_datasets: list[dict] = []
-    has_duration = False
-    for i, rd in enumerate(runs):
-        t_turns, _, _, avg_duration = _per_turn_averages(rd.usage_rows)
-        if any(d is not None for d in avg_duration):
-            has_duration = True
-            turn_to_dur = dict(zip(t_turns, avg_duration))
-            padded_dur = [turn_to_dur.get(t) for t in turns]
-            duration_datasets.append({
-                "label": rd.run_id,
-                "data": padded_dur,
-                "borderColor": _color(i),
-                "backgroundColor": _color(i),
-                "spanGaps": True,
-                "tension": 0.15,
-            })
-
-    # --- cost: all per-instance lines from all runs ---
-    cost_datasets: list[dict] = []
-    any_cost = False
-    color_idx = 0
-    for rd in runs:
-        if rd.cost and rd.usage_rows:
-            any_cost = True
-            ds = _cost_datasets(rd.usage_rows, rd.cost,
-                                 color_offset=color_idx,
-                                 label_prefix=f"{rd.run_id}: ")
-            cost_datasets.extend(ds)
-            color_idx += len(ds)
-
-    # --- assemble HTML sections ---
-    if is_suite:
-        # Suite mode: different heading/meta
-        benchmark = runs[0].report.get("benchmark", "?")
-        model = runs[0].report.get("model", "?")
-        title = f"acb suite: {benchmark} × {model}"
-        heading = "Suite Comparison"
-        meta = f"{benchmark} &middot; {model}"
-        summary_html_title = "Summary by Harness"
-    else:
-        run_names = " vs ".join(rd.run_id for rd in runs)
-        title = f"acb comparison: {run_names}"
-        heading = "Comparison"
-        meta = run_names
-        summary_html_title = "Summary"
-
-    # summary
-    summary_html = f"<h2>{summary_html_title}</h2>{_comparison_table(runs, is_suite=is_suite)}"
-    
-    # resolve rate bar chart (suite view only)
-    resolve_chart_html = ""
-    resolve_chart_js = ""
-    if is_suite:
-        resolve_chart_html, resolve_chart_js = _resolve_rate_bar_chart(runs)
-
-    # duration chart
-    duration_chart_html = ""
-    duration_chart_js = ""
-    if has_duration:
-        duration_chart_html = """
-    <h2>Request duration per turn (avg per harness)</h2>
-    <div class="chart-wrap"><canvas id="durationChart"></canvas></div>"""
-        duration_chart_js = f"""
-    new Chart(document.getElementById('durationChart'), {{
-      type: 'line',
-      data: {{
-        labels: {json.dumps(turns)},
-        datasets: {json.dumps(duration_datasets)},
-      }},
-      options: {{
-        responsive: true,
-        scales: {{
-          x: {{ title: {{ display: true, text: 'turn index' }} }},
-          y: {{ title: {{ display: true, text: 'duration (ms)' }}, beginAtZero: true }},
-        }},
-      }},
-    }});"""
-
-    # cost chart
-    if any_cost:
-        max_cost_len = max((len(d["data"]) for d in cost_datasets), default=0)
-        cost_chart_html = """
-    <h2>Cost over time (cumulative, per instance)</h2>
-    <div class="chart-wrap"><canvas id="costChart"></canvas></div>"""
-        cost_chart_js = f"""
-    new Chart(document.getElementById('costChart'), {{
-      type: 'line',
-      data: {{
-        labels: {json.dumps(list(range(max_cost_len)))},
-        datasets: {json.dumps(cost_datasets)},
-      }},
-      options: {{
-        responsive: true,
-        scales: {{
-          x: {{ title: {{ display: true, text: 'turn index' }} }},
-          y: {{
-            title: {{ display: true, text: 'cumulative cost (USD)' }},
-            beginAtZero: true,
-            ticks: {{ callback: (v) => '$' + v }},
-          }},
-        }},
-      }},
-    }});"""
-    else:
-        cost_chart_html = '<h2>Cost over time</h2><p class="muted">No cost data configured for any harness.</p>'
-        cost_chart_js = ""
-
-    # instance tables
-    if is_suite:
-        # Suite mode: unified table across harnesses
-        instances_html = f"<h2>Instances</h2>{_unified_instance_table(runs)}"
-    else:
-        # Multi-run mode: separate tables per run
-        instances_html_parts = ["<h2>Instances</h2>"]
-        for rd in runs:
-            instances_html_parts.append(f"<h3>{rd.run_id}</h3>")
-            instances_html_parts.append(_instance_table(rd.metrics))
-        instances_html = "\n".join(instances_html_parts)
-
-    # Content type visualization for suite/multi-run
-    content_type_html = ""
-    content_type_js = ""
-    
-    # Check if any run has request data with content classification
-    has_any_requests = any(
-        any(m.get('requests') for m in rd.metrics)
-        for rd in runs
-    )
-    
-    if has_any_requests:
-        suite_breakdown = _content_type_suite_breakdown(runs)
-        
-        # Build aggregate pie chart
-        if suite_breakdown['aggregate']['by_type']:
-            content_type_html = f"""
-    <h2>Content Type Analysis</h2>
-    <div class="chart-wrap"><canvas id="contentTypeChart"></canvas></div>"""
-            
-            # Per-harness comparison if we have multiple harnesses
-            if len(runs) > 1 and suite_breakdown['by_harness']:
-                content_type_html += f"""
-    <h3>Content Type Distribution by Harness</h3>
-    <div class="chart-wrap"><canvas id="harnessContentTypeChart"></canvas></div>"""
-            
-            # Tool usage table if available
-            all_tool_usage = {}
-            for harness_data in suite_breakdown['by_harness'].values():
-                for tool_key, tool_data in harness_data['tool_usage'].items():
-                    if tool_key not in all_tool_usage:
-                        all_tool_usage[tool_key] = {
-                            'tool_name': tool_data['tool_name'],
-                            'tool_detail': tool_data['tool_detail'],
-                            'interactions': 0,
-                            'complete_pairs': 0,
-                            'call_only': 0,
-                            'result_only': 0,
-                            'total_tokens': 0,
-                        }
-                    all_tool_usage[tool_key]['interactions'] += tool_data['interactions']
-                    all_tool_usage[tool_key]['complete_pairs'] += tool_data['complete_pairs']
-                    all_tool_usage[tool_key]['call_only'] += tool_data['call_only']
-                    all_tool_usage[tool_key]['result_only'] += tool_data['result_only']
-                    all_tool_usage[tool_key]['total_tokens'] += tool_data['total_tokens']
-            
-            if all_tool_usage:
-                tool_rows = ""
-                # Sort by total tokens (descending)
-                sorted_tool_usage = sorted(
-                    all_tool_usage.items(),
-                    key=lambda x: x[1]['total_tokens'],
-                    reverse=True
-                )
-                for tool_key, data in sorted_tool_usage:
-                    avg_tokens = data['total_tokens'] / data['interactions'] if data['interactions'] else 0
-                    tool_rows += f"""
-        <tr>
-          <td>{data['tool_name']}</td>
-          <td>{data['tool_detail'] or '—'}</td>
-          <td>{data['interactions']}</td>
-          <td>{data['complete_pairs']}</td>
-          <td>{data['call_only']}</td>
-          <td>{data['result_only']}</td>
-          <td>{data['total_tokens']:,.0f}</td>
-          <td>{avg_tokens:,.0f}</td>
-        </tr>"""
-                content_type_html += f"""
-    <h3>Tool Usage Statistics (Suite Total)</h3>
-    <div class="chart-wrap">
-      <table>
-        <thead>
-          <tr>
-            <th>Tool Name</th>
-            <th>Detail</th>
-            <th>Interactions</th>
-            <th>Complete Pairs</th>
-            <th>Call Only</th>
-            <th>Result Only</th>
-            <th>Total Tokens</th>
-            <th>Avg Tokens/Interaction</th>
-          </tr>
-        </thead>
-        <tbody>{tool_rows}
-        </tbody>
-      </table>
-    </div>"""
-            
-            # Shell command suite breakdown if available
-            shell_cmd_suite = _shell_command_suite_breakdown(runs)
-            if shell_cmd_suite:
-                shell_rows = ""
-                
-                for cmd, data in shell_cmd_suite.items():
-                    # Build popover data for Chart.js tooltip
-                    harness_breakdown = []
-                    for harness, stats in data['by_harness'].items():
-                        harness_breakdown.append({
-                            'harness': harness,
-                            'calls': stats['calls'],
-                            'tokens': stats['tokens']
-                        })
-                    
-                    # Store in data attribute for Chart.js tooltip
-                    breakdown_json = json.dumps(harness_breakdown).replace('"', '&quot;')
-                    
-                    shell_rows += f"""
-        <tr data-breakdown='{breakdown_json}'>
-          <td>{cmd}</td>
-          <td>{data['total_calls']}</td>
-          <td>{data['total_tokens']:,}</td>
-          <td class="info-cell"><span class="info-icon">ℹ️</span></td>
-        </tr>"""
-                
-                content_type_html += f"""
-    <h3>Shell Command Usage (Suite Total)</h3>
-    <div class="chart-wrap">
-      <table id="shellCommandSuiteTable">
-        <thead>
-          <tr>
-            <th>Command</th>
-            <th>Total Calls</th>
-            <th>Total Tokens</th>
-            <th>Details</th>
-          </tr>
-        </thead>
-        <tbody>{shell_rows}
-        </tbody>
-      </table>
-    </div>"""
-            
-            # Generate JavaScript for charts
-            content_type_js = f"""
-    // Aggregate Content Type Distribution (Pie Chart)
-    new Chart(document.getElementById('contentTypeChart'), {{
-      type: 'pie',
-      data: {{
-        labels: {json.dumps(list(suite_breakdown['aggregate']['by_type'].keys()))},
-        datasets: [{{
-          data: {json.dumps([v['total_tokens'] for v in suite_breakdown['aggregate']['by_type'].values()])},
-          backgroundColor: ['#4e79a7', '#f28e2b', '#e15759', '#76b7b2', '#59a14f', '#edc948', '#999999'],
-        }}],
-      }},
-      options: {{
-        responsive: true,
-        plugins: {{
-          legend: {{ position: 'right' }},
-          title: {{ display: true, text: 'Total Tokens by Content Type (Suite)' }}
-        }}
-      }}
-    }});"""
-            
-            # Per-harness comparison chart if multiple runs
-            if len(runs) > 1 and suite_breakdown['by_harness']:
-                harness_names = list(suite_breakdown['by_harness'].keys())
-                all_types = set()
-                for bd in suite_breakdown['by_harness'].values():
-                    all_types.update(bd['by_type'].keys())
-                all_types = sorted(all_types)
-                
-                colors_map = {
-                    'system_prompt': '#4e79a7',
-                    'user_message': '#59a14f',
-                    'tool_call': '#f28e2b',
-                    'tool_result': '#e15759',
-                    'assistant_continuation': '#76b7b2',
-                    'mixed': '#edc948',
-                    'unknown': '#999999'
-                }
-                
-                datasets = []
-                for content_type in all_types:
-                    data = []
-                    for harness_name in harness_names:
-                        harness_data = suite_breakdown['by_harness'][harness_name]
-                        data.append(harness_data['by_type'].get(content_type, {}).get('total_tokens', 0))
-                    datasets.append({
-                        'label': content_type.replace('_', ' ').title(),
-                        'data': data,
-                        'backgroundColor': colors_map.get(content_type, '#cccccc')
-                    })
-                
-                content_type_js += f"""
-
-    // Per-Harness Content Type Comparison (Stacked Bar)
-    new Chart(document.getElementById('harnessContentTypeChart'), {{
-      type: 'bar',
-      data: {{
-        labels: {json.dumps(harness_names)},
-        datasets: {json.dumps(datasets)},
-      }},
-      options: {{
-        responsive: true,
-        scales: {{
-          x: {{ title: {{ display: true, text: 'Harness' }} }},
-          y: {{ stacked: true, title: {{ display: true, text: 'Tokens' }} }}
-        }},
-        plugins: {{
-          title: {{ display: true, text: 'Content Type Distribution by Harness' }}
-        }}
-      }}
-     }});"""
-            
-            # Add JavaScript for shell command suite popover
-            shell_suite_js = """
-    // Custom tooltip for shell command breakdown
-    document.querySelectorAll('#shellCommandSuiteTable tbody tr').forEach(row => {
-      const infoCell = row.querySelector('.info-icon');
-      if (!infoCell) return;
-      
-      const breakdown = JSON.parse(row.getAttribute('data-breakdown'));
-      
-      // Create Chart.js style tooltip on hover
-      infoCell.addEventListener('mouseenter', function(e) {
-        const tooltip = document.createElement('div');
-        tooltip.className = 'chartjs-tooltip';
-        tooltip.style.cssText = 'position: absolute; background: rgba(0,0,0,0.8); color: white; padding: 8px 12px; border-radius: 4px; font-size: 12px; pointer-events: none; z-index: 1000; white-space: nowrap;';
-        
-        let content = '<div style="font-weight: bold; margin-bottom: 4px;">Breakdown by Harness</div>';
-        breakdown.forEach(item => {
-          content += `<div>${item.harness}: ${item.calls} calls, ${item.tokens.toLocaleString()} tokens</div>`;
-        });
-        tooltip.innerHTML = content;
-        
-        document.body.appendChild(tooltip);
-        
-        // Position tooltip
-        const rect = e.target.getBoundingClientRect();
-        tooltip.style.left = (rect.left + window.scrollX - tooltip.offsetWidth - 10) + 'px';
-        tooltip.style.top = (rect.top + window.scrollY) + 'px';
-        
-        infoCell._tooltip = tooltip;
-      });
-      
-      infoCell.addEventListener('mouseleave', function() {
-        if (infoCell._tooltip) {
-          infoCell._tooltip.remove();
-          infoCell._tooltip = null;
-        }
-      });
-    });
-    """
-            content_type_js += shell_suite_js
-    
-    patches_html, patches_data_js = _patches_section(runs)
-
-    return _render_html(
-        title=title,
-        heading=heading,
-        meta=meta,
-        summary_html=summary_html,
-        resolve_chart_html=resolve_chart_html,
-        resolve_chart_js=resolve_chart_js,
-        context_datasets=context_datasets,
-        turns=turns,
-        avg_input=[],          # not used — tokens_datasets handles it
-        avg_output=[],
-        duration_chart_html=duration_chart_html,
-        duration_chart_js=duration_chart_js,
-        cost_chart_html=cost_chart_html,
-        cost_chart_js=cost_chart_js,
-        instances_html=instances_html,
-        patches_html=patches_html,
-        patches_data_js=patches_data_js,
-        tokens_stacked=False,
-        tokens_datasets_override=tokens_datasets,
-        content_type_html=content_type_html,
-        content_type_js=content_type_js,
-    )
-
-
-# ---------------------------------------------------------------------------
-# Shared HTML template renderer
 # ---------------------------------------------------------------------------
 
 def _render_html(
@@ -1738,9 +1077,9 @@ def _render_html(
     context_labels = list(range(max_context_len))
 
     if tokens_datasets_override is not None:
-        tokens_datasets_js = json.dumps(tokens_datasets_override)
+        tokens_datasets_js = _script_json(tokens_datasets_override)
     else:
-        tokens_datasets_js = json.dumps([
+        tokens_datasets_js = _script_json([
             {"label": "input tokens", "data": avg_input, "backgroundColor": _color(0)},
             {"label": "output tokens", "data": avg_output, "backgroundColor": _color(1)},
         ])
@@ -1749,7 +1088,7 @@ def _render_html(
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<title>{title}</title>
+<title>{html.escape(title)}</title>
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/diff2html/bundles/css/diff2html.min.css">
 <script src="https://cdn.jsdelivr.net/npm/diff2html/bundles/js/diff2html-ui.min.js"></script>
 <script src="{_CHART_JS_CDN}"></script>
@@ -1871,17 +1210,17 @@ def _render_html(
   </style>
 </head>
 <body>
-  <h1>{heading}</h1>
+  <h1>{html.escape(heading)}</h1>
   <div class="meta">{meta}</div>
 
   {summary_html}
 
   {resolve_chart_html}
 
-  <h2>Context growth over turns (prompt size = input + cache_read + cache_creation)</h2>
+  <h2>Context growth over model requests (prompt size = input + cache_read + cache_creation)</h2>
   <div class="chart-wrap"><canvas id="contextGrowthChart"></canvas></div>
 
-   <h2>Tokens per turn (avg across instances)</h2>
+   <h2>Tokens per model request (avg across instances)</h2>
    <div class="chart-wrap"><canvas id="tokensPerTurnChart"></canvas></div>
    {duration_chart_html}
    {cost_chart_html}
@@ -1897,13 +1236,13 @@ def _render_html(
   new Chart(document.getElementById('contextGrowthChart'), {{
     type: 'line',
     data: {{
-      labels: {json.dumps(context_labels)},
-      datasets: {json.dumps(context_datasets)},
+      labels: {_script_json(context_labels)},
+      datasets: {_script_json(context_datasets)},
     }},
     options: {{
       responsive: true,
       scales: {{
-        x: {{ title: {{ display: true, text: 'turn index' }} }},
+        x: {{ title: {{ display: true, text: 'model request index' }} }},
         y: {{ title: {{ display: true, text: 'prompt tokens' }}, beginAtZero: true }},
       }},
     }},
@@ -1912,13 +1251,13 @@ def _render_html(
   new Chart(document.getElementById('tokensPerTurnChart'), {{
     type: 'bar',
     data: {{
-      labels: {json.dumps(turns)},
+      labels: {_script_json(turns)},
       datasets: {tokens_datasets_js},
     }},
     options: {{
       responsive: true,
       scales: {{
-        x: {{ title: {{ display: true, text: 'turn index' }}, stacked: false }},
+        x: {{ title: {{ display: true, text: 'model request index' }}, stacked: false }},
         y: {{ title: {{ display: true, text: 'tokens' }}, beginAtZero: true }},
       }},
     }},
@@ -1958,208 +1297,30 @@ def _render_html(
 # Public entry point
 # ---------------------------------------------------------------------------
 
-def _load_suite_runs(suite_dir: Path) -> list[_RunData]:
-    """Load harness reports from a suite directory in stable order."""
-    return [
-        _RunData.load(item, harness_name=item.name)
-        for item in sorted(Path(suite_dir).iterdir())
-        if item.is_dir() and (item / "report.json").exists()
-    ]
-
-
-def _comparison_value(value: float | int | None) -> dict[str, float | int | None]:
-    return {"value": value}
-
-
 def _comparison_payload(baseline_dir: Path, candidate_dir: Path) -> dict:
-    baseline_report = json.loads((baseline_dir / "report.json").read_text())
-    candidate_report = json.loads((candidate_dir / "report.json").read_text())
-    if baseline_report.get("benchmark") != candidate_report.get("benchmark"):
-        raise ValueError("comparison requires matching benchmarks")
+    from acb.comparison import compare
+    return compare(baseline_dir, candidate_dir)
 
-    baseline_runs = {r.run_id: r for r in _load_suite_runs(baseline_dir)}
-    candidate_runs = {r.run_id: r for r in _load_suite_runs(candidate_dir)}
-    baseline_instances = {
-        m["instance_id"] for rd in baseline_runs.values() for m in rd.metrics
-    }
-    candidate_instances = {
-        m["instance_id"] for rd in candidate_runs.values() for m in rd.metrics
-    }
-    if baseline_instances != candidate_instances:
-        only_baseline = sorted(baseline_instances - candidate_instances)
-        only_candidate = sorted(candidate_instances - baseline_instances)
-        raise ValueError(
-            "comparison requires matching instance sets; "
-            f"only in baseline={only_baseline}, only in candidate={only_candidate}"
-        )
-
-    def report_value(rd: _RunData | None, key: str):
-        return rd.report.get(key) if rd else None
-
-    rows = []
-    for harness in sorted(set(baseline_runs) | set(candidate_runs)):
-        before = baseline_runs.get(harness)
-        after = candidate_runs.get(harness)
-        metrics_before = {m["instance_id"]: m for m in before.metrics} if before else {}
-        metrics_after = {m["instance_id"]: m for m in after.metrics} if after else {}
-        instances = []
-        for instance_id in sorted(baseline_instances):
-            left = metrics_before.get(instance_id)
-            right = metrics_after.get(instance_id)
-            instances.append({
-                "instance_id": instance_id,
-                "baseline_resolved": left.get("resolved") if left else None,
-                "candidate_resolved": right.get("resolved") if right else None,
-                "baseline_tokens": left.get("total_tokens") if left else None,
-                "candidate_tokens": right.get("total_tokens") if right else None,
-            })
-
-        def detail(rd: _RunData | None) -> dict | None:
-            if not rd:
-                return None
-            requests = [r for m in rd.metrics for r in m.get("requests", [])]
-            breakdown = _content_type_breakdown(requests)
-            return {
-                "content": breakdown["by_type"],
-                "tools": breakdown["tool_usage"],
-                "tool_percentage": _calculate_tool_usage_percentage(requests),
-            }
-
-        rows.append({
-            "harness": harness,
-            "baseline": {
-                "model": report_value(before, "model"),
-                "resolved": report_value(before, "resolved"),
-                "resolve_rate": report_value(before, "resolve_rate"),
-                "avg_total_tokens": report_value(before, "avg_total_tokens"),
-                "tokens_per_resolved": report_value(before, "tokens_per_resolved"),
-                "detail": detail(before),
-            },
-            "candidate": {
-                "model": report_value(after, "model"),
-                "resolved": report_value(after, "resolved"),
-                "resolve_rate": report_value(after, "resolve_rate"),
-                "avg_total_tokens": report_value(after, "avg_total_tokens"),
-                "tokens_per_resolved": report_value(after, "tokens_per_resolved"),
-                "detail": detail(after),
-            },
-            "instances": instances,
-        })
-    return {
-        "benchmark": baseline_report.get("benchmark"),
-        "baseline_run_id": baseline_report.get("suite_id") or baseline_report.get("run_id") or baseline_dir.name,
-        "candidate_run_id": candidate_report.get("suite_id") or candidate_report.get("run_id") or candidate_dir.name,
-        "baseline_model": baseline_report.get("model"),
-        "candidate_model": candidate_report.get("model"),
-        "rows": rows,
-    }
-
-
-def _build_comparison_html(baseline_dir: Path, candidate_dir: Path) -> str:
-    payload = _comparison_payload(baseline_dir, candidate_dir)
-    payload_json = json.dumps(payload, separators=(",", ":"))
-    return f"""<!DOCTYPE html>
-<html lang="en"><head><meta charset="utf-8"><title>acb comparison</title>
-<style>
-body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; margin: 2rem; background: #f7f7f9; color: #1a1a1a; }}
-h1 {{ margin-bottom: .25rem; }} .meta {{ color: #666; margin-bottom: 1.5rem; }}
-table {{ border-collapse: collapse; width: 100%; background: white; box-shadow: 0 1px 3px #0001; }}
-th, td {{ padding: .65rem .8rem; border-bottom: 1px solid #eee; text-align: left; }}
-th {{ background: #fafafa; color: #666; font-size: .78rem; text-transform: uppercase; }}
-.num {{ text-align: right; font-variant-numeric: tabular-nums; }}
-.better {{ color: #187a37; }} .worse {{ color: #b42318; }} .muted {{ color: #888; }}
-button {{ border: 0; background: none; color: #1769aa; cursor: pointer; text-decoration: underline; font: inherit; }}
-.detail {{ display: none; background: white; margin: 1rem 0 2rem; padding: 1rem; box-shadow: 0 1px 3px #0001; }}
-.detail.open {{ display: block; }} .detail h3 {{ margin-top: 0; }} .detail table {{ box-shadow: none; }}
-.status {{ font-weight: 600; }}
-.run-labels {{ display: flex; gap: 1rem; margin: 1rem 0 1.25rem; flex-wrap: wrap; }}
-.run-labels div {{ background: white; border-left: 4px solid #1769aa; padding: .7rem 1rem; min-width: 220px; box-shadow: 0 1px 3px #0001; }}
-.run-labels div:first-child {{ border-left-color: #187a37; }}
-.run-labels span {{ display: block; color: #666; font-size: .75rem; text-transform: uppercase; }}
-.run-labels strong {{ display: block; margin-top: .2rem; font-size: 1.05rem; }}
-small {{ font-weight: normal; text-transform: none; }}
-</style></head><body>
-<h1>Benchmark Comparison</h1>
-<div class="run-labels"><div><span>Candidate</span><strong>{html.escape(str(payload['candidate_run_id']))}</strong></div>
-<div><span>Baseline</span><strong>{html.escape(str(payload['baseline_run_id']))}</strong></div></div>
-<div class="meta">Benchmark: <strong>{html.escape(str(payload['benchmark']))}</strong> &middot;
-Candidate model: {html.escape(str(payload['candidate_model']))} &middot;
-Baseline model: {html.escape(str(payload['baseline_model']))}</div>
-<table><thead><tr><th>Harness</th><th>Correctness<br><small>Candidate / Baseline</small></th><th>Resolve delta<br><small>Candidate - Baseline</small></th>
-<th>Avg tokens<br><small>Candidate / Baseline</small></th><th>Token delta<br><small>Candidate - Baseline</small></th><th>Instances</th><th>Details</th></tr></thead>
-<tbody id="summary"></tbody></table>
-<div id="details"></div>
-<script>
-const comparison = {payload_json};
-const fmt = value => value == null ? 'n/a' : Number(value).toLocaleString(undefined, {{maximumFractionDigits: 1}});
-const delta = (a, b) => a == null || b == null ? null : b - a;
-const deltaCell = (a, b, digits = 1) => {{ const d = delta(a,b); if (d == null) return '<span class="muted">n/a</span>'; const cls = d < 0 ? 'better' : d > 0 ? 'worse' : 'muted'; return `<span class="${{cls}}">${{d > 0 ? '+' : ''}}${{Number(d).toLocaleString(undefined, {{maximumFractionDigits: digits}})}}</span>`; }};
-const correctness = (row) => {{
-  if (!row.baseline.detail && !row.candidate.detail) return '<span class="muted">harness missing</span>';
-  return `${{fmt(row.candidate.resolved)}} / ${{fmt(row.baseline.resolved)}}`;
-}};
-const summary = document.getElementById('summary');
-comparison.rows.forEach((row, index) => {{
-  const missing = !row.baseline.detail ? ' <span class="muted">(only in candidate)</span>' : !row.candidate.detail ? ' <span class="muted">(only in baseline)</span>' : '';
-  summary.insertAdjacentHTML('beforeend', `<tr><td><strong>${{row.harness}}</strong>${{missing}}</td><td>${{correctness(row)}}</td><td class="num">${{deltaCell(row.baseline.resolve_rate, row.candidate.resolve_rate, 1)}}</td><td class="num"><button data-index="${{index}}">${{fmt(row.candidate.avg_total_tokens)}} / ${{fmt(row.baseline.avg_total_tokens)}}</button></td><td class="num">${{deltaCell(row.baseline.avg_total_tokens, row.candidate.avg_total_tokens, 0)}}</td><td class="num">${{row.instances.length}}</td><td><button data-index="${{index}}">Open breakdown</button></td></tr>`);
-}});
-const details = document.getElementById('details');
-const renderBreakdown = (row, side) => {{
-  const data = row[side].detail; if (!data) return '<p class="muted">No data for this side.</p>';
-  const types = Object.entries(data.content).map(([key, value]) => `<tr><td>${{key}}</td><td class="num">${{fmt(value.total_tokens)}}</td><td class="num">${{value.count}}</td></tr>`).join('');
-  const tools = Object.entries(data.tools).map(([key, value]) => `<tr><td>${{value.tool_name}}</td><td>${{value.tool_detail || ''}}</td><td class="num">${{value.interactions}}</td><td class="num">${{value.complete_pairs}}</td><td class="num">${{value.call_only}}</td><td class="num">${{value.result_only}}</td><td class="num">${{fmt(value.total_tokens)}}</td></tr>`).join('');
-  const runName = side === 'candidate' ? comparison.candidate_run_id : comparison.baseline_run_id;
-  return `<h3>${{side[0].toUpperCase() + side.slice(1)}}: ${{runName}} (${{row[side].model || ''}})</h3><h4>Content classification</h4><table><tr><th>Type</th><th>Tokens</th><th>Records</th></tr>${{types}}</table><h4>Tools</h4><table><tr><th>Name</th><th>Detail</th><th>Interactions</th><th>Complete Pairs</th><th>Call Only</th><th>Result Only</th><th>Tokens</th></tr>${{tools || '<tr><td colspan="7">No tool data</td></tr>'}}</table>`;
-}};
-document.querySelectorAll('button[data-index]').forEach(button => button.addEventListener('click', () => {{
-  const index = Number(button.dataset.index); const row = comparison.rows[index]; const id = `detail-${{index}}`; let panel = document.getElementById(id);
-  if (!panel) {{ panel = document.createElement('section'); panel.id = id; panel.className = 'detail'; panel.innerHTML = `<h2>${{row.harness}} token breakdown</h2>${{renderBreakdown(row, 'candidate')}}${{renderBreakdown(row, 'baseline')}}<h3>Correctness by instance</h3><table><tr><th>Instance</th><th>Candidate</th><th>Baseline</th><th>Token delta<br><small>Candidate - Baseline</small></th></tr>${{row.instances.map(i => `<tr><td>${{i.instance_id}}</td><td>${{i.candidate_resolved == null ? 'n/a' : i.candidate_resolved ? 'resolved' : 'unresolved'}}</td><td>${{i.baseline_resolved == null ? 'n/a' : i.baseline_resolved ? 'resolved' : 'unresolved'}}</td><td class="num">${{deltaCell(i.baseline_tokens, i.candidate_tokens, 0)}}</td></tr>`).join('')}}</table>`; details.appendChild(panel); }}
-  panel.classList.toggle('open'); panel.scrollIntoView({{behavior: 'smooth', block: 'nearest'}});
-}}));
-</script></body></html>"""
 
 def build_html_report(run_dirs: str | Path | list[str | Path]) -> str:
-    """Build a self-contained HTML report for one or more runs or a suite.
+    """Render shared comparison semantics in memory.
 
-    Args:
-        run_dirs: A single run directory path, or a list of paths.
-                  - Single suite directory (contains harness subdirs): suite comparison view
-                  - Single harness directory: single-run detail view
-                  - List of directories: multi-run comparison view
-                  
-    Returns:
-        HTML string ready to be written to a file.
+    Use comparison_html.write_reports for a bundle with standalone benchmark
+    pages and navigation links. This API has no filesystem side effects.
     """
-    if isinstance(run_dirs, (str, Path)):
-        run_dir = Path(run_dirs)
-        
-        # Check if this is a suite directory (contains harness subdirs with reports)
-        if _is_suite_directory(run_dir):
-            # Load each harness subdirectory as a separate run/harness
-            runs = []
-            for harness_dir in sorted(run_dir.iterdir()):
-                if harness_dir.is_dir() and (harness_dir / "report.json").exists():
-                    # Use the subdirectory name as the harness name
-                    runs.append(_RunData.load(harness_dir, harness_name=harness_dir.name))
-            
-            if len(runs) > 1:
-                return _build_multi_run_html(runs, is_suite=True)
-            elif len(runs) == 1:
-                return _build_single_run_html(runs[0])
-            else:
-                return "<p>No harness data found in suite directory.</p>"
-        else:
-            # Single harness directory
-            runs = [_RunData.load(run_dir)]
-            return _build_single_run_html(runs[0])
-    else:
-        # List of directories (explicit multi-run comparison). Two suite roots
-        # are treated as baseline/candidate comparison inputs.
-        run_dirs = [Path(d) for d in run_dirs]
-        if len(run_dirs) == 2 and all(_is_suite_directory(d) for d in run_dirs):
-            return _build_comparison_html(run_dirs[0], run_dirs[1])
-        runs = [_RunData.load(d) for d in run_dirs]
-        
-        if len(runs) == 1:
-            return _build_single_run_html(runs[0])
-        return _build_multi_run_html(runs, is_suite=False)
+    from acb.comparison import benchmarks, compare
+    from acb.comparison_html import detail_html, page, render_comparison
+    roots = [Path(run_dirs)] if isinstance(run_dirs, (str, Path)) else list(map(Path, run_dirs))
+    if not roots:
+        raise ValueError('at least one run is required')
+    if len(roots) > 1:
+        bodies = [render_comparison(compare(roots[0], root)).split('<body>', 1)[1].rsplit('</body>', 1)[0]
+                  for root in roots[1:]]
+        return page('Benchmark comparisons', ''.join(bodies))
+    records = benchmarks(roots[0])
+    # Embed full individual documents without merging their chart element IDs.
+    frames = ''.join('<iframe title="'+html.escape(record['benchmark'], quote=True)+
+                     '" style="width:100%;height:1000px;border:0" srcdoc="'+
+                     html.escape(detail_html(record), quote=True)+'"></iframe>'
+                     for record in records.values())
+    return page('Individual benchmark reports', '<h1>Individual benchmark reports</h1>'+frames)

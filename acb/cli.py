@@ -29,8 +29,60 @@ def _cmd_run(args):
             model=args.model, proxy=args.proxy, limit=args.limit,
             max_workers=args.max_workers,
         )
-    from acb.runner import run
-    run(cfg, verbose=args.verbose)
+    if args.config_dir:
+        cfg.config_dir = str(Path(args.config_dir).expanduser().absolute())
+    if args.control:
+        from acb.harbor.backend import run
+        run(cfg, verbose=args.verbose, control=args.control)
+    else:
+        from acb.runner import run
+        run(cfg, verbose=args.verbose)
+
+
+def _cmd_resolve(args):
+    from acb.resolver import resolve
+    cfg = RunConfig.from_file(args.config)
+    if args.config_dir:
+        cfg.config_dir = str(Path(args.config_dir).expanduser().absolute())
+    plan = resolve(cfg)
+    if args.cmd == "prepare":
+        from acb.preparation import prepare
+        document = prepare(plan)
+    else:
+        document = plan.to_dict()
+    print(json.dumps(document, indent=2))
+
+
+def _cmd_list(args):
+    from acb.resolver import defaults
+    registries = Registries.load(Path(args.config_dir) if args.config_dir else None)
+    category = "mcp_servers" if args.category == "mcp" else args.category
+    entries = {**defaults().get(category, {}), **getattr(registries, category)}
+    if category == "models":
+        entries = {**registries.proxy.get("models", {}), **entries}
+    print(json.dumps(entries, indent=2))
+
+
+def _cmd_init(args):
+    import yaml
+    directory = Path(args.directory)
+    directory.mkdir(parents=True, exist_ok=True)
+    templates = {
+        "run.yaml": {"schema_version": 2, "run_id": "rh-swe-bench-smoke", "benchmark": "rh-swe-bench",
+                     "harness": ["goose", "pi", "opencode", "claude-code"], "model": "local-model",
+                     "skills": [], "extensions": [], "subset": ["task-0000"], "max_workers": 1},
+        "config/models.yaml": {"local-model": {"model": "YOUR_MODEL_ID", "api": "openai", "endpoint": "host.containers.internal:8000", "tls": False}},
+        "config/machine.yaml": {"environment": "podman"},
+    }
+    for relative, data in templates.items():
+        path = directory / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        try:
+            with path.open("x") as file:
+                yaml.safe_dump(data, file, sort_keys=False)
+            print(f"created {path}")
+        except FileExistsError:
+            print(f"kept existing {path}")
 
 
 def _cmd_report(args):
@@ -42,30 +94,28 @@ def _cmd_report(args):
         if p.exists():
             reports.append(json.loads(p.read_text()))
 
-    if len(reports) == 1:
+    if len(run_dirs) > 1:
+        from acb.comparison import compare
+        print(json.dumps([compare(run_dirs[0], root) for root in run_dirs[1:]], indent=2))
+    elif len(reports) == 1:
         print(json.dumps(reports[0], indent=2))
     else:
         print(json.dumps(reports, indent=2))
 
     if args.html is not None:
-        from acb.html_report import build_html_report
         if args.html:
             out_path = Path(args.html)
         else:
             out_path = run_dirs[0] / "report.html"
-        # Pass single directory as string/Path to enable suite detection
-        # Pass multiple directories as list for multi-run comparison
-        if len(run_dirs) == 1:
-            html_content = build_html_report(run_dirs[0])
-        else:
-            html_content = build_html_report(run_dirs)
-        out_path.write_text(html_content)
+        from acb.comparison_html import write_reports
+        write_reports(run_dirs, out_path)
         print(f"html report: {out_path}")
 
 
 def _cmd_clean(args):
     import shutil
-    output_dir = Path(args.output_dir)
+    output_dir = (RunConfig.from_file(args.config).output_path() if args.config
+                  else Path(args.output_dir or "runs").expanduser().resolve())
     if not output_dir.exists():
         raise SystemExit(f"output dir does not exist: {output_dir}")
 
@@ -82,6 +132,9 @@ def _cmd_clean(args):
     for p in sorted(to_delete):
         print(f"  {p.name}")
 
+    if args.dry_run:
+        return
+
     if not args.yes:
         answer = input("\nProceed? [y/N] ").strip().lower()
         if answer != "y":
@@ -89,7 +142,7 @@ def _cmd_clean(args):
             return
 
     for p in to_delete:
-        if p.is_dir():
+        if p.is_dir() and not p.is_symlink():
             shutil.rmtree(p)
         else:
             p.unlink()
@@ -98,52 +151,17 @@ def _cmd_clean(args):
 
 
 def _cmd_compare(args):
+    from acb.comparison import compare
+    roots = [Path(d) for d in args.run_dirs]
+    if len(roots) < 2:
+        raise SystemExit("compare requires a baseline and at least one candidate")
+    payloads = [compare(roots[0], candidate) for candidate in roots[1:]]
+    print(json.dumps(payloads, indent=2))
     if args.html is not None:
-        from acb.html_report import build_html_report
-        out_path = Path(args.html) if args.html else Path(args.run_dirs[0]) / "comparison.html"
-        out_path.write_text(build_html_report([Path(d) for d in args.run_dirs]))
+        from acb.comparison_html import write_reports
+        out_path = Path(args.html) if args.html else roots[0] / "comparison.html"
+        write_reports(roots, out_path)
         print(f"html comparison: {out_path}")
-        return
-
-    from acb.html_report import _comparison_payload, _is_suite_directory
-    suite_dirs = [Path(d) for d in args.run_dirs]
-    if len(suite_dirs) == 2 and all(_is_suite_directory(d) for d in suite_dirs):
-        payload = _comparison_payload(suite_dirs[0], suite_dirs[1])
-        cols = ["harness", "baseline_resolve_rate", "candidate_resolve_rate",
-                "resolve_delta", "baseline_avg_tokens", "candidate_avg_tokens",
-                "token_delta"]
-        print("\t".join(cols))
-        for row in payload["rows"]:
-            before = row["baseline"]
-            after = row["candidate"]
-            rate_delta = (
-                after["resolve_rate"] - before["resolve_rate"]
-                if before["resolve_rate"] is not None and after["resolve_rate"] is not None
-                else None
-            )
-            token_delta = (
-                after["avg_total_tokens"] - before["avg_total_tokens"]
-                if before["avg_total_tokens"] is not None and after["avg_total_tokens"] is not None
-                else None
-            )
-            print("\t".join(str(v) for v in [
-                row["harness"], before["resolve_rate"], after["resolve_rate"],
-                rate_delta, before["avg_total_tokens"], after["avg_total_tokens"],
-                token_delta,
-            ]))
-        return
-
-    rows = []
-    for d in args.run_dirs:
-        p = Path(d) / "report.json"
-        if p.exists():
-            rows.append(json.loads(p.read_text()))
-    cols = ["harness", "model", "benchmark", "resolve_rate",
-            "avg_total_tokens", "avg_peak_context", "avg_cache_efficiency",
-            "tokens_per_resolved"]
-    print("\t".join(cols))
-    for r in rows:
-        print("\t".join(str(r.get(c)) for c in cols))
 
 
 def main(argv=None):
@@ -152,6 +170,8 @@ def main(argv=None):
 
     r = sub.add_parser("run", help="run a benchmark x harness x model")
     r.add_argument("--config")
+    r.add_argument("--config-dir")
+    r.add_argument("--control", choices=("nop", "oracle"), help="run a Harbor grading control without model calls")
     r.add_argument("--benchmark")
     r.add_argument("--harness")
     r.add_argument("--model")
@@ -162,6 +182,19 @@ def main(argv=None):
     r.add_argument("--verbose", "-v", action="store_true",
                    help="show stderr output live during run (disables stderr redirection)")
     r.set_defaults(func=_cmd_run)
+
+    for name in ("resolve", "prepare"):
+        command = sub.add_parser(name, help=f"{name} the configured experiment")
+        command.add_argument("--config", required=True)
+        command.add_argument("--config-dir")
+        command.set_defaults(func=_cmd_resolve)
+    listing = sub.add_parser("list", help="show configured component identities")
+    listing.add_argument("category", choices=("harnesses", "models", "skills", "mcp", "extensions", "benchmarks"))
+    listing.add_argument("--config-dir")
+    listing.set_defaults(func=_cmd_list)
+    init = sub.add_parser("init", help="create starter configuration without overwriting files")
+    init.add_argument("directory", nargs="?", default=".")
+    init.set_defaults(func=_cmd_init)
 
     rp = sub.add_parser("report", help="show a run's report (one or more runs)")
     rp.add_argument("run_dirs", nargs="+",
@@ -177,7 +210,10 @@ def main(argv=None):
     c.set_defaults(func=_cmd_compare)
 
     cl = sub.add_parser("clean", help="delete all run directories, keeping the cache")
-    cl.add_argument("--output-dir", default="runs", help="runs directory (default: runs)")
+    clean_target = cl.add_mutually_exclusive_group()
+    clean_target.add_argument("--config", help="use the run YAML's output_dir, relative to the current directory")
+    clean_target.add_argument("--output-dir", help="runs directory relative to the current directory (default: runs)")
+    cl.add_argument("--dry-run", action="store_true", help="list what would be deleted without deleting anything")
     cl.add_argument("--yes", "-y", action="store_true", help="skip confirmation prompt")
     cl.set_defaults(func=_cmd_clean)
 

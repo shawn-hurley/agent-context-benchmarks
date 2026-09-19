@@ -143,7 +143,7 @@ from acb.container import (
     container_stop_rm,
 )
 from acb.proxy.base import ProxyBackend
-from acb.usage import UsageRecord, write_records, normalize_benchmark_metric
+from acb.usage import is_model_request, parse_measurements, UsageRecord, write_records, normalize_benchmark_metric
 
 # Podman's gvproxy-based user-mode networking resolves this to the macOS
 # host's own network stack, including loopback services -- verified against
@@ -339,7 +339,11 @@ def build_config(port: int, model_spec, harness_api: str, include_token_count: b
             "speaks the model's API, or add the reverse direction."
         )
 
-    ai_filters: list[dict] = []
+    # Forward the upstream authority, not the agent's loopback proxy address.
+    # Besides virtual hosting, plain-HTTP hostname allowlists inspect this Host.
+    ai_filters: list[dict] = [{"filter": "headers", "request_set": [
+        {"name": "Host", "value": model_spec.endpoint},
+    ]}]
     if translate:
         # Classifies the incoming Anthropic Messages request and promotes
         # its `stream` flag to metadata that anthropic_stream_events below
@@ -478,7 +482,10 @@ def build_config(port: int, model_spec, harness_api: str, include_token_count: b
     if _is_private_endpoint(model_spec.endpoint):
         # local model servers (vLLM/Ollama/LM Studio on 127.0.0.1 etc.) trip
         # Praxis's SSRF guard on load_balancer clusters; opt in explicitly.
-        config["insecure_options"] = {"allow_private_endpoints": True}
+        config["insecure_options"] = {
+            "allow_private_endpoints": True,
+            "allow_private_upstreams": True,
+        }
     return config
 
 
@@ -518,7 +525,12 @@ def build_container_config(port: int, model_spec, harness_api: str) -> dict:
     # guard on the resolved IP regardless of what the config string looked
     # like. Container-mode always talks back to the host machine by design,
     # so this is always the intended target -- opt in unconditionally.
-    config["insecure_options"] = {"allow_private_endpoints": True}
+    # Endpoint validation and the connection-time resolved-IP guard have
+    # separate switches. The host gateway requires both permissions.
+    config["insecure_options"] = {
+        "allow_private_endpoints": True,
+        "allow_private_upstreams": True,
+    }
     # Not a RUST_LOG env var: RUST_LOG=<target>=debug *replaces* the whole
     # filter (no implicit `info` fallback for unlisted targets), which
     # silently suppressed access_log's own normal INFO output as a side
@@ -682,8 +694,9 @@ class PraxisContainerBackend(PraxisBackend):
 
     def __init__(self, *args, pod: str, image: str,
                  extra_env: dict[str, str] | None = None,
-                 instance_dir: Path | None = None, **kwargs):
+                 instance_dir: Path | None = None, port: int | None = None, **kwargs):
         super().__init__(*args, **kwargs)
+        self.CONTAINER_PORT = port or type(self).CONTAINER_PORT
         self.pod = pod
         self.image = image
         self.container_name = f"{pod}-praxis"
@@ -789,6 +802,10 @@ class PraxisContainerBackend(PraxisBackend):
             raise RuntimeError(
                 f"praxis container failed to start.\n--- logs ---\n{log_tail}"
             )
+        # Readiness requests are setup traffic, before any harness can connect.
+        container_exec_capture(self.container_name,
+                               ["sh", "-c", ": > /tmp/benchmark_metrics.jsonl"],
+                               log_output=False)
         self._base_url = f"http://127.0.0.1:{self.CONTAINER_PORT}"
         
         # Log proxy startup
@@ -835,17 +852,24 @@ class PraxisContainerBackend(PraxisBackend):
                 "container": self.container_name,
             })
         
-        # Copy metrics file from container
+        # Record collection failures explicitly for matched-run reporting.
+        errors = []
         try:
             container_cp_out(self.container_name, "/tmp/benchmark_metrics.jsonl", self._metrics_path)
-        except Exception:
-            # Non-critical: metrics collection is best-effort
-            pass
-        
+        except Exception as error:
+            errors.append(f"metrics collection: {error}")
         container_stop_rm(self.container_name)
-        self._read_metrics_file()
+        collection_complete = not errors and self._metrics_path.exists()
+        if self._metrics_path.exists():
+            errors.extend(self._read_metrics_file())
+        else:
+            errors.append("metrics file missing")
+        (self.usage_path.parent / "measurement.json").write_text(json.dumps({
+            "complete": not errors, "collection_complete": collection_complete,
+            "errors": errors, "source": "praxis", "scope": "agent model requests",
+        }, indent=2))
 
-    def _read_metrics_file(self) -> None:
+    def _read_metrics_file(self, measurements: list[dict] | None = None) -> list[str]:
         """Read metrics JSONL file written by benchmark_metrics filter.
 
         Each line is a serialized BenchmarkMetric JSON object with all token
@@ -853,21 +877,18 @@ class PraxisContainerBackend(PraxisBackend):
         All token types (including cache_read_tokens and cache_creation_tokens)
          are now properly captured from Vertex responses.
          """
-        if not getattr(self, "_metrics_path", None) or not self._metrics_path.exists():
+        errors = []
+        if measurements is None and (not getattr(self, "_metrics_path", None) or not self._metrics_path.exists()):
             # Non-critical: metrics file may not be present
-            return
+            return ["metrics file missing"]
+
+        if measurements is None:
+            measurements, errors = parse_measurements(self._metrics_path.read_text(errors="replace"))
 
         records: list[UsageRecord] = []
-        for turn, line in enumerate(self._metrics_path.read_text(errors="replace").splitlines()):
-            line = line.strip()
-            if not line:
+        for metric in measurements:
+            if not is_model_request(metric):
                 continue
-            try:
-                metric = json.loads(line)
-            except json.JSONDecodeError:
-                # Non-critical: skip malformed lines
-                continue
-
             records.append(
                 UsageRecord(
                     run_id=self.tags.run_id,
@@ -875,7 +896,7 @@ class PraxisContainerBackend(PraxisBackend):
                     harness=self.tags.harness,
                     model=self.tags.model,
                     instance_id=self.tags.instance_id,
-                    turn_index=turn,
+                    turn_index=len(records),
                     input_tokens=normalize_benchmark_metric(metric).get("input_tokens", 0),
                     output_tokens=metric.get("output_tokens", 0),
                     cache_read_tokens=metric.get("cache_read_input_tokens", 0),
@@ -890,3 +911,4 @@ class PraxisContainerBackend(PraxisBackend):
             )
 
         write_records(self.usage_path, records)
+        return errors
