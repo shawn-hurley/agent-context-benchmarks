@@ -17,20 +17,23 @@ anything, not just to evaluate — see below.
 
 ### Prerequisites
 
-1. **Podman** (required for container-mode generation):
+1. **Python 3.12 or newer.** Harbor 0.23.0 is installed as a pinned ACB
+   dependency and runs from the same Python environment as `acb`.
+
+2. **Podman** (required for container-mode generation):
    ```bash
    # macOS (Apple Silicon or Intel)
    brew install podman
    podman machine init && podman machine start
    ```
 
-2. **SWE-bench evaluation harness** (vendored as git submodule):
+3. **SWE-bench evaluation harness** (vendored as git submodule):
    ```bash
    # Initialize the submodule (if you didn't clone with --recursive)
    git submodule update --init
    ```
 
-3. **Podman shim for macOS** (SWE-bench's evaluation code shells out to `docker`):
+4. **Podman shim for macOS** (SWE-bench's evaluation code shells out to `docker`):
    ```bash
    mkdir -p bin
    echo '#!/bin/sh\nexec podman "$@"' > bin/docker
@@ -90,6 +93,10 @@ harness never sees them:
 export ANTHROPIC_API_KEY=sk-...
 export OPENAI_API_KEY=sk-...          # if using OpenAI / for local, none needed
 ```
+
+Matched baseline, response-skill, RTK and context-compression examples for Harbor
+and the retained runners are in [config.example/phase4](config.example/phase4/README.md).
+See [Harbor operations](docs/harbor-operations.md) for functional evidence and runtime limits.
 
 ## How generation works
 
@@ -307,10 +314,16 @@ acb run --benchmark swebench-lite --harness goose \
 
 # view reports
 acb report runs/demo/goose            # single-harness run report
-acb report runs/demo                  # multi-harness suite report
+acb report runs/demo --html           # suite index + individual benchmark HTML
 acb compare runs/a/goose runs/b/goose # side-by-side comparison
 acb compare runs/baseline runs/candidate --html # suite comparison with deltas
 ```
+
+Comparisons match individual benchmarks, show same/better/worse/mixed quality with
+coverage, and flag unmatched tasks or changed/unknown conditions. Token deltas use
+only comparable complete measurements. Each benchmark has a standalone HTML page
+with tool calls/results, turns, model requests, timing, tokens and artifacts.
+See [comparison and metric behavior](docs/harbor-operations.md#dataset-metrics-and-comparisons).
 
 **Report path notes**:
 - **Single-harness runs** write to `runs/<run_id>/<harness>/report.json` → use `acb report runs/<run_id>/<harness>`
@@ -332,6 +345,17 @@ overrides:
   benchmark:
     image_arch: arm64
 ```
+
+### Clean run outputs
+
+`acb clean --config path/to/run.yaml --dry-run` previews cleanup using the
+YAML's `output_dir`, resolved relative to the invocation directory just as for `acb run`.
+Absolute output paths are used unchanged; input paths remain config-relative.
+Remove `--dry-run` to confirm deletion interactively, or add `--yes` to skip
+confirmation. This cleans all entries in the selected output directory except
+`.cache` and `.gitkeep`, not only the YAML's run ID. Without `--config`, cleanup
+uses `./runs`; `--output-dir PATH` selects a directory relative to the current
+working directory instead. `--config` and `--output-dir` are mutually exclusive.
 
 ## Output Structure
 
@@ -648,3 +672,12 @@ Error: unable to start host networking: ...
    # Ensure 4.0+ for best macOS support
    brew upgrade podman
    ```
+
+### Configuration schema
+
+Schema v2 is the only supported configuration format. `schema_version: 2` is
+optional because 2 is the default; explicit older versions are rejected. Relative
+input paths resolve against the YAML file declaring them; `output_dir` resolves
+against the invocation directory. CLI `--config-dir` is
+relative to the invocation directory and overrides the run-file setting. See the
+[path rules](docs/configuration-ux-plan.md#implemented-path-rules).
