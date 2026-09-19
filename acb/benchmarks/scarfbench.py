@@ -15,11 +15,10 @@ Generation follows the same container-mode pattern as SWE-bench:
      compatible directory structure and writes metadata.json.
 
 Evaluation uses `scarf validate` (the hidden validation command in the scarf
-CLI) as a separate grading step, analogous to SWE-bench's run_evaluation.
-scarf validate copies the target framework's Makefile/Dockerfile/smoke.py
-into the output dir and runs `make test`, which builds a Docker image, starts
-the app, and runs pytest-based smoke tests.  The pass/fail result is read back
-from the updated metadata.json.
+CLI) as a separate grading step. It runs the target framework's `make test`.
+The v0.1.2 pull supplies Dockerfile and test.sh, but no Makefile, so we supply
+the required entrypoint and execute the target's unmodified test.sh. This is
+one aggregate smoke check, not the full Java test suite.
 
 Key differences from SWE-bench:
   - No per-instance eval image: all Java apps share the same JDK/Maven base.
@@ -36,6 +35,7 @@ from __future__ import annotations
 import json
 import logging
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -58,13 +58,13 @@ from acb.container import (
 from acb.utils import normalize_instance_id_for_path
 
 # Files from the benchmark's source framework directory that belong to the
-# build/test harness, not the application itself.  scarf eval run's own
-# prepare step excludes the same set (confirmed from prepare.rs in the scarf
-# CLI source).  They are NOT copied into the agent's working directory; scarf
-# validate later copies the TARGET framework's equivalents in for grading.
+# build/test harness, not the application itself. ScarfBench's prepare step
+# excludes these. It does include source test.sh, which gives the agent useful
+# context about the original observable interface. The validator replaces it
+# with the target framework's test.sh before grading.
 _HARNESS_FILES = {
     "smoke.py", "smoke", "Makefile", "makefile", "Dockerfile",
-    ".dockerignore", "test.sh",
+    ".dockerignore",
 }
 
 # Framework names the scarf validate Metadata struct accepts (snake_case, from
@@ -73,8 +73,60 @@ _VALID_FRAMEWORKS = {"jakarta", "quarkus", "spring"}
 
 # The Containerfile lives alongside this module's package.
 _CONTAINERFILE = Path(__file__).resolve().parent.parent / "scarfbench" / "Containerfile"
+_PAIR_PROMPTS_DIR = _CONTAINERFILE.parent / "prompts"
 
 _DEFAULT_IMAGE = "scarfbench:latest"
+
+
+def _benchmark_task_text(benchmark_dir: Path, layer: str, app: str) -> tuple[str, str] | None:
+    """Read an explicit app-level task description when a bundle supplies one.
+
+    Current v0.1.2 pulls contain none of these files. Keeping the lookup
+    allows a future or custom benchmark bundle to supply task text without
+    silently replacing it with our generic migration instructions.
+    """
+    app_dir = benchmark_dir / layer / app
+    for name in ("prompt.txt", "prompt.md", "task.txt", "task.md", f"{app}.feature"):
+        path = app_dir / name
+        if path.is_file():
+            content = path.read_text(errors="replace").strip()
+            if content:
+                return name, content
+    return None
+
+
+def _migration_prompt(benchmark_dir: Path, *, layer: str, app: str,
+                      source: str, target: str) -> str:
+    """Build an agent-defined prompt from benchmark task text and source files.
+
+    ScarfBench's CLI supplies framework names and source code, but no prompt.
+    Pair guidance is adapted from ScarfBench's public example agent skills,
+    without their logging and reference-file requirements, which ACB does not
+    stage in the agent workspace.
+    """
+    task = _benchmark_task_text(benchmark_dir, layer, app)
+    pair = f"{source}-to-{target}"
+    pair_guidance = (_PAIR_PROMPTS_DIR / f"{pair}.md").read_text().strip()
+    task_section = (
+        f"Benchmark task description ({task[0]}):\n<task>\n{task[1]}\n</task>\n\n"
+        if task else ""
+    )
+    return (
+        f"Migrate the Java application in /work from {source} to {target}.\n\n"
+        f"{task_section}"
+        f"Migration guidance for {pair}:\n{pair_guidance}\n\n"
+        "Preserve the source application's observable behavior, including its "
+        "HTTP paths, protocol, data behavior, and relevant configuration. "
+        "Inspect the source code and any README or test.sh in /work to identify "
+        "that behavior. The source test.sh checks the source runtime, so its "
+        "URL and port are not necessarily the target validation contract. "
+        "Follow idiomatic target-framework conventions while "
+        "updating dependencies, build plugins, configuration, and application code. "
+        "Package the application, fix build failures, and check that it starts "
+        "and responds as intended where the available tools permit. "
+        "The benchmark will validate with its target-framework Dockerfile and "
+        "test script. Do not add or modify test files."
+    )
 
 
 def _normalize_framework(name: str) -> str:
@@ -217,41 +269,59 @@ def _ensure_validation_harness(benchmark_dir: Path, *, layer: str, app: str,
     """
     framework_dir = benchmark_dir / layer / app / framework
     test_script = framework_dir / "test.sh"
-    if not test_script.exists():
-        return
-
     makefile = framework_dir / "Makefile"
-    if not makefile.exists():
-        # Run the benchmark's supplied health check inside the application
-        # container.  Dockerfile CMD starts the app; test.sh checks its
-        # framework-specific port.  Polling avoids racing slow Maven/Liberty
-        # startup while keeping the validator's required `make test` entrypoint.
-        image = f"scarfbench-{app}-{framework}:latest"
-        container = f"scarfbench-{app}-{framework}-validation-$${{PPID}}"
-        health_url = (
-            "http://localhost:9080/cart/health"
-            if framework == "jakarta"
-            else "http://localhost:8080/api/cart/health"
+    if not test_script.exists():
+        if makefile.exists():
+            return
+        raise FileNotFoundError(
+            f"ScarfBench target has neither Makefile nor test.sh: {framework_dir}"
+        )
+
+    existing_makefile = makefile.read_text() if makefile.exists() else ""
+    legacy_makefile = (
+        (existing_makefile.startswith("IMAGE_NAME ?= scarfbench-")
+         and "docker exec -e BASE_URL=" in existing_makefile)
+        or (existing_makefile.startswith("# Generated by ACB for ScarfBench v0.1.2's missing Makefile.\n")
+            and "--iidfile" not in existing_makefile)
+    )
+    if not makefile.exists() or legacy_makefile:
+        # The pulled release supplies the test itself but not the `make test`
+        # entrypoint required by scarf validate. Run that script unchanged: its
+        # default URL, port and assertions belong to the benchmark, not us.
+        # Replace only compatibility Makefiles from older ACB runs; an upstream
+        # Makefile always takes precedence.
+        # Each conversion has its own output directory. A stable directory
+        # checksum keeps concurrent validations from sharing a container name.
+        container = (
+            f"scarfbench-{app}-{framework}-validation-"
+            "$(shell printf '%s' '$(CURDIR)' | cksum | cut -d' ' -f1)"
         )
         makefile.write_text(
-            f"IMAGE_NAME ?= {image}\n"
+            "# Generated by ACB for ScarfBench v0.1.2's missing Makefile.\n"
+            "IMAGE_ID_FILE := .acb-validation-image-id\n"
             f"CONTAINER_NAME ?= {container}\n\n"
+            ".PHONY: build up down test\n\n"
             "build:\n"
-            "\tdocker build -t $(IMAGE_NAME) .\n"
+            "\trm -f $(IMAGE_ID_FILE)\n"
+            "\tdocker build --iidfile $(IMAGE_ID_FILE) .\n"
             "\t@echo BUILD SUCCESS\n\n"
             "up: build\n"
             "\t-docker rm -f $(CONTAINER_NAME) >/dev/null 2>&1\n"
-            "\tdocker run -d --name $(CONTAINER_NAME) $(IMAGE_NAME)\n"
-            "\t@echo 'Application started and ready.'\n\n"
+            "\tdocker run -d --name $(CONTAINER_NAME) $$(cat $(IMAGE_ID_FILE))\n\n"
             "down:\n"
             "\t-docker rm -f $(CONTAINER_NAME) >/dev/null 2>&1\n\n"
             "test: up\n"
-            "\tstatus=1; trap '$(MAKE) down >/dev/null 2>&1' EXIT; "
+            "\t@status=1; trap '$(MAKE) down >/dev/null 2>&1' EXIT; "
             "for i in $$(seq 1 90); do "
-            f"if docker exec -e BASE_URL={health_url} $(CONTAINER_NAME) bash /app/test.sh; "
+            "if docker exec $(CONTAINER_NAME) bash /app/test.sh; "
             "then status=0; break; fi; "
+            "if ! docker exec $(CONTAINER_NAME) true >/dev/null 2>&1; then "
+            "echo 'Application container exited'; docker logs $(CONTAINER_NAME); "
+            "break; fi; "
             "sleep 1; done; "
-            "if [ $$status -eq 0 ]; then echo '===== 1 passed ====='; fi; "
+            "if [ $$status -eq 0 ]; then "
+            "echo 'Application started and ready.'; "
+            "echo '===== 1 passed ====='; fi; "
             "exit $$status\n"
         )
 
@@ -294,11 +364,22 @@ class ScarfBench(Benchmark):
         """Folder name under scarf_eval_dir, matching scarf's EvalKey.repr() format."""
         return f"{self._AGENT_SLUG}__{layer}__{app}__{source}__{target}"
 
-    def load_instances(self, subset=None, limit=None) -> list[Instance]:
-        """Load instances from the run config's instance list.
+    def _run_dir_for_instance(self, output_dir: Path, instance_id: str) -> Path:
+        """Locate the conversion tree written by collect_prediction_container()."""
+        layer, app, conversion = instance_id.split("/", 2)
+        source, target = conversion.split("-to-", 1)
+        return self._scarf_eval_dir(output_dir) / self._agent_key(
+            layer, app, source, target
+        ) / "run_1"
 
-        Each entry in config["instances"] is a dict with keys:
+    def load_instances(self, subset=None, limit=None) -> list[Instance]:
+        """Load explicit migrations, or discover apps for the configured pair.
+
+        Each optional entry in config["instances"] is a dict with keys:
           layer, app, source, target
+        With no instances, config["source"] and config["target"] select the
+        directed pair. Omitting both retains all-pair discovery for callers
+        that instantiate ScarfBench without the example benchmark registry.
 
         Example:
           instances:
@@ -307,14 +388,60 @@ class ScarfBench(Benchmark):
               source: jakarta
               target: quarkus
         """
-        instances_cfg = self.config.get("instances") or []
-        if not instances_cfg:
-            raise RuntimeError(
-                "No ScarfBench instances configured. Add an `instances:` list "
-                "under scarfbench in benchmarks.yaml or overrides.benchmark in "
-                "the run config."
-            )
         benchmark_cache_dir = self._benchmark_cache_dir()
+        instances_cfg = self.config.get("instances")
+        if not instances_cfg:
+            configured_source = self.config.get("source")
+            configured_target = self.config.get("target")
+            if (configured_source is None) != (configured_target is None):
+                raise ValueError("ScarfBench source and target must be configured together")
+            if configured_source is not None:
+                configured_source = _normalize_framework(configured_source)
+                configured_target = _normalize_framework(configured_target)
+                if configured_source == configured_target:
+                    raise ValueError("ScarfBench source and target must differ")
+            if not benchmark_cache_dir.is_dir():
+                raise RuntimeError(
+                    f"ScarfBench benchmark directory not found: {benchmark_cache_dir}. "
+                    "Run `scarf bench pull` and set benchmark_cache_dir."
+                )
+            apps: list[tuple[str, str, set[str]]] = []
+            # Order by conversion first so a small limit covers different apps.
+            # This is deterministic across filesystems and harnesses.
+            for layer_dir in sorted(benchmark_cache_dir.iterdir()):
+                if not layer_dir.is_dir():
+                    continue
+                for app_dir in sorted(layer_dir.iterdir()):
+                    if app_dir.is_dir():
+                        frameworks = {
+                            framework for framework in _VALID_FRAMEWORKS
+                            if (app_dir / framework).is_dir()
+                        }
+                        if len(frameworks) >= 2:
+                            apps.append((layer_dir.name, app_dir.name, frameworks))
+            if not apps:
+                raise RuntimeError(
+                    f"No ScarfBench framework pairs found in {benchmark_cache_dir}. "
+                    "Check benchmark_cache_dir or run `scarf bench pull`."
+                )
+            instances_cfg = []
+            sources = [configured_source] if configured_source else sorted(_VALID_FRAMEWORKS)
+            for source in sources:
+                targets = [configured_target] if configured_target else sorted(_VALID_FRAMEWORKS - {source})
+                for target in targets:
+                    for layer, app, frameworks in apps:
+                        if source in frameworks and target in frameworks:
+                            instances_cfg.append({
+                                "layer": layer,
+                                "app": app,
+                                "source": source,
+                                "target": target,
+                            })
+            if not instances_cfg:
+                raise RuntimeError(
+                    f"No ScarfBench apps found for {configured_source}-to-"
+                    f"{configured_target} in {benchmark_cache_dir}"
+                )
         instances: list[Instance] = []
 
         for spec in instances_cfg:
@@ -327,30 +454,9 @@ class ScarfBench(Benchmark):
             if subset and instance_id not in subset:
                 continue
 
-            # Read the BDD feature spec for the app (app-level, shared across
-            # frameworks).  Include it verbatim in the prompt so goose has a
-            # concrete behavioral contract to preserve.
-            feature_path = benchmark_cache_dir / layer / app / f"{app}.feature"
-            if feature_path.exists():
-                feature_content = feature_path.read_text(errors="replace")
-                feature_section = (
-                    f"Preserve all behavior described in this BDD specification:\n\n"
-                    f"<feature>\n{feature_content}\n</feature>\n\n"
-                )
-            else:
-                if os.environ.get("ACB_DEBUG_UI"):
-                    log_debug(
-                        f"warning: {feature_path} not found; "
-                        "omitting feature spec from prompt"
-                    )
-                feature_section = ""
-
-            prompt = (
-                f"Migrate the Java application in /work from {source} to {target}.\n\n"
-                f"{feature_section}"
-                f"Follow idiomatic {target} conventions. "
-                f"The source code is already in /work -- edit it in place. "
-                f"Do not add or modify test files."
+            prompt = _migration_prompt(
+                benchmark_cache_dir, layer=layer, app=app,
+                source=source, target=target,
             )
 
             instances.append(Instance(
@@ -436,17 +542,9 @@ class ScarfBench(Benchmark):
         source = instance.extra["source"]
         target = instance.extra["target"]
 
-        # The runner writes to out_dir which we don't have a direct reference
-        # to here -- but scarf_eval_dir is deterministic from the run's output
-        # directory structure.  We store it on the instance via extra so
-        # evaluate() can find it without re-deriving.  The runner passes
-        # out_dir to run_container() / collect_prediction_container() only
-        # via the harness; we need another channel.
-        #
-        # Solution: read from config["_out_dir"] which the runner sets in
-        # bench_cfg (see note in evaluate()), or derive from a well-known
-        # relative path.  For now we stash the result path in Prediction.output
-        # and parse it back in evaluate().
+        # The runner does not pass out_dir directly here. prepare_container()
+        # stashes it on the instance, and evaluate() reconstructs this same
+        # layout from the instance ID.
 
         # out_dir is stashed on instance.extra["_out_dir"] by prepare_container()
         # (which receives build_dir from the runner; build_dir.parent = out_dir).
@@ -601,9 +699,10 @@ class ScarfBench(Benchmark):
 
         scarf validate:
           1. Reads each run_N/metadata.json for (layer, app, target_framework).
-          2. Copies Makefile/Dockerfile/smoke.py from benchmark's target
-             framework dir into run_N/output/.
-          3. Runs `make test` (Docker build → run app → pytest smoke tests).
+          2. Copies the target framework's Dockerfile and test harness into
+             run_N/output/.
+          3. Runs `make test` (Docker build → run app → target test.sh for
+             v0.1.2's compatibility Makefile).
           4. Parses run.log and writes compile_ok/deploy_ok/tests_passed back
              to metadata.json.
 
@@ -637,7 +736,7 @@ class ScarfBench(Benchmark):
                     instance_id=pred_data["instance_id"],
                     model_name_or_path=pred_data["model_name_or_path"],
                     model_patch=pred_data.get("model_patch"),
-                    output=str(output_dir / "instances" / normalize_instance_id_for_path(instance_id)),
+                    output=str(self._run_dir_for_instance(output_dir, instance_id)),
                     error=None,
                 ))
         else:
@@ -653,7 +752,7 @@ class ScarfBench(Benchmark):
                                 instance_id=pred_data["instance_id"],
                                 model_name_or_path=pred_data["model_name_or_path"],
                                 model_patch=pred_data.get("model_patch"),
-                                output=str(output_dir / "instances" / inst_dir.name),
+                                output=str(self._run_dir_for_instance(output_dir, pred_data["instance_id"])),
                                 error=None,
                             ))
             elif predictions:
@@ -683,8 +782,8 @@ class ScarfBench(Benchmark):
 
         # ScarfBench v0.1.2's published benchmark tree contains test.sh but
         # omits the Makefile and smoke-test metadata expected by `scarf
-        # validate`.  Materialize compatibility files before validation; this
-        # is idempotent and leaves any official files untouched.
+        # validate`. Materialize compatibility files before validation;
+        # official Makefiles take precedence.
         for pred in preds_to_eval:
             run_meta = Path(pred.output) / "metadata.json" if pred.output else None
             if run_meta and run_meta.exists():
@@ -735,7 +834,8 @@ class ScarfBench(Benchmark):
         
         # Redirect evaluation subprocess output to log file to prevent terminal interference
         # This prevents scarf validate's output from bypassing Rich's Live display
-        eval_log_path = output_dir / f"scarfbench_eval_{instance_id or 'batch'}.log"
+        eval_log_id = normalize_instance_id_for_path(instance_id) if instance_id else "batch"
+        eval_log_path = output_dir / f"scarfbench_eval_{eval_log_id}.log"
         try:
             with eval_log_path.open("w") as eval_log:
                 proc = subprocess.run(
@@ -791,9 +891,18 @@ class ScarfBench(Benchmark):
             compile_ok = meta.get("compile_ok", "UNK")
             deploy_ok = meta.get("deploy_ok", "UNK")
 
+            # scarf validate can count a success marker echoed in a Makefile
+            # command even when make test ultimately fails. The run log records
+            # make's nonzero result, which must take precedence over metadata.
+            run_log = run_dir / "validation" / "run.log"
+            make_failed = run_log.exists() and re.search(
+                r"(?m)^make(?:\[\d+\])?: \*\*\*", run_log.read_text(errors="replace")
+            ) is not None
+
             # Resolved = compiled, deployed, and all smoke tests passed.
             if (
-                compile_ok == "TRUE"
+                not make_failed
+                and compile_ok == "TRUE"
                 and deploy_ok == "TRUE"
                 and tests_passed is not None
                 and tests_passed > 0
