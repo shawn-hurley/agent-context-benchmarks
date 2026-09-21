@@ -77,17 +77,17 @@ def test_upstream_authority_replaces_loopback_host_for_both_harness_apis():
 
 def test_container_usage_excludes_discovery_and_token_probes(tmp_path):
     import json
-    from acb.proxy.praxis import PraxisContainerBackend
+    from acb.proxy.metrics import PraxisMetricsReader
     from acb.proxy.base import ProxyTags
     from acb.usage import read_records
-    backend = PraxisContainerBackend(
+    backend = PraxisMetricsReader(
         tags=ProxyTags('r', 'b', 'h', 'm', 'i'), usage_path=tmp_path / 'usage.jsonl',
-        config={}, model_spec=ModelSpec('m'), pod='p', image='image')
-    backend._metrics_path = tmp_path / 'raw.jsonl'
+        )
+    backend.metrics_path = tmp_path / 'raw.jsonl'
     endpoints = ['/v1/models', '/v1/messages/count_tokens', '/v1/chat/completions', '/v1/messages?beta=true']
-    backend._metrics_path.write_text(''.join(json.dumps({'endpoint': e, 'input_tokens': 100,
+    backend.metrics_path.write_text(''.join(json.dumps({'endpoint': e, 'input_tokens': 100,
          'output_tokens': 20, 'request_id': str(i)}) + '\n' for i, e in enumerate(endpoints)))
-    backend._read_metrics_file()
+    backend.read_metrics_file()
     rows = list(read_records(backend.usage_path))
     assert [r.endpoint for r in rows] == endpoints[2:]
     assert [r.turn_index for r in rows] == [0, 1]

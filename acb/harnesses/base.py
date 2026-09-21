@@ -5,7 +5,7 @@ opencode, pi) headlessly *inside a running container*, pointed at the proxy's
 base_url so every LLM call is measured. It returns the agent's raw output; the
 Benchmark turns the mutated container's checkout into a Prediction.
 
-Generation is container-only (see acb/runner.py, acb/benchmarks/swebench.py):
+Generation is container-only (see acb/harbor/agent.py, acb/benchmarks/swebench.py):
 the harness runs inside the same SWE-bench eval image evaluation will grade
 the patch in, so its dev environment matches evaluation exactly, rather than
 whatever happens to be on the machine running `acb`. A harness needs a Linux

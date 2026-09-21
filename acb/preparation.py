@@ -6,9 +6,7 @@ import hashlib
 from importlib.resources import files
 import json
 from pathlib import Path
-import platform
 import re
-import shutil
 import subprocess
 import tempfile
 import tarfile
@@ -18,52 +16,8 @@ from acb.harnesses._cache import binary_cache_lock
 
 def prepare(plan) -> dict:
     """Dispatch preparation using the same normalized backend as execution."""
-    document = plan.to_dict()
-    if document["execution_backend"] == "harbor":
-        from acb.harbor.backend import prepare as prepare_harbor
-        return prepare_harbor(plan)
-    # The existing benchmark runner is retained until grading parity. Refuse
-    # settings it cannot honor before dataset loading or output creation.
-    if document["environment"] != "podman":
-        raise ValueError("legacy execution requires execution.environment: podman; use Harbor for Docker")
-    if document["offline"]:
-        raise ValueError("legacy execution does not support execution.offline; use Harbor")
-    if document["attempts"] != 1:
-        raise ValueError("legacy execution requires benchmark.attempts: 1; use Harbor for repeated trials")
-    from acb.integrations import IntegrationManager
-    arch = legacy_architecture(document["benchmark_config"])
-    document = prepare_response_skills(document)
-    document["benchmark_config"]["image_arch"] = arch
-    document["architecture"] = arch
-    for name, settings in document["harnesses"].items():
-        prepare_rtk(settings, name, document, arch)
-        IntegrationManager(name, settings)
-    if any(settings.get("model_middleware") for settings in document["harnesses"].values()):
-        root = Path(str(files("acb.integrations").joinpath("assets/caveman")))
-        image = prepare_image(root, "Containerfile", "acb-caveman", document)
-        document["caveman_image"] = image
-        document["benchmark_config"]["caveman_image"] = image
-        for settings in document["harnesses"].values():
-            if settings.get("model_middleware"):
-                add_recovery_guidance(settings)
-    document["preparation"] = {"probed": False, "backend": "legacy"}
-    document["pending_checks"] = ["legacy per-instance image, harness and skill setup", "task grading and measurement collection"]
-    if any(name == "claude-code" and settings.get("execution_integrations")
-           for name, settings in document["harnesses"].items()):
-        document["pending_checks"].append("Claude RTK interpreter verification in the task container")
-    return document
-
-
-def legacy_architecture(benchmark: dict) -> str:
-    """Use the architecture selected by the retained benchmark image builder."""
-    value = benchmark.get("image_arch", "auto")
-    if value == "auto":
-        value = {"arm64": "arm64", "aarch64": "arm64", "x86_64": "amd64", "amd64": "amd64"}.get(platform.machine())
-    if value not in ("arm64", "amd64"):
-        raise ValueError("benchmark.image_arch must be auto, arm64 or amd64")
-    if benchmark.get("architecture", value) != value:
-        raise ValueError("benchmark.architecture conflicts with benchmark.image_arch")
-    return value
+    from acb.harbor.backend import prepare as prepare_harbor
+    return prepare_harbor(plan)
 
 
 def prepare_rtk(config: dict, harness: str, plan: dict, arch: str, *, runtime=None) -> None:

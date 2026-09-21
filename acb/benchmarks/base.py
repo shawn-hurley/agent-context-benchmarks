@@ -1,24 +1,13 @@
-"""Benchmark interface.
+"""Benchmark task selection and native prediction records.
 
-A Benchmark abstracts a task suite so the runner is identical across SWE-bench,
-LiveCodeBench, ScarfBench, etc. It knows how to enumerate tasks, prepare a
-*container* for the harness to edit code in, phrase the prompt, and score the
-harness's output.
-
-Generation is container-only (see acb/runner.py): the harness always runs
-inside a container the Benchmark prepares, not a plain host directory, so its
-dev environment matches whatever evaluation will grade the patch in.
-"""
+Harbor owns environments and execution. Adapters enumerate source instances;
+acb.harbor.benchmark_tasks exports them and the custom verifier grades outputs."""
 
 from __future__ import annotations
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
-from pathlib import Path
-from typing import TYPE_CHECKING, Any
-
-if TYPE_CHECKING:
-    from acb.ui import ProgressTracker
+from typing import Any
 
 
 @dataclass
@@ -54,51 +43,3 @@ class Benchmark(ABC):
     @abstractmethod
     def load_instances(self, subset: list[str] | None = None, limit: int | None = None) -> list[Instance]:
         ...
-
-    @abstractmethod
-    def prepare_container(self, instance: Instance, pod: str, build_dir: Path,
-                          arch: str) -> str:
-        """Materialize a running container (attached to `pod`) the harness
-        will edit code in; return its name.
-
-        The `build_dir`/`arch` params are runner-computed orchestration
-        details (image build scratch space, target architecture) rather than
-        a fully benchmark-agnostic signature -- there's only one real
-        implementation (SWEBench) today, so this leans on its concrete needs
-        rather than a speculative generic shape. Revisit if/when a second
-        container-mode benchmark exists.
-
-        Deliberately benchmark-only: staging a harness's own runtime (e.g. a
-        binary it needs `podman cp`'d in) is NOT this method's job -- the
-        runner calls `HarnessAdapter.setup_container()` separately, after
-        this returns and before `run_container()`, so this method (and every
-        Benchmark) stays agnostic to which harness is running.
-        """
-
-    @abstractmethod
-    def collect_prediction_container(self, instance: Instance, container: str, model: str) -> Prediction:
-        """Turn the harness's post-run container state into a Prediction."""
-
-    @abstractmethod
-    def evaluate(
-        self,
-        predictions: list[Prediction] | None,
-        run_id: str,
-        output_dir: Path,
-        tracker: ProgressTracker | None = None,
-        instance_id: str | None = None,
-        tracker_key: str | None = None,
-    ) -> dict[str, bool]:
-        """Score predictions; return {instance_id: resolved}.
-        
-        Args:
-            predictions: Legacy parameter (ignored, reads from disk instead)
-            run_id: Unique identifier for this run
-            output_dir: Harness output directory containing instances/
-            tracker: Optional tracker to update with verification status
-            instance_id: If set, only evaluate this specific instance (filesystem path)
-            tracker_key: Composite key {harness}-{instance_id} for tracker updates
-        
-        Returns:
-            Dictionary mapping instance_id to resolved status (True/False)
-        """

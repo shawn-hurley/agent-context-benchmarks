@@ -1,44 +1,16 @@
-"""ScarfBench benchmark adapter.
+"""ScarfBench discovery, migration prompts, and native grading.
 
-ScarfBench (https://scarfbench.info) evaluates Java framework migration:
-Jakarta EE <-> Quarkus <-> Spring.  102 focused-example apps across 6 layers,
-each with 3 framework variants.
-
-Generation follows the same container-mode pattern as SWE-bench:
-  1. prepare_container() builds/starts a shared "scarfbench:latest" image
-     (JDK 17 + Maven + git) in the runner's pod; copies source framework code
-     (minus smoke.py/Makefile/Dockerfile) into /work; returns container name.
-  2. runner.py calls Goose.setup_container() (copies goose binary in) and
-     Goose.run_container() (podman exec goose in /work with workdir=/work,
-     no conda activation -- set via overrides.harness in the run config).
-  3. collect_prediction_container() copies /work back out to a scarf-validate-
-     compatible directory structure and writes metadata.json.
-
-Evaluation uses `scarf validate` (the hidden validation command in the scarf
-CLI) as a separate grading step. It runs the target framework's `make test`.
-The v0.1.2 pull supplies Dockerfile and test.sh, but no Makefile, so we supply
-the required entrypoint and execute the target's unmodified test.sh. This is
-one aggregate smoke check, not the full Java test suite.
-
-Key differences from SWE-bench:
-  - No per-instance eval image: all Java apps share the same JDK/Maven base.
-  - No git diff as Prediction.model_patch: scarf validate needs the full
-    migrated source tree in output/, not a patch.
-  - Instances declared in config (not loaded from HF dataset): the instance
-    space is small and enumerable.
-  - Grading uses Docker (via the existing container_env() DOCKER_HOST +
-    bin/docker Podman shim), same as SWE-bench's evaluation subprocess.
-"""
+Harbor exports source projects and collects complete generated projects.
+This module preserves scarf validate and make test grading, including the
+compatibility harness for published bundles without a Makefile."""
 
 from __future__ import annotations
 
 import json
-import logging
 import os
 import re
 import shutil
 import subprocess
-import tempfile
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -47,14 +19,7 @@ if TYPE_CHECKING:
 
 from acb.benchmarks.base import Benchmark, Instance, Prediction
 from acb.logging_config import log_debug
-from acb.container import (
-    build_image,
-    container_create,
-    container_env,
-    container_start,
-    container_untar_in,
-    image_exists,
-)
+from acb.container import container_env
 from acb.utils import normalize_instance_id_for_path
 
 # Files from the benchmark's source framework directory that belong to the
@@ -152,84 +117,6 @@ def _normalize_framework(name: str) -> str:
             f"{sorted(_VALID_FRAMEWORKS)} (or a recognized alias)"
         )
     return n
-
-
-def _ensure_scarfbench_image(config: dict) -> str:
-    """Return the scarfbench image tag, building it from the Containerfile if absent.
-
-    Analogous to runner.py's _ensure_praxis_image(): checks for the image,
-    builds once from acb/scarfbench/Containerfile if missing.
-    """
-    image = config.get("scarfbench_image", _DEFAULT_IMAGE)
-    if image_exists(image):
-        return image
-    if not _CONTAINERFILE.exists():
-        raise RuntimeError(
-            f"{image} not found and Containerfile is missing at {_CONTAINERFILE}. "
-            "Verify the acb/scarfbench/Containerfile exists in the repository."
-        )
-    if os.environ.get("ACB_DEBUG_UI"):
-        log_debug(f"building {image} from {_CONTAINERFILE} ...")
-    build_image(_CONTAINERFILE, _CONTAINERFILE.parent, image)
-    if os.environ.get("ACB_DEBUG_UI"):
-        log_debug(f"built {image}")
-    return image
-
-
-def _copy_source_to_container(
-    source_dir: Path, container: str, container_path: str
-) -> None:
-    """Stage source framework code into the container at container_path.
-
-    Copies everything from source_dir EXCEPT harness files (smoke.py, Makefile,
-    Dockerfile, .dockerignore) -- these belong to the benchmark's grading harness,
-    not the agent's working copy.  scarf validate copies them back in from the
-    TARGET framework dir for grading.
-
-    Uses container_untar_in() (tar pipe) rather than podman cp to avoid the
-    directory-vs-contents ambiguity in podman cp semantics (see container.py).
-    """
-    with tempfile.TemporaryDirectory() as staging:
-        staging_path = Path(staging)
-        for entry in source_dir.iterdir():
-            if entry.name in _HARNESS_FILES:
-                continue
-            dst = staging_path / entry.name
-            if entry.is_dir():
-                shutil.copytree(entry, dst)
-            else:
-                shutil.copy2(entry, dst)
-        container_untar_in(container, staging_path, container_path)
-
-
-def _copy_work_from_container(container: str, output_dir: Path) -> None:
-    """Extract /work from container into output_dir using a tar pipe.
-
-    podman cp container:/work/. output_dir has the same directory-vs-contents
-    issue as the inbound direction, so we use `podman exec tar` to stream out.
-    .git is excluded -- it's used internally during the run but is not part of
-    the migrated source that scarf validate grades.
-    """
-    output_dir.mkdir(parents=True, exist_ok=True)
-    proc = subprocess.Popen(
-        [
-            "podman", "exec", container,
-            "tar", "-C", "/work", "--exclude=./.git", "-c", ".",
-        ],
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-    )
-    # Extract the tar stream on the host side
-    import tarfile as _tarfile
-    import io
-    raw, stderr = proc.communicate()
-    if proc.returncode != 0:
-        raise RuntimeError(
-            f"_copy_work_from_container: tar out of {container}:/work failed\n"
-            f"stderr: {stderr.decode(errors='replace')}"
-        )
-    with _tarfile.open(fileobj=io.BytesIO(raw), mode="r:") as tf:
-        tf.extractall(output_dir)  # noqa: S202
 
 
 def _write_metadata_json(path: Path, *, agent: str, app: str, layer: str,
@@ -474,217 +361,6 @@ class ScarfBench(Benchmark):
 
         return instances
 
-    def prepare_container(self, instance: Instance, pod: str,
-                          build_dir: Path, arch: str) -> str:
-        """Build/start a scarfbench container and seed /work with source code.
-
-        Unlike SWE-bench (where the eval image already contains /testbed),
-        here we:
-          1. Ensure the shared scarfbench:latest base image exists.
-          2. Create + start a container in the runner's pod.
-          3. Copy the source framework's Java sources (minus harness files)
-             into /work via a tar pipe.
-
-        Goose's binary is NOT staged here -- Goose.setup_container() handles
-        that after this method returns (same as SWE-bench).
-        """
-        image = _ensure_scarfbench_image(self.config)
-        container_name = f"{pod}-scarfbench"
-        container_create(pod, image, container_name, command=["sleep", "infinity"])
-        container_start(container_name)
-
-        layer = instance.extra["layer"]
-        app = instance.extra["app"]
-        source = instance.extra["source"]
-        source_dir = self._benchmark_cache_dir() / layer / app / source
-
-        if not source_dir.is_dir():
-            raise RuntimeError(
-                f"Source framework directory not found: {source_dir}\n"
-                f"Verify benchmark_cache_dir points to the root of `scarf bench pull` output "
-                f"and that the {source!r} framework directory exists for {layer}/{app}."
-            )
-
-        if os.environ.get("ACB_DEBUG_UI"):
-            log_debug(
-                f"copying {source} source "
-                f"({source_dir}) into container /work ..."
-            )
-        _copy_source_to_container(source_dir, container_name, "/work")
-
-        # Stash out_dir on the instance so collect_prediction_container() can
-        # locate the transcript and write the scarf-validate output tree.
-        # build_dir is <out_dir>/image_build (set by runner.py's do_one);
-        # its parent is out_dir.
-        instance.extra["_out_dir"] = str(build_dir.parent)
-
-        return container_name
-
-    def collect_prediction_container(
-        self, instance: Instance, container: str, model: str
-    ) -> Prediction:
-        """Extract /work and write scarf-validate-compatible output layout.
-
-        Directory structure written under <out_dir>/scarfbench-eval/:
-
-            <agent>__<layer>__<app>__<source>__<target>/
-              run_1/
-                input/        (source code snapshot -- for reference)
-                output/       (agent's migrated code -- graded by scarf validate)
-                validation/   (goose transcript)
-                metadata.json (layer/app/framework info for scarf validate)
-
-        The goose transcript is copied from the runner's standard transcript
-        path to validation/agent.out.
-        """
-        layer = instance.extra["layer"]
-        app = instance.extra["app"]
-        source = instance.extra["source"]
-        target = instance.extra["target"]
-
-        # The runner does not pass out_dir directly here. prepare_container()
-        # stashes it on the instance, and evaluate() reconstructs this same
-        # layout from the instance ID.
-
-        # out_dir is stashed on instance.extra["_out_dir"] by prepare_container()
-        # (which receives build_dir from the runner; build_dir.parent = out_dir).
-        out_dir = Path(instance.extra.get("_out_dir", "runs"))
-        scarf_eval_dir = self._scarf_eval_dir(out_dir)
-        agent_key = self._agent_key(layer, app, source, target)
-        run_dir = scarf_eval_dir / agent_key / "run_1"
-        output_dir = run_dir / "output"
-        validation_dir = run_dir / "validation"
-        input_dir = run_dir / "input"
-
-        output_dir.mkdir(parents=True, exist_ok=True)
-        validation_dir.mkdir(parents=True, exist_ok=True)
-        input_dir.mkdir(parents=True, exist_ok=True)
-
-        # --- Seed input/ with original source code (for reference) ---
-        source_dir = self._benchmark_cache_dir() / layer / app / source
-        with tempfile.TemporaryDirectory() as staging:
-            staging_path = Path(staging)
-            for entry in source_dir.iterdir():
-                if entry.name in _HARNESS_FILES:
-                    continue
-                dst = staging_path / entry.name
-                if entry.is_dir():
-                    shutil.copytree(entry, dst)
-                else:
-                    shutil.copy2(entry, dst)
-            # Copy staging contents to input_dir
-            for item in staging_path.iterdir():
-                dst = input_dir / item.name
-                if item.is_dir():
-                    shutil.copytree(item, dst, dirs_exist_ok=True)
-                else:
-                    shutil.copy2(item, dst)
-
-        # --- Extract /work (migrated code) from container → output/ ---
-        if os.environ.get("ACB_DEBUG_UI"):
-            log_debug(
-                f"extracting /work → {output_dir} ..."
-            )
-        _copy_work_from_container(container, output_dir)
-
-        # --- Generate unified diff for model_patch (debugging/reporting) ---
-        # Exclude build artifacts and limit to 20MB to keep patches manageable
-        model_patch = ""
-        try:
-            # Exclude build artifacts to keep diff focused on source changes
-            exclude_patterns = [
-                '--exclude=target',
-                '--exclude=build',
-                '--exclude=*.class',
-                '--exclude=*.jar',
-                '--exclude=*.war',
-                '--exclude=.mvn',
-                '--exclude=node_modules',
-                '--exclude=__pycache__',
-                '--exclude=*.pyc',
-            ]
-            
-            diff_cmd = ['diff', '-Naur'] + exclude_patterns + [str(input_dir), str(output_dir)]
-            
-            if os.environ.get("ACB_DEBUG_UI"):
-                log_debug(f"generating diff: {' '.join(diff_cmd)}")
-            
-            diff_result = subprocess.run(
-                diff_cmd,
-                capture_output=True,
-                text=True,
-                timeout=60,  # 60 second timeout for large projects
-            )
-            
-            # diff exits with 0 (no changes), 1 (changes found), or 2+ (error)
-            if diff_result.returncode in (0, 1):
-                model_patch = diff_result.stdout
-                
-                # Cap at 20MB to prevent excessive file sizes
-                max_bytes = 20 * 1024 * 1024  # 20MB
-                patch_bytes = len(model_patch.encode('utf-8'))
-                
-                if patch_bytes > max_bytes:
-                    # Truncate and add warning
-                    model_patch_truncated = model_patch[:max_bytes]
-                    # Find last complete line to avoid partial lines
-                    last_newline = model_patch_truncated.rfind('\n')
-                    if last_newline > 0:
-                        model_patch_truncated = model_patch_truncated[:last_newline]
-                    
-                    model_patch = (
-                        f"WARNING: Diff truncated at 20MB (original size: {patch_bytes / 1024 / 1024:.1f}MB)\n"
-                        f"{model_patch_truncated}\n"
-                        f"\n... [TRUNCATED - {patch_bytes - max_bytes} bytes omitted] ...\n"
-                    )
-                    if os.environ.get("ACB_DEBUG_UI"):
-                        log_debug(f"diff truncated: {patch_bytes / 1024 / 1024:.1f}MB → 20MB")
-                else:
-                    if os.environ.get("ACB_DEBUG_UI"):
-                        log_debug(f"generated diff: {patch_bytes / 1024:.1f}KB")
-            else:
-                # diff command failed
-                if os.environ.get("ACB_DEBUG_UI"):
-                    log_debug(f"diff command failed (exit {diff_result.returncode}): {diff_result.stderr[:200]}")
-                model_patch = ""
-                
-        except subprocess.TimeoutExpired:
-            if os.environ.get("ACB_DEBUG_UI"):
-                log_debug("diff generation timed out after 60s")
-            model_patch = ""
-        except Exception as e:
-            if os.environ.get("ACB_DEBUG_UI"):
-                log_debug(f"diff generation failed: {e}")
-            model_patch = ""
-
-        # --- Write metadata.json for scarf validate ---
-        _write_metadata_json(
-            run_dir / "metadata.json",
-            agent=self._AGENT_SLUG,
-            app=app,
-            layer=layer,
-            source_framework=source,
-            target_framework=target,
-            model=model,
-        )
-
-        # --- Copy goose transcript to validation/agent.out ---
-        # The runner writes the transcript to <out_dir>/instances/<normalized_id>/transcript.jsonl
-        transcript_src = out_dir / "instances" / normalize_instance_id_for_path(instance.instance_id) / "transcript.jsonl"
-        if transcript_src.exists():
-            shutil.copy2(transcript_src, validation_dir / "agent.out")
-        else:
-            # Write an empty marker so scarf validate doesn't fail on a missing file
-            (validation_dir / "agent.out").write_text("")
-        (validation_dir / "agent.err").write_text("")
-
-        return Prediction(
-            instance_id=instance.instance_id,
-            model_name_or_path=model,
-            model_patch=model_patch,
-            # output carries the run_dir path so evaluate() can locate it
-            output=str(run_dir),
-        )
 
     def evaluate(
         self,

@@ -1,4 +1,4 @@
-"""On-demand SWE-bench instance image builder.
+"""SWE-bench Dockerfile retrieval and architecture adaptation.
 
 SWE-bench's own evaluation harness only checks a local image cache, then falls
 back to pulling from a registry (``create_container()`` in
@@ -6,12 +6,8 @@ back to pulling from a registry (``create_container()`` in
 published images are also amd64-only (baked in as ``FROM --platform=linux/amd64``
 in each task's Dockerfile), which doesn't run natively on Apple Silicon.
 
-This module builds a single instance's image on demand, from the same source
-SWE-bench's own image-building CLI uses -- the task repo
-(``SWE-bench/swe-bench-tasks``, one directory per instance with its own
-Dockerfile) -- via plain ``podman build`` (no ``docker``/``buildx`` binary
-needed; confirmed against this vendored harness's own ``docker_build.py``,
-which shells out to a literal ``docker buildx build`` and would not work here).
+This module fetches and adapts instance Dockerfiles from the task repo
+(``SWE-bench/swe-bench-tasks``). Harbor builds the exported environment recipes.
 
 Building natively for arm64 requires patching each task's Dockerfile (verified
 by hand against ``psf__requests-1142`` and confirmed working end-to-end
@@ -36,13 +32,11 @@ against its real ``eval.sh``/``gold.patch``/``test.patch``):
 
 from __future__ import annotations
 
-import logging
 import os
 import re
 import urllib.request
 from pathlib import Path
 
-from acb.container import build_image, image_exists, image_tag
 from acb.logging_config import log_debug
 
 TASK_REPO = "SWE-bench/swe-bench-tasks"
@@ -139,51 +133,3 @@ def patch_dockerfile_for_arch(dockerfile: str, arch: str) -> str:
     patched = patched.replace("-Linux-x86_64.sh", "-Linux-aarch64.sh")
     patched = _relax_environment_yml(patched)
     return patched
-
-
-def ensure_instance_image(
-    instance_id: str,
-    arch: str,
-    build_dir: Path,
-    task_repo: str = TASK_REPO,
-    force_rebuild: bool = False,
-    eval_alias: str | None = None,
-    task_repo_cache_dir: str | None = None,
-) -> str:
-    """Return the local image name for ``instance_id``, building it if needed.
-
-    ``eval_alias``, if given, is the exact image name SWE-bench's evaluation
-    will look for (the dataset row's own ``image`` field --
-    ``SWEBench.load_instances()`` captures it into ``Instance.extra["image"]``).
-    Evaluation reads that name directly with no override mechanism and
-    always names the *published* (amd64/x86_64) image, which was never built
-    for -- and doesn't exist under -- our local arch tag. Tagging our local
-    image under that exact alias makes evaluation's own local-cache check
-    (``client.images.get()`` in ``run_evaluation.py``) hit directly, instead
-    of falling through to a pull of an image that was never published for
-    this architecture (and which crashes outright on a Podman-only machine
-    with no `docker-credential-desktop` -- see ``container_env()``).
-    """
-    name = image_name(instance_id, arch)
-    if not force_rebuild and image_exists(name):
-        if eval_alias and not image_exists(eval_alias):
-            image_tag(name, eval_alias)
-        return name
-
-    if os.environ.get("ACB_DEBUG_UI"):
-        log_debug(f"building {name} (arch={arch}) ...")
-    dockerfile = fetch_dockerfile(instance_id, task_repo,
-                                  task_repo_cache_dir=task_repo_cache_dir)
-    dockerfile = patch_dockerfile_for_arch(dockerfile, arch)
-
-    context_dir = build_dir / instance_id
-    context_dir.mkdir(parents=True, exist_ok=True)
-    dockerfile_path = context_dir / "Dockerfile"
-    dockerfile_path.write_text(dockerfile)
-
-    build_image(dockerfile_path, context_dir, name, platform=platform_for(arch))
-    if os.environ.get("ACB_DEBUG_UI"):
-        log_debug(f"built {name}")
-    if eval_alias:
-        image_tag(name, eval_alias)
-    return name

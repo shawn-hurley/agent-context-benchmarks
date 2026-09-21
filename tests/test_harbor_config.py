@@ -278,7 +278,7 @@ def test_cli_config_dir_override_is_cwd_relative(tmp_path, monkeypatch, capsys, 
             return plan.to_dict()
         monkeypatch.setattr('acb.harbor.backend.prepare', prepare)
     elif command == 'run':
-        def run(plan, *, verbose):
+        def run(plan, *, verbose, control=None):
             captured.append(plan.to_dict())
         monkeypatch.setattr('acb.harbor.backend.run_plan', run)
     main([command, '--config', str(run_file), '--config-dir', 'cli-settings'])
@@ -340,7 +340,7 @@ def test_default_schema_uses_current_paths_and_launch_profile(tmp_path):
 
 
 def test_mutated_schema_cannot_bypass_resolver_or_runner_validation():
-    from acb.runner import run
+    from acb.harbor.backend import run
     cfg = config()
     cfg.schema_version = 1
     for action in (resolve, run):
@@ -397,12 +397,12 @@ def test_precedence_budget_model_and_backend_without_side_effects(monkeypatch):
     r.models['alias'] = {'model': 'local', 'endpoint': 'alias.example:8000'}
     cfg = config(model='alias', benchmark={'name': 'rh-swe-bench', 'attempts': 3},
                  max_workers=2, execution={'max_workers': 4, 'timeout': 400, 'environment': 'docker'},
-                 overrides={'benchmark': {'attempts': 5, 'execution_backend': 'legacy'},
+                 overrides={'benchmark': {'attempts': 5, 'execution_backend': 'harbor'},
                             'harness': {'timeout': 200, 'system_prompt': 'shared'},
                             'harnesses': {'pi': {'timeout': 300, 'system_prompt': 'local'}}})
     before = deepcopy((cfg, r))
     plan = resolve(cfg, r).to_dict()
-    assert plan['execution_backend'] == 'legacy'
+    assert plan['execution_backend'] == 'harbor'
     assert plan['attempts'] == 5
     assert plan['environment'] == 'docker'
     assert plan['max_workers'] == 4
@@ -438,6 +438,9 @@ def test_existing_benchmark_fields_are_supported():
     for name in ('swebench', 'swebench-lite', 'scarfbench'):
         plan = resolve(config(benchmark=name, model='local-qwen'), r).to_dict()
         assert plan['benchmark'] == name
+        assert plan['execution_backend'] == 'harbor'
+        assert plan['benchmark_config']['reward_metric'] == 'reward'
+        assert plan['benchmark_config']['success_value'] == 1
 
 
 @pytest.mark.parametrize('entries,match', [

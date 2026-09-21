@@ -12,7 +12,8 @@ import yaml
 from acb.config import ModelSpec
 from acb.usage import is_model_request, parse_measurements
 from acb.proxy.base import ProxyTags
-from acb.proxy.praxis import build_container_config, PraxisContainerBackend
+from acb.proxy.praxis import build_container_config
+from acb.proxy.metrics import PraxisMetricsReader
 
 SERVICE = "acb-praxis"
 PORT = 18880
@@ -46,11 +47,10 @@ class HarborPraxis:
         from acb.harnesses import make_harness
         api = make_harness(harness).effective_api(spec.api)
         self.config = build_container_config(PORT, spec, api)
-        self.parser = PraxisContainerBackend(
+        self.parser = PraxisMetricsReader(
             tags=ProxyTags(run_id=plan["run_id"], benchmark=plan["benchmark"],
                            harness=harness, model=spec.name, instance_id=trial_id),
-            usage_path=directory / "usage.jsonl", model_spec=spec, harness_api=api,
-            config=plan["proxy_config"], pod="unused", image="unused",
+            usage_path=directory / "usage.jsonl",
         )
         self.started = False
         self._log_task: asyncio.Task | None = None
@@ -159,8 +159,8 @@ class HarborPraxis:
             metrics.write_text("".join(json.dumps(record) + "\n" for record in records))
             model_metrics = self.directory / "model_metrics.jsonl"
             model_metrics.write_text("".join(json.dumps(record) + "\n" for record in records if is_model_request(record)))
-            self.parser._metrics_path = model_metrics
-            self.parser._read_metrics_file(records)
+            self.parser.metrics_path = model_metrics
+            self.parser.read_metrics_file(records)
         (self.directory / "measurement.json").write_text(json.dumps({
             "complete": not errors and raw.exists(), "errors": errors,
             "collection_complete": not collection_errors and raw.exists(),

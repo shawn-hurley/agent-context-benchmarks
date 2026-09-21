@@ -192,32 +192,3 @@ def compare(baseline, candidate):
                          'measured': len(measured)},
             'matched_tokens': {**totals, **delta(totals['baseline'], totals['candidate']),
                                'benchmarks': [r['identity'] for r in measured]}}
-
-
-def legacy_provenance(report_path, plan, harness, instances):
-    """Capture resolved inputs rather than infer compatibility from directory names."""
-    from dataclasses import asdict
-    import hashlib
-    report_path=Path(report_path)
-    report=json.loads(report_path.read_text())
-    config=plan['benchmark_config']
-    report['dataset']=config.get('dataset',plan['benchmark'])
-    report['grade_definition']={'metric':'resolved','direction':'higher','tolerance':0}
-    report['comparison_provenance']={
-        'conditions':{'backend':'legacy','environment':plan.get('environment'),
-                      'timeout':plan['harnesses'][harness].get('timeout'),
-                      'attempts':plan.get('attempts',1),'cache_policy':plan.get('cache_policy'),
-                      'benchmark_config':config},
-        'tasks':{item.instance_id:{'sha256':hashlib.sha256(json.dumps(asdict(item),sort_keys=True,default=str).encode()).hexdigest()}
-                 for item in instances}}
-    evaluations=[]
-    for metric in jsonl(report_path.parent/'metrics.jsonl'):
-        iid=metric['instance_id'];folder=report_path.parent/'instances'/normalize_instance_id_for_path(iid)
-        prediction=json.loads((folder/'prediction.json').read_text()) if (folder/'prediction.json').exists() else {}
-        failed=bool(prediction.get('error')) or (folder/'error.json').exists()
-        measurement=json.loads((folder/'measurement.json').read_text()) if (folder/'measurement.json').exists() else {}
-        evaluations.append({'task_id':iid,'trial_id':iid,'resolved':None if failed else metric.get('resolved'),
-                            'status':'error' if failed or metric.get('resolved') is None else 'completed',
-                            'measurement_complete':not failed and measurement.get('complete') is True and (folder/'usage.jsonl').exists()})
-    report['evaluations']=evaluations
-    report_path.write_text(json.dumps(report,indent=2))

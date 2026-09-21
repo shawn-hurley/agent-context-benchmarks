@@ -19,21 +19,47 @@ def plan(tmp_path):
     }
 
 
-def test_assets_follow_task_architecture_and_interpreter(tmp_path, monkeypatch):
+@pytest.mark.parametrize('harness', ['goose', 'pi', 'opencode', 'claude-code'])
+def test_assets_follow_task_architecture_and_interpreter(tmp_path, monkeypatch, harness):
     calls = []
     def build(cache, engine, arch, offline):
         calls.append(arch)
         return f'/cache/{arch}/rtk', f'digest-{arch}'
     monkeypatch.setattr('acb.preparation.ensure_rtk', build)
     original = plan(tmp_path)
+    original['harnesses'] = {harness: {'execution_integrations': [{'name': 'rtk'}]}}
     before = deepcopy(original)
     prepared = prepare_assets(original)
     assert original == before
     assert calls == ['arm64', 'amd64']
     for task_id, runtime in original['runtime_contracts'].items():
-        extension = prepared['task_plans'][task_id]['harnesses']['claude-code']['execution_integrations'][0]
+        extension = prepared['task_plans'][task_id]['harnesses'][harness]['execution_integrations'][0]
         assert extension['binary_path'] == f"/cache/{runtime['arch']}/rtk"
-        assert extension['python_path'] == runtime['python_path']
+        if harness == 'claude-code':
+            assert extension['python_path'] == runtime['python_path']
+
+
+@pytest.mark.parametrize('harness', ['goose', 'pi', 'opencode', 'claude-code'])
+def test_caveman_uses_inspected_interpreter_and_preserves_selections(tmp_path, monkeypatch, harness):
+    from acb.preparation import _prepare_assets_for_runtime
+    value = plan(tmp_path)
+    selected = {'model_middleware': [{'name': 'caveman'}],
+                'mcp_servers': [{'name': 'fixture', 'command': '/fixture'}],
+                'timeout': 123, 'system_prompt': 'Keep this instruction.'}
+    value['harnesses'] = {harness: selected}
+    before = deepcopy(value)
+    monkeypatch.setattr('acb.preparation.prepare_image', lambda *args: 'fixture-caveman')
+    runtime = value['runtime_contracts']['intel']
+    prepared = _prepare_assets_for_runtime(value, runtime)
+    config = prepared['harnesses'][harness]
+    assert config['model_middleware'][0]['python_path'] == runtime['python_path']
+    assert config['mcp_servers'] == selected['mcp_servers']
+    assert config['timeout'] == 123
+    assert config['system_prompt'].startswith('Keep this instruction.')
+    assert prepared['caveman_image'] == 'fixture-caveman'
+    assert value == before
+    with pytest.raises(ValueError, match='requires Python'):
+        _prepare_assets_for_runtime(value, {'arch': 'amd64'})
 
 
 def test_missing_task_inspection_prevents_asset_build(tmp_path):

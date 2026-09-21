@@ -41,8 +41,7 @@ def test_real_native_interception_and_model_context(harness, version):
         out.mkdir(parents=True)
         from acb.config import RunConfig, Registries
         from acb.resolver import resolve
-        from acb.preparation import prepare
-        from acb.integrations.runtime import prepare_legacy_rtk_runtime
+        from acb.preparation import _prepare_assets_for_runtime
         cfg = RunConfig(run_id=name, benchmark="fixture", harness=harness, model="fixture",
                         skills=["caveman"], extensions=([{"name": "rtk", "options": {
                             "binary_path": str(binary), "sha256": hashlib.sha256(binary.read_bytes()).hexdigest()}}] if enabled else []),
@@ -50,13 +49,13 @@ def test_real_native_interception_and_model_context(harness, version):
                         output_dir=str(REPO / 'runs'))
         registries = Registries({}, {"fixture": {"image_arch": arch}}, {},
             models={"fixture": {"model": "fixture-model", "api": "openai", "endpoint": "localhost:18080"}})
-        prepared = prepare(resolve(cfg, registries))
+        prepared = _prepare_assets_for_runtime(resolve(cfg, registries).to_dict(), {'arch': arch, 'python_path': '/opt/miniconda3/bin/python'})
         config = prepared['harnesses'][harness]
         (out / 'prepared.json').write_text(json.dumps(prepared, indent=2))
         lifecycle = IntegrationManager(harness, config)
         podman("run", "-d", "--name", name, "--network", "none", image, "tail", "-f", "/dev/null")
         try:
-            config = prepare_legacy_rtk_runtime(name, harness, config, arch, out)
+            podman('exec', name, '/opt/miniconda3/bin/python', '-c', 'import sys; assert sys.version_info >= (3, 8)')
             lifecycle = IntegrationManager(harness, config)
             adapter = make_harness(harness, config)
             adapter.api = adapter.effective_api("openai")

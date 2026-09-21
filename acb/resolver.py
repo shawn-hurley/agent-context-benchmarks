@@ -30,7 +30,7 @@ BENCH_FIELDS = {
     "scarfbench_image", "container_backend", "docker_host", "max_workers", "praxis_ai_repo",
     "task_repo_cache_dir", "benchmark_cache_dir", "scarf_binary",
     "image_arch", "task_repo", "namespace", "patch_exclude_patterns",
-    "source", "target", "validate_timeout_minutes",
+    "source", "target", "validate_timeout_minutes", "swebench_python",
 }
 EXEC_FIELDS = {"max_workers", "timeout", "environment", "offline", "cache_policy"}
 SKILL_FIELDS = {
@@ -258,9 +258,9 @@ def resolve(cfg: RunConfig, registries: Registries | None = None) -> ResolvedPla
     for key in ("max_workers", "validate_timeout_minutes"):
         if key in benchmark:
             _positive(benchmark[key], "benchmark." + key)
-    backend = benchmark.get("execution_backend", "legacy")
-    if backend not in ("harbor", "legacy"):
-        raise ValueError("benchmark.execution_backend must be harbor or legacy")
+    backend = benchmark.get("execution_backend", "harbor")
+    if backend != "harbor":
+        raise ValueError("benchmark.execution_backend must be harbor; the legacy runner has been retired")
     environment = cfg.execution.get("environment", benchmark.get("environment", registry.machine.get("environment", "podman")))
     if environment not in ("docker", "podman"):
         raise ValueError("execution.environment must be docker or podman; host execution is unsupported")
@@ -397,10 +397,15 @@ def resolve(cfg: RunConfig, registries: Registries | None = None) -> ResolvedPla
             if kwargs.get("script_path"):
                 origin = base if "metrics" in overrides.get("benchmark", {}) or "metrics" in run_benchmark else source_base("benchmarks.yaml")
                 kwargs["script_path"] = absolute(kwargs["script_path"], origin)
-    binary = benchmark.get("scarf_binary")
-    if binary and ("/" in binary or binary.startswith("~")):
-        origin = base if "scarf_binary" in overrides.get("benchmark", {}) or "scarf_binary" in run_benchmark else source_base("benchmarks.yaml")
-        benchmark["scarf_binary"] = absolute(binary, origin)
+    for field in ("scarf_binary", "swebench_python"):
+        binary = benchmark.get(field)
+        if binary and ("/" in binary or binary.startswith("~")):
+            origin = base if field in overrides.get("benchmark", {}) or field in run_benchmark else source_base("benchmarks.yaml")
+            benchmark[field] = absolute(binary, origin)
+    dataset = benchmark.get("dataset")
+    if name in ("swebench", "swebench-lite") and isinstance(dataset, str) and dataset.endswith((".json", ".jsonl")):
+        origin = base if "dataset" in overrides.get("benchmark", {}) or "dataset" in run_benchmark else source_base("benchmarks.yaml")
+        benchmark["dataset"] = absolute(dataset, origin)
     output = str(cfg.output_path())
     cache = benchmark.get("cache_dir", registry.machine.get("cache_dir", str(Path(output) / ".cache")))
     if "cache_dir" not in benchmark and "cache_dir" in registry.machine:

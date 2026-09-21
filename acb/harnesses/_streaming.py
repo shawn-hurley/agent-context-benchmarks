@@ -9,7 +9,7 @@ total silence" behavior. Each harness only needs to supply its own
 ``describe_event()`` -- their event shapes differ entirely (goose's message/
 toolRequest/toolResponse vs Claude Code's assistant/user/tool_use/
 tool_result) -- see acb/harnesses/goose.py and acb/harnesses/claude_code.py
-for each's own, and acb/runner.py for where `run_container()` (which calls
+for each's own, and acb/harbor/agent.py for where `run_container()` (which calls
 `execute()` below) fits into the wider per-instance flow.
 
 Extracted from acb/harnesses/goose.py (the original, and until claude-code,

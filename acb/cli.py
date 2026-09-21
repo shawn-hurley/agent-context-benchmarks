@@ -31,12 +31,8 @@ def _cmd_run(args):
         )
     if args.config_dir:
         cfg.config_dir = str(Path(args.config_dir).expanduser().absolute())
-    if args.control:
-        from acb.harbor.backend import run
-        run(cfg, verbose=args.verbose, control=args.control)
-    else:
-        from acb.runner import run
-        run(cfg, verbose=args.verbose)
+    from acb.harbor.backend import run
+    run(cfg, verbose=args.verbose, control=args.control)
 
 
 def _cmd_resolve(args):

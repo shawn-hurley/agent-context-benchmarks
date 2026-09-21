@@ -4,7 +4,7 @@ from types import SimpleNamespace
 from acb.usage import InstanceMetrics, UsageRecord, normalize_benchmark_metric, read_records
 from acb.html_report import _aggregate_benchmark_metrics, _metric_total_tokens
 from acb.proxy.record_server import _parse_openai_usage
-from acb.proxy.praxis import PraxisContainerBackend
+from acb.proxy.metrics import PraxisMetricsReader
 
 
 def test_cached_tokens_are_reported_as_context_not_usage():
@@ -83,11 +83,11 @@ def test_praxis_metrics_file_normalizes_before_writing_usage(tmp_path):
         "cache_read_input_tokens": 90, "output_tokens": 20,
     }) + "\n")
     backend = SimpleNamespace(
-        _metrics_path=metric_path, usage_path=tmp_path / "usage.jsonl",
+        metrics_path=metric_path, usage_path=tmp_path / "usage.jsonl",
         tags=SimpleNamespace(run_id="run", benchmark="bench", harness="goose",
                              model="model", instance_id="instance"),
     )
-    PraxisContainerBackend._read_metrics_file(backend)
+    PraxisMetricsReader.read_metrics_file(backend)
     records = list(read_records(backend.usage_path))
     assert records[0].input_tokens == 10
     assert records[0].prompt_tokens == 100

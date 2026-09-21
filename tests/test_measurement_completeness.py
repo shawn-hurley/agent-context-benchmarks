@@ -10,7 +10,7 @@ from acb.config import ModelSpec
 from acb.harbor.praxis import HarborPraxis
 from acb.harbor.results import import_results
 from acb.proxy.base import ProxyTags
-from acb.proxy.praxis import PraxisContainerBackend
+from acb.proxy.metrics import PraxisMetricsReader
 from acb.usage import parse_measurements
 
 
@@ -72,21 +72,3 @@ def test_missing_usage_excludes_tokens_but_preserves_grades(tmp_path):
     assert measurement["complete"] is False
     assert measurement["collection_complete"] is True
     assert "missing required fields" in measurement["errors"][0]
-
-
-def test_legacy_collection_uses_same_validation_without_raising(tmp_path, monkeypatch):
-    backend = PraxisContainerBackend(
-        tags=ProxyTags("r", "b", "goose", "model", "task"), usage_path=tmp_path / "usage.jsonl",
-        config={}, model_spec=ModelSpec("model"), pod="pod", image="image")
-    backend._metrics_path = tmp_path / "benchmark_metrics.jsonl"
-    backend._log_path = tmp_path / "praxis.log"
-    backend._metrics_path.write_text(
-        '{"endpoint":"/v1/chat/completions","input_tokens":5,"output_tokens":2}\n'
-        '{"endpoint":"/v1/chat/completions"}\n')
-    monkeypatch.setattr("acb.proxy.praxis.container_cp_out", lambda *args: None)
-    monkeypatch.setattr("acb.proxy.praxis.container_stop_rm", lambda *args: None)
-    monkeypatch.setattr("acb.proxy.praxis.container_logs", lambda *args: "proxy stopped")
-    backend.stop()
-    measurement = json.loads((tmp_path / "measurement.json").read_text())
-    assert measurement["complete"] is False
-    assert len((tmp_path / "usage.jsonl").read_text().splitlines()) == 1

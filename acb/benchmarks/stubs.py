@@ -1,16 +1,9 @@
-"""Stub adapters for additional benchmarks.
-
-These implement the Benchmark interface enough to slot into the runner; fill in
-`load_instances`, `prepare_container`, and `evaluate` per each benchmark's data
-format and scoring. The generation + proxy/measurement machinery is unchanged --
-only these methods differ per benchmark.
-"""
+"""Unimplemented benchmark dataset adapters. Execution belongs to Harbor."""
 
 from __future__ import annotations
 
-from pathlib import Path
 
-from acb.benchmarks.base import Benchmark, Instance, Prediction
+from acb.benchmarks.base import Benchmark, Instance
 
 
 class LiveCodeBench(Benchmark):
@@ -25,16 +18,3 @@ class LiveCodeBench(Benchmark):
 
     def load_instances(self, subset=None, limit=None) -> list[Instance]:
         raise NotImplementedError("wire up LiveCodeBench dataset loading")
-
-    def prepare_container(self, instance: Instance, pod: str, build_dir: Path,
-                          arch: str) -> str:
-        raise NotImplementedError("build/start a LiveCodeBench scratch container")
-
-    def collect_prediction_container(self, instance, container, model) -> Prediction:
-        raise NotImplementedError("read the harness's produced solution from the container")
-
-    def evaluate(self, predictions, run_id, output_dir) -> dict[str, bool]:
-        raise NotImplementedError("run LiveCodeBench test cases against outputs")
-
-
-

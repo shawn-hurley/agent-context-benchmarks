@@ -178,6 +178,8 @@ def prepare(plan: ResolvedPlan, *, probe=True, control=False, status=None) -> di
         if set(contracts) != expected:
             raise RuntimeError("runtime inspection did not produce every selected task contract")
         document["runtime_contracts"] = contracts
+        from acb.harbor.benchmark_grader import verify_grading_images
+        verify_grading_images(document, {record["container"]["image_id"] for record in contracts.values()})
         if status:
             status("Preparing harness assets")
         document = prepare_assets(document)

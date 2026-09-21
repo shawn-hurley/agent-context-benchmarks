@@ -179,6 +179,18 @@ def import_results(plan: dict, output: Path, results: list[dict], *, control=Non
                 "missing_steps": missing_steps,
             }, indent=2))
         (destination / "harbor-result.json").write_text(json.dumps(result, indent=2))
+        prediction_path = trial_dir / "verifier/native/prediction.json"
+        if prediction_path.is_file():
+            try:
+                prediction = json.loads(prediction_path.read_text())
+                prediction["benchmark_instance_id"] = prediction["instance_id"]
+                prediction["instance_id"] = identity
+                prediction["model_name_or_path"] = plan["model"]["name"]
+                (destination / "prediction.json").write_text(json.dumps(prediction, indent=2))
+            except (OSError, ValueError, TypeError, KeyError) as error:
+                (destination / "prediction-import-error.json").write_text(json.dumps({
+                    "artifact": str(prediction_path), "error_type": type(error).__name__,
+                }))
         record = evaluation(result, config.get("reward_metric"), config.get("success_value"))
         if result.get("missing_trial"):
             record.update(trial_id=None, trial_name=None, error_phase="scheduling_or_execution", missing_trial=True)
@@ -252,6 +264,7 @@ def import_results(plan: dict, output: Path, results: list[dict], *, control=Non
             "conditions": {"timeout": settings.get("timeout"), "attempts": plan.get("attempts", 1),
                            "cache_policy": plan.get("cache_policy"), "environment": plan.get("environment"),
                            "backend": "harbor", "dataset_revision": plan["manifest"].get("revision"),
+                           "native_grader": {key: value for key, value in (plan.get("benchmark_grader") or {}).items() if key != "binary"},
                            "metrics": comparison_definitions(plan["manifest"])},
             "tasks": {task["id"]: {"sha256": task["sha256"],
                       "runtime": plan.get("runtime_contracts", {}).get(task["id"])

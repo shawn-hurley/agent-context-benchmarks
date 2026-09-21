@@ -18,6 +18,8 @@ RUN dnf install -y \
         maven \
         git \
         procps-ng \
+        python3 \
+        util-linux-core \
     && dnf clean all
 
 # Global git identity so `git commit` inside the container doesn't fail.

@@ -13,7 +13,7 @@
 # - Applies custom vertex_anthropic_prepare and benchmark_metrics filters
 #
 # Built once and cached in podman images; rebuilds only when this
-# Containerfile or praxis-vertex-anthropic/* changes (acb/runner.py handles
+# Containerfile or praxis-vertex-anthropic/* changes (acb/preparation.py handles
 # automatic building on first use).
 
 # ============================================================================

@@ -1,8 +1,7 @@
 """ScarfBench instance discovery and selection."""
 
-from unittest.mock import patch
 
-from acb.benchmarks.scarfbench import ScarfBench, _copy_source_to_container
+from acb.benchmarks.scarfbench import ScarfBench
 
 
 def test_discovery_uses_limit_across_apps_and_preserves_explicit_selection(tmp_path):
@@ -76,21 +75,3 @@ def test_prompt_uses_app_task_text_when_present(tmp_path):
     prompt = bench.load_instances(limit=1)[0].prompt
     assert "Benchmark task description" not in prompt
     assert "source code and any README or test.sh" in prompt
-
-
-def test_source_test_script_is_available_to_agent(tmp_path):
-    source = tmp_path / "jakarta"
-    source.mkdir()
-    (source / "pom.xml").write_text("<project/>\n")
-    (source / "test.sh").write_text("#!/bin/sh\necho source behavior\n")
-    (source / "Dockerfile").write_text("FROM scratch\n")
-    staged = {}
-
-    def capture(_container, path, _container_path):
-        staged.update({p.name: p.read_text() for p in path.iterdir()})
-
-    with patch("acb.benchmarks.scarfbench.container_untar_in", side_effect=capture):
-        _copy_source_to_container(source, "container", "/work")
-
-    assert staged["test.sh"] == "#!/bin/sh\necho source behavior\n"
-    assert "Dockerfile" not in staged

@@ -88,11 +88,19 @@ def job_config(plan: dict, output: Path, *, install_only=False, control=None):
         overlay = output / "services-compose.yaml"
         overlay.write_text(yaml.safe_dump(overlay_data))
         environment["extra_docker_compose"] = [str(overlay)]
+    from acb.harbor.benchmark_tasks import BENCHMARKS
+    verifier = {}
+    if plan.get("benchmark") in BENCHMARKS and not plan["benchmark_config"].get("path"):
+        settings = {**plan["benchmark_config"], "container_backend": plan["environment"]}
+        if plan.get("benchmark_grader"):
+            settings["scarf_binary" if plan["benchmark"] == "scarfbench" else "swebench_python"] = plan["benchmark_grader"]["binary"]
+        verifier = {"import_path": "acb.harbor.benchmark_verifier:BenchmarkVerifier",
+                    "kwargs": {"benchmark_config": settings}}
     return JobConfig.model_validate({
         "job_name": JOB_NAME, "jobs_dir": str(output), "quiet": True,
         "install_only": install_only, "n_attempts": plan["attempts"],
         "n_concurrent_trials": plan["max_workers"], "retry": {"max_retries": 0},
-        "environment": environment, "agents": agents,
+        "environment": environment, "agents": agents, "verifier": verifier,
         "metrics": [] if install_only else plan["manifest"].get("metrics", []),
         "tasks": [{"path": item["path"], "source": plan["manifest"]["source"]} for item in plan["manifest"]["tasks"]],
     })
@@ -101,10 +109,12 @@ def job_config(plan: dict, output: Path, *, install_only=False, control=None):
 async def execute(plan, output, install_only=False, control=None):
     from harbor.job import Job
     verify_manifest(plan["manifest"])
+    from acb.harbor.benchmark_grader import verify_grader
+    verify_grader(plan)
     output.mkdir(parents=True, exist_ok=True)
     if not install_only and not control and plan["model"].get("vertex_model"):
-        from acb.runner import _fetch_vertex_token
-        os.environ["VERTEX_AUTH_TOKEN"] = _fetch_vertex_token()
+        from acb.auth import fetch_vertex_token
+        os.environ["VERTEX_AUTH_TOKEN"] = fetch_vertex_token()
     config = job_config(plan, output, install_only=install_only, control=control)
     job = await Job.create(config)
     if not install_only:
@@ -220,6 +230,8 @@ def main():
         raise ValueError("unsupported worker protocol")
     output = Path(args.output)
     if args.action == "prepare":
+        from acb.harbor.benchmark_grader import prepare_grader
+        plan["benchmark_grader"] = prepare_grader(plan)
         plan["manifest"] = prepare_dataset(plan)
         output.write_text(json.dumps(plan, indent=2))
     elif args.action == "check":

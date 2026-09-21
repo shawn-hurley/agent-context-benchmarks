@@ -58,6 +58,10 @@ def prepare_dataset(plan: dict) -> dict:
         return manifest
     source = config.get("dataset")
     revision = config.get("revision")
+    from acb.harbor.benchmark_tasks import BENCHMARKS, export_tasks
+    if plan.get("benchmark") in BENCHMARKS and not config.get("path"):
+        paths = export_tasks(plan)
+        return finish(_manifest(plan, source or plan["benchmark"], revision, paths))
     if config.get("path"):
         root = Path(config["path"]).resolve()
         source = source or "local:" + str(root)
