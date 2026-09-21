@@ -68,7 +68,7 @@ def test_html_writes_individual_pages_and_escapes_evidence(tmp_path):
         rows=[json.loads(l) for l in (root/'usage.jsonl').read_text().splitlines()]
         for r in rows:
             r.update(run_id=root.name,benchmark='dataset',harness='pi',model='model',turn_index=0)
-            artifact=root/'instances'/r['instance_id'];artifact.mkdir(parents=True)
+            artifact=root/r['instance_id'];artifact.mkdir(parents=True)
             (artifact/'transcript.jsonl').write_text(json.dumps({'type':'turn_start'})+'\n'+json.dumps({'type':'tool_execution_start','toolCallId':'call','args':{'command':'<script>alert(1)</script>'}})+'\n')
         (root/'usage.jsonl').write_text(''.join(json.dumps(r)+'\n' for r in rows))
     destination=tmp_path/'review'/'comparison.html'
@@ -96,8 +96,8 @@ def test_cross_harness_comparison_matches_benchmark_and_links(tmp_path):
     links=re.findall('href="([^"]+)"',(tmp_path/'report.html').read_text())
     assert len(links)==2
     assert all((tmp_path/link).exists() for link in links)
-    from acb.html_report import build_html_report
-    assert 'Worse' in build_html_report([a,b])
+    from acb.comparison_html import build_report
+    assert 'Worse' in build_report([a,b])
 
 
 def test_empty_comparable_set_has_no_token_total(tmp_path):
@@ -135,13 +135,6 @@ def test_tool_counts_deduplicate_stream_fragments_not_parallel_calls(tmp_path):
     assert observed['turns']==2 and observed['tool_calls']==2
     assert trajectory(tmp_path/'missing','pi')['tool_calls'] is None
 
-
-def test_script_data_and_tool_labels_cannot_escape_html():
-    from acb.html_report import _script_json, _RunData, _build_single_run_html
-    attack='</script><script>alert(1)</script>'
-    assert '</script>' not in _script_json({'command':attack})
-    rd=_RunData(run_dir=Path('.'),report={'run_id':attack},metrics=[],usage_rows=[],predictions={'task':attack})
-    assert attack not in _build_single_run_html(rd,include_summary=False)
 
 
 def test_missing_usage_file_is_not_zero_usage(tmp_path):

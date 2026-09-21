@@ -7,18 +7,12 @@ observations without turning them into comparable measurements.
 from __future__ import annotations
 
 from collections import defaultdict
-import json
 import math
-from pathlib import Path
 
 from acb.telemetry import trajectory
-from acb.utils import normalize_instance_id_for_path
+from acb.report_data import ReportSource
 
 TOKEN_FIELDS = ('input_tokens', 'output_tokens', 'cache_read_tokens', 'cache_creation_tokens')
-
-
-def jsonl(path):
-    return [json.loads(line) for line in path.read_text().splitlines() if line.strip()] if path.exists() else []
 
 
 def delta(before, after):
@@ -37,34 +31,17 @@ def quality(changes):
     return 'better' if 'better' in known else 'worse' if 'worse' in known else 'same'
 
 
-def leaf_reports(root):
-    root = Path(root)
-    paths = [root / 'report.json'] if (root / 'report.json').exists() else []
-    paths.extend(sorted(root.rglob('report.json')))
-    seen = set()
-    for path in paths:
-        if path in seen:
-            continue
-        seen.add(path)
-        report = json.loads(path.read_text())
-        if isinstance(report.get('harness'), str) and 'instances' in report:
-            yield path.parent, report
-
-
 def benchmarks(root):
-    if not Path(root).is_dir():
-        raise FileNotFoundError(f"run directory does not exist: {root}")
+    return ReportSource(root).benchmarks
+
+
+def benchmark_records(harnesses):
+    """Derive benchmark grades and coverage from loaded harness reports."""
     rows = {}
-    for directory, report in leaf_reports(root):
-        metrics = {m['instance_id']: m for m in jsonl(directory / 'metrics.jsonl')}
-        usage = defaultdict(list)
-        for item in jsonl(directory / 'usage.jsonl'):
-            usage[item['instance_id']].append(item)
-        evaluations = report.get('evaluations')
-        if evaluations is None:
-            evaluations = [{'task_id': m['instance_id'], 'trial_id': m['instance_id'],
-                            'resolved': m.get('resolved'), 'status': 'completed' if m.get('resolved') is not None else 'error'}
-                           for m in metrics.values()]
+    for source in harnesses:
+        directory, report = source.directory, source.report
+        metrics, usage = source.metrics, source.usage
+        evaluations = report.get('evaluations', [])
         groups = defaultdict(list)
         for record in evaluations:
             groups[record['task_id']].append(record)
@@ -87,9 +64,11 @@ def benchmarks(root):
                             and (directory/'usage.jsonl').exists()
                             and all(type(u.get(field)) is int and u[field] >= 0
                                     for u in requests for field in TOKEN_FIELDS))
-                observed = trajectory(directory/'instances'/normalize_instance_id_for_path(iid)/'transcript.jsonl', report['harness'])
-                if observed['definition'] is None:
-                    step_traces = sorted((directory/'instances'/normalize_instance_id_for_path(iid)/'steps').glob('*/transcript.jsonl'))
+                trial_directory = source.trial_directory(iid)
+                observed = (trajectory(trial_directory / 'transcript.jsonl', report['harness'])
+                            if trial_directory else {'turns': None, 'tool_calls': None, 'events': [], 'definition': None})
+                if observed['definition'] is None and trial_directory:
+                    step_traces = sorted((trial_directory / 'steps').glob('*/transcript.jsonl'))
                     if step_traces:
                         order = {step['step_name']: i for i, step in enumerate(record.get('step_results') or [])}
                         step_traces.sort(key=lambda p: order.get(p.parent.name, len(order)))
@@ -139,7 +118,11 @@ def provenance_available(provenance):
 
 
 def compare(baseline, candidate):
-    before, after = benchmarks(baseline), benchmarks(candidate)
+    return compare_records(benchmarks(baseline), benchmarks(candidate), str(baseline), str(candidate))
+
+
+def compare_records(before, after, baseline, candidate):
+    """Compare already loaded benchmark records without reading files."""
     # A single configuration on either side may intentionally use a different
     # harness. Multi-harness suites match by harness to avoid ambiguous pairing.
     if len({k[2] for k in before}) == len({k[2] for k in after}) == 1:

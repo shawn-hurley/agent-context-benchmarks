@@ -2,7 +2,7 @@ import json
 from types import SimpleNamespace
 
 from acb.usage import InstanceMetrics, UsageRecord, normalize_benchmark_metric, read_records
-from acb.html_report import _aggregate_benchmark_metrics, _metric_total_tokens
+from acb.report_metrics import aggregate_benchmark_metrics, metric_total_tokens
 from acb.proxy.record_server import _parse_openai_usage
 from acb.proxy.metrics import PraxisMetricsReader
 
@@ -41,12 +41,12 @@ def test_mlx_cached_prefix_is_a_subset_of_prompt_tokens():
     assert normalized["input_tokens"] == 20
     assert normalize_benchmark_metric(normalized) == normalized
     assert raw["input_tokens"] == 20995
-    aggregate = _aggregate_benchmark_metrics([raw])
+    aggregate = aggregate_benchmark_metrics([raw])
     assert aggregate["context_tokens"] == 20995
     assert aggregate["peak_context"] == 20995
     assert aggregate["total_tokens"] == 319
     assert aggregate["cache_efficiency"] == 20975 / 20995
-    assert _metric_total_tokens(raw) == 319
+    assert metric_total_tokens(raw) == 319
 
 
 def test_anthropic_cache_buckets_remain_exclusive():
@@ -55,7 +55,7 @@ def test_anthropic_cache_buckets_remain_exclusive():
         "cache_read_input_tokens": 50, "cache_creation_input_tokens": 10,
         "output_tokens": 20,
     })
-    aggregate = _aggregate_benchmark_metrics([metric])
+    aggregate = aggregate_benchmark_metrics([metric])
     assert aggregate["total_input"] == 100
     assert aggregate["context_tokens"] == 160
     assert aggregate["total_tokens"] == 130
