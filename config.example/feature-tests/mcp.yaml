@@ -1,0 +1,8 @@
+filesystem:
+  config:
+    command: npx
+    args:
+    - -y
+    - '@modelcontextprotocol/server-filesystem'
+    - /work
+    transport: stdio

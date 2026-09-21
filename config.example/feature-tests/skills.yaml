@@ -1,0 +1,10 @@
+workspace-guide:
+  source_type: local
+  source_path: assets/skills/workspace-guide
+  required: true
+rgctl:
+  source_type: local
+  source_path: assets/skills/rgctl
+  binary_name: rgctl
+  binary_install_path: /usr/local/bin/rgctl
+  required: true

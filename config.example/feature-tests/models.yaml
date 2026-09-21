@@ -1,0 +1,6 @@
+local-qwen:
+  model: mlx-community/Qwen3-Coder-30B-A3B-Instruct-4bit-dwq-v2
+  api: openai
+  endpoint: host.containers.internal:8000
+  tls: false
+  reports_cache: true

@@ -1,0 +1,2 @@
+environment: podman
+cache_dir: ../../runs/.cache

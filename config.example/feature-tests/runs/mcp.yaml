@@ -1,0 +1,22 @@
+schema_version: 2
+config_dir: ..
+run_id: mcp
+benchmark: smoke
+harness:
+- goose
+- opencode
+- claude-code
+model: local-qwen
+execution:
+  max_workers: 1
+  timeout: 300
+output_dir: runs/feature-tests
+skills: []
+extensions: []
+mcp_servers:
+- filesystem
+subset:
+- smoke
+overrides:
+  harness:
+    system_prompt: Use the configured filesystem MCP tools to inspect and update /work/answer.txt.

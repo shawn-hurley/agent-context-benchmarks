@@ -1,0 +1,11 @@
+version = "1.0"
+[environment]
+workdir = "/work"
+[agent]
+timeout_sec = 300
+[verifier]
+timeout_sec = 30
+[[steps]]
+name = "first"
+[[steps]]
+name = "second"

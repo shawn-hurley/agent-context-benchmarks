@@ -25,3 +25,7 @@ bin/
 *_PLAN.md
 target
 .rgctl/
+
+# Runnable feature-test templates are source, not run output.
+!config.example/feature-tests/runs/
+!config.example/feature-tests/runs/**

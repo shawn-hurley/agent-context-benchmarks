@@ -93,6 +93,17 @@ export ANTHROPIC_API_KEY=sk-...
 export OPENAI_API_KEY=sk-...          # if using OpenAI / for local, none needed
 ```
 
+For a clean local config with runnable feature coverage:
+
+```sh
+uv run python -m scripts.reset_config
+uv run pytest tests/test_feature_configs.py -q
+```
+
+This archives your previous config before installing the
+[feature matrix](config.example/feature-tests/README.md). It preserves model
+settings and saved results, and does not run paid-model experiments.
+
 Matched baseline, response-skill, RTK and context-compression examples for Harbor
 and SWE-bench through Harbor are in [config.example/phase4](config.example/phase4/README.md).
 See [Harbor operations](docs/harbor-operations.md) for functional evidence and runtime limits.

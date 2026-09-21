@@ -48,3 +48,15 @@ store and rejection in the other, then deletes both environments. `check.json`
 records session names, results and cleanup errors. It uses no model.
 
 The shell scripts are user-facing smoke or example runners and remain supported.
+
+## Reset local feature configurations
+
+`uv run python -m scripts.reset_config` installs
+[`config.example/feature-tests`](../config.example/feature-tests/README.md) into
+`config/`, archiving the old tree under `.config/backups/`. The local copy retains
+model settings and available native-benchmark/rgctl prerequisites. The tracked
+template contains no credentials or compiled binaries.
+
+`uv run pytest tests/test_feature_configs.py -q` validates every matrix config,
+local task export, custom metrics, and backup/reset behavior without model calls
+or container startup. Use the feature guide for controls and live prerequisites.

@@ -1,0 +1,9 @@
+version = "1.0"
+[environment]
+workdir = "/work"
+cpus = 1
+memory_mb = 1024
+[agent]
+timeout_sec = 300
+[verifier]
+timeout_sec = 30

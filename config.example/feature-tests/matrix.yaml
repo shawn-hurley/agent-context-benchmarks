@@ -1,0 +1,171 @@
+cases:
+- config: runs/baseline.yaml
+  features:
+  - four-harnesses
+  - baseline
+  kind: run
+- config: runs/baseline-goose.yaml
+  features:
+  - individual-harness
+  kind: run
+- config: runs/baseline-pi.yaml
+  features:
+  - individual-harness
+  kind: run
+- config: runs/baseline-opencode.yaml
+  features:
+  - individual-harness
+  kind: run
+- config: runs/baseline-claude-code.yaml
+  features:
+  - individual-harness
+  kind: run
+- config: runs/rtk.yaml
+  features:
+  - rtk
+  kind: run
+- config: runs/response-lite.yaml
+  features:
+  - response-skill
+  - lite
+  kind: run
+- config: runs/response-full.yaml
+  features:
+  - response-skill
+  - full
+  kind: run
+- config: runs/response-ultra.yaml
+  features:
+  - response-skill
+  - ultra
+  kind: run
+- config: runs/local-skill.yaml
+  features:
+  - local-skill
+  kind: run
+- config: runs/task-skill.yaml
+  features:
+  - task-skill
+  kind: run
+- config: runs/rgctl.yaml
+  features:
+  - binary-skill
+  - rgctl
+  kind: run
+- config: runs/caveman-record.yaml
+  features:
+  - context
+  - record
+  kind: run
+- config: runs/caveman-compress.yaml
+  features:
+  - context
+  - compress
+  kind: run
+- config: runs/combined.yaml
+  features:
+  - rtk
+  - context
+  - composition
+  kind: run
+- config: runs/combined-response.yaml
+  features:
+  - rtk
+  - context
+  - response-skill
+  - composition
+  kind: run
+- config: runs/multi-step.yaml
+  features:
+  - multi-step
+  kind: run
+- config: runs/multi-step-combined.yaml
+  features:
+  - multi-step
+  - rtk
+  - context
+  kind: run
+- config: runs/attempts.yaml
+  features:
+  - attempts
+  kind: run
+- config: runs/numeric-metrics.yaml
+  features:
+  - numeric-rewards
+  - dataset-metrics
+  kind: run
+- config: runs/custom-metrics.yaml
+  features:
+  - custom-metrics
+  kind: run
+- config: runs/separate-verifier.yaml
+  features:
+  - verifier-isolation
+  kind: run
+- config: runs/docker.yaml
+  features:
+  - docker
+  kind: run
+- config: runs/offline.yaml
+  features:
+  - offline
+  kind: run
+- config: runs/mcp.yaml
+  features:
+  - mcp
+  kind: run
+- config: runs/verifier-crash.yaml
+  features:
+  - outcomes
+  - verifier-crash
+  kind: run
+- config: runs/missing-reward.yaml
+  features:
+  - outcomes
+  - missing-reward
+  kind: run
+- config: runs/malformed-reward.yaml
+  features:
+  - outcomes
+  - malformed-reward
+  kind: run
+- config: runs/verifier-timeout.yaml
+  features:
+  - outcomes
+  - verifier-timeout
+  kind: run
+- config: runs/swebench.yaml
+  features:
+  - native-benchmark
+  - swebench
+  kind: run
+- config: runs/swebench-lite.yaml
+  features:
+  - native-benchmark
+  - swebench-lite
+  kind: run
+- config: runs/scarfbench.yaml
+  features:
+  - native-benchmark
+  - scarfbench
+  kind: run
+- config: runs/rh-swe-bench.yaml
+  features:
+  - registry-benchmark
+  - rh-swe-bench
+  kind: run
+- config: runs/resources.yaml
+  features:
+  - resources
+  kind: run
+- config: runs/network-none.yaml
+  features:
+  - network-none
+  kind: run
+controls:
+  config: runs/baseline.yaml
+  oracle_reward: 1
+  nop_reward: 0
+expected_rejections:
+- feature: pi-mcp
+  reason: Pi has no MCP runtime support; do not include it in the positive MCP arm.

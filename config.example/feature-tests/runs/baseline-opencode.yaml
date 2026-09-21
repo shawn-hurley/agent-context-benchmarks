@@ -1,0 +1,15 @@
+schema_version: 2
+config_dir: ..
+run_id: baseline-opencode
+benchmark: smoke
+harness: opencode
+model: local-qwen
+execution:
+  max_workers: 1
+  timeout: 300
+output_dir: runs/feature-tests
+skills: []
+extensions: []
+mcp_servers: []
+subset:
+- smoke
