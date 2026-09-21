@@ -1,5 +1,9 @@
 # Shared extension configuration
 
+> Historical design/checkpoint record. For current task status and accepted scope,
+> use [Harbor cleanup](harbor-cleanup.md). Later decisions there supersede
+> open-task lists and compatibility requirements below.
+
 > September 17 revised scope: Phase 4 now covers shared RTK/Caveman preparation
 > and functional extension support on both Harbor and existing benchmark runners.
 > Basic context compression/recovery/protocol acceptance belongs to Phase 4.

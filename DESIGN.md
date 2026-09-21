@@ -1,5 +1,9 @@
 # Design: agent-context-benchmarks (acb)
 
+> Original architecture/design record. Current runtime behavior is documented in
+> [Harbor operations](docs/harbor-operations.md); current task status and scope
+> are tracked in [Harbor cleanup](docs/harbor-cleanup.md).
+
 Measure and compare **context/token usage** of different agent harnesses
 (claude-code, goose, opencode, pi, …) running the same coding benchmarks
 (SWE-bench, LiveCodeBench, ScarfBench, …) against the same model — cloud or

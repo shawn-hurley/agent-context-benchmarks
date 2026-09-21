@@ -6,6 +6,8 @@ checks; live Docker testing is waived by user decision. Engine differences will
 be handled as bugs. Legacy execution still contains Podman-specific code until
 its planned retirement; this does not run on the Harbor transport path.
 
+Current task status and scope are tracked in [Harbor cleanup](harbor-cleanup.md).
+
 ## Commands
 
 Install the project using the existing project workflow, or install its wheel.
@@ -52,8 +54,10 @@ RH no-op/oracle controls pass. Phases 2/3 are complete under the agreed scope;
 Claude's amd64/QEMU startup failure is an accepted known issue, described below.
 Separate-verifier and Caveman record-mode evidence are
 additional capabilities with the limits described in the runtime-contract doc.
-MCP and full dependency locking are deferred. ScarfBench/SWE-bench migration parity and old-runner retirement
-are deferred follow-on work. Approved Phase 4 pilots and the selected Phase 6 capabilities are complete; see the [Phase 6 checkpoint](harbor-phase6-checkpoint.md).
+SWE-bench, SWE-bench Lite and ScarfBench now use Harbor with native grading;
+the legacy runner is removed. All selected migration phases are complete.
+Broader MCP work and full dependency locking remain deferred; existing adapter
+selection/validation behavior is retained. See [benchmark setup and parity](harbor-benchmark-migration.md).
 
 Prepared artifacts record task/runtime/image identity. Run directories retain
 requested/resolved configuration, Harbor trial artifacts, per-harness reports,
@@ -101,8 +105,8 @@ files may appear after the directory is created. The transcript stream is
 JSONL; `transcript.log` is an alias for `transcript.jsonl`. Praxis diagnostics
 are polled during model execution, then replaced with the complete sidecar
 log when the service stops. After execution, ACB saves trial logs and evidence as
-regular files. `<harness>/instances/<trial-id>` remains a compatibility link
-used by reports. The harness report is `<harness>/report.json`.
+regular files. The writer also creates `<harness>/instances/<trial-id>` aliases,
+but current report rendering reads the visible trial directories directly. The harness report is `<harness>/report.json`.
 
 Harbor creates `<run>/.harbor/` as its native job directory for new runs.
 Older runs retain `<run>/harbor/`. The native directory's top-level
@@ -155,64 +159,34 @@ later pilots. Record affected pilot combinations as unavailable with this known
 issue. Revisit when an upstream change is available to validate or the user
 explicitly resumes the investigation.
 
-## Final package review
+## Package verification
 
-`runs/harbor-final-package-review` contains the wheel hash, installed CLI/resource
-checks, Docker/Podman worker configuration checks and reconciliation of saved live
-positive/negative evidence. The wheel was built from the source distribution and
-installed outside the checkout with cached dependencies. CLI init/resolve/list/help
-were executed there. No installed-wheel live prepare/run or Docker trial is claimed.
-The final regression suite passed 282 tests with 4 skips.
+The repeatable regression and installed-wheel gates are documented in
+[maintenance checks](../scripts/README.md). The earlier
+`runs/harbor-final-package-review` record is historical. Current benchmark export
+and native grader verification are recorded in [the migration guide](harbor-benchmark-migration.md).
 
-## Shared treatment preparation on existing runners
+## Shared treatment preparation
 
-The retained SWE-bench/ScarfBench path accepts `extensions: [rtk]`,
-`extensions: [caveman]`, and `skills: [caveman]` through the same verified asset preparation helpers as Harbor.
-RTK uses the benchmark's `image_arch` (`auto`, `arm64`, or `amd64`); `auto` selects
-the controller architecture as the existing image builder does. The resolved
-preparation records that choice. Actual task-container architecture is checked
-before RTK installation; a mismatch fails the instance before model requests.
+SWE-bench and ScarfBench use the same Harbor preparation and runtime as other
+tasks. `extensions: [rtk]`, `extensions: [caveman]`, and `skills: [caveman]`
+select distinct treatments. Preparation inspects task architecture and helper
+interpreters before staging assets. Claude RTK hooks and the Caveman recovery
+client require Python >=3.8; explicit interpreter selections are verified and
+no interpreter is installed automatically. Task workdir/conda settings remain
+part of the inspected runtime contract.
 
-Claude RTK hooks use a Python >=3.8 interpreter probed in the task container,
-including required standard-library imports. An explicit integration `python_path`
-is verified without fallback. No interpreter is installed automatically and task
-workdir/conda settings are preserved. Per-instance `rtk-runtime.json` records the
-result; it supplements the run's prepared configuration with discovered runtime
-settings. Legacy `prepare` remains `probed: false` because these checks need the
-actual benchmark container. Phase 4 H04-01/02 controlled native-adapter and Harbor activation/delivery checks
-now pass. Full benchmark pilots remain H04-03/04.
+Caveman has a service container and recovery store per trial, listening on 18881
+and forwarding model traffic to Praxis on 18880. Provider credentials stay in
+Praxis. Services are collected and stopped before verification; teardown also
+handles partial startup and cancellation. Recovery-store isolation and cleanup
+were checked with two Harbor environments; see the cleanup record for evidence.
 
-
-Phase 4 controlled evidence: `runs/phase4-native-treatments/check.json` and
-`runs/harbor-phase4-treatments/treatment-check.json`. Native paired arms both
-include the Caveman response skill and differ by RTK selection. Harbor treatment
-runs grade successfully and reconcile deterministic request/token ledgers. These
-checks use real cached harness binaries on native ARM64 Podman with a deterministic
-API service; they do not contact the user's local model or measure real-model
-quality/token savings. No test-owned containers remained after the checks.
-
-
-### Caveman context service on existing runners
-
-Caveman context selection prepares the same pinned service image as Harbor.
-Each task gets its own service container and recovery database inside its pod.
-The recovery client requires Python >=3.8 in the task image; its discovered path
-and probe outcome are saved in `caveman-runtime.json`. The task's runtime is
-not modified to install Python. Caveman listens on port 18881 and forwards to
-Praxis on 18880; provider credentials remain in Praxis. Integration artifacts
-include the recovered runtime directory and manifest.
-
-Services are collected and stopped before prediction collection; normal runner
-cleanup removes the task pod before evaluation. Partial startup also enters
-cleanup. Praxis readiness traffic is cleared before measured model requests.
-
-Historical evidence from the retired `check_legacy_caveman.py` migration helper
-runs a tiny task through the actual retained runner with Pi and the local Qwen
-endpoint. Evidence:
-`runs/legacy-caveman-6775a675f1/check.json` (two requests; token buckets match
-Pi's transcript; exact preflight recovery; successful cleanup). This record-mode
-check completes H04-06. H04-07 completion evidence is recorded below.
-
+Historical Phase 4 native-adapter and Harbor checks are recorded in
+`runs/phase4-native-treatments/check.json` and
+`runs/harbor-phase4-treatments/treatment-check.json`. They use cached binaries and
+a deterministic API service on ARM64 Podman, not paid-model effectiveness runs.
+The old pod-based runner and its reproduction scripts are retired.
 
 ### Functional Caveman compression checks
 
@@ -221,7 +195,7 @@ adapters; Claude uses the status in its Anthropic tool-result message. Only repe
 diagnostics are eligible. Failed tool calls, unknown status, mixed media and
 recovery-command results pass through. This avoids inferring success from the
 absence of an error string. All four harnesses passed functional compression
-acceptance on Harbor and the retained runner.
+acceptance on Harbor and the former runner at that historical checkpoint.
 
 Historical evidence `runs/legacy-caveman-34b0c32b31/check.json`
 shows actual compression, model-selected recovery using the supplied handle,
@@ -297,7 +271,9 @@ acb compare runs/baseline runs/candidate --html runs/comparison.html
 
 The first comparison input is the baseline. The HTML bundle includes individual
 benchmark pages in `<report-name>-benchmarks/`, and comparisons have a companion
-`<report-name>.comparison.json`. Keep those files together when sharing the bundle.
+`<report-name>.comparison.json`. Keep those files together when sharing the bundle. Bounded evidence previews
+are embedded; full-artifact links require the original local run directory. See
+[report rendering](report-rendering.md) for component boundaries and limits.
 CLI comparisons use the same data and rules. For a comparison between different
 harnesses, select the individual harness directories. Full suites match by harness.
 Unmatched benchmarks and changed/unknown conditions are visible, and only comparable
@@ -306,11 +282,12 @@ definitions; model requests and tool calls are counted separately.
 
 For multiple attempts, each attempt remains inspectable; the benchmark grade is
 its mean only when all attempts have valid grades. A partial coverage summary does
-not claim the same result across the whole suite. Historical reports without
-comparison provenance or measurement status stay unverified.
+not claim the same result across the whole suite. Missing comparison provenance
+or measurement status makes a current record unverified. Old report formats
+are not a compatibility requirement.
 
 Combined context configuration uses `extensions: [rtk, {name: caveman, options:
-{mode: compress}}]`. Both Harbor and retained runners support this selection.
+{mode: compress}}]`. Harbor supports this selection.
 Recovery returns exact post-RTK output. Multi-step Harbor tasks use fresh harness
 sessions per step, retain workspace/recovery state within a trial, honor declared
 step budgets up to the configured timeout, and retain step-specific evidence.

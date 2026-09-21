@@ -1,5 +1,9 @@
 # Code review: Harbor integration and cleanup
 
+> Historical design/checkpoint record. For current task status and accepted scope,
+> use [Harbor cleanup](harbor-cleanup.md). Later decisions there supersede
+> open-task lists and compatibility requirements below.
+
 Reviewed September 18, 2026. Scope: the working-tree changes relative to `HEAD`,
 including new, untracked implementation, tests, assets, examples and documents.
 The findings below describe the original review, before the subsequent decisions

@@ -1,5 +1,7 @@
 # Maintenance and live checks
 
+Current scope and remaining maintenance work: [cleanup record](../docs/harbor-cleanup.md).
+
 The Python files named `check_*.py` are opt-in integration checks. They exercise
 containers, cached harness binaries, local fixture services, or a prepared
 Harbor plan and are intentionally excluded from the normal `pytest tests` run.

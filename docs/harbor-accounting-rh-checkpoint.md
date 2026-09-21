@@ -1,5 +1,9 @@
 # Accounting and RH baseline follow-up
 
+> Historical design/checkpoint record. For current task status and accepted scope,
+> use [Harbor cleanup](harbor-cleanup.md). Later decisions there supersede
+> open-task lists and compatibility requirements below.
+
 > Historical checkpoint. Use the [September 17 phase audit](harbor-phase-2-3-audit.md)
 > for current scope and remaining work. Subsequent checks closed setup/stream
 > cancellation and other items described as outstanding below. Claude amd64/QEMU

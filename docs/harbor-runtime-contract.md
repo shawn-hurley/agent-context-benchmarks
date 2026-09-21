@@ -5,6 +5,9 @@ architecture, working directory, user, the helper Python interpreter, and the
 language environment. Asset preparation uses that architecture; execution
 rechecks the contract before installing or running the harness.
 
+Current task status and scope: [Harbor cleanup](harbor-cleanup.md).
+Dated evidence sections below record the checks performed at those checkpoints.
+
 ## Language environment
 
 Generic tasks retain their image's PATH. A task requiring the supported conda
@@ -44,8 +47,8 @@ Task Compose services and the egress controller now have their image IDs frozen
 alongside the main image. The final Compose overlay pins these IDs after Harbor's
 own policy overlays. Praxis/Caveman references are resolved during preparation;
 measured execution verifies the running provider image IDs. Offline preparation
-fails if an image is missing. Separate-verifier image contracts, package inventory,
-and Docker live acceptance remain outstanding.
+fails if an image is missing. Separate-verifier contracts and package verification
+are implemented (see below). Live Docker testing is waived.
 
 ## Podman Compose
 
@@ -60,8 +63,8 @@ Otherwise, ACB requires a Compose V2 compatible frontend through `podman compose
 - `runs/harbor-runtime-accounting-check`: all four native ARM fixture runs earn
   reward 1 and reconcile model requests and tokens exactly.
 
-These checks do not resolve Claude's amd64 startup failure, which remains
-scheduled after the other phase 2/3 work. MCP is deferred from this implementation;
+These checks do not resolve Claude's amd64 startup failure; repair is deferred
+under the accepted scope. MCP is deferred from this implementation;
 skills remain in scope.
 
 ## Additional Podman evidence
@@ -128,7 +131,8 @@ Evidence:
 - `runs/harbor-transfer-accounting-check`: all four harnesses retain reward 1
   and exact request/token reconciliation through the new Compose process layer.
 
-These checks apply to Podman. Docker acceptance remains open.
+These checks apply to Podman. Live Docker testing is waived; no live Docker
+coverage is claimed.
 
 ## Managed worker cache validation
 

@@ -1,5 +1,9 @@
 # Configuration user experience review
 
+> Historical design/checkpoint record. For current task status and accepted scope,
+> use [Harbor cleanup](harbor-cleanup.md). Later decisions there supersede
+> open-task lists and compatibility requirements below.
+
 Status: Phase 1 complete as of September 17, 2026. Schema-v2 resolution,
 shared selections, declaring-file paths, validation, execution handoff, and
 requested/resolved provenance are implemented and verified. The

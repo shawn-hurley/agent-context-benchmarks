@@ -1,5 +1,9 @@
 # Configuration UX and structure review
 
+> Historical design/checkpoint record. For current task status and accepted scope,
+> use [Harbor cleanup](harbor-cleanup.md). Later decisions there supersede
+> open-task lists and compatibility requirements below.
+
 > Subsequent scope decision: the review break is over and Phase 4 has resumed.
 > It includes extension support for the existing runners. Phase 5 conversion and
 > retirement are deferred; Phase 6 is narrowed to four concrete tasks. The

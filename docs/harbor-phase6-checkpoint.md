@@ -1,5 +1,9 @@
 # Phase 6 implementation checkpoint
 
+> Historical design/checkpoint record. For current task status and accepted scope,
+> use [Harbor cleanup](harbor-cleanup.md). Later decisions there supersede
+> open-task lists and compatibility requirements below.
+
 September 18, 2026. H06-01, H06-03, H06-04 and H06-06 are implemented.
 Effectiveness experiments (H06-05) remain user-owned. Phase 5 conversion and
 retirement, MCP, full dependency locking and amd64 emulation repair remain deferred.

@@ -1,17 +1,16 @@
 # agent-context-benchmarks (`acb`)
 
 Compare **context/token usage** of agent harnesses (claude-code, goose,
-opencode, pi) running the same coding benchmarks (SWE-bench today;
-LiveCodeBench / ScarfBench scaffolded) against the same model — cloud or local.
+opencode, pi) running coding benchmarks through Harbor, including SWE-bench,
+SWE-bench Lite and ScarfBench, against the same cloud or local model.
+LiveCodeBench remains a stub.
 
 Every LLM call flows through a proxy that records it, so we get per-request token
 accounting per (harness, model, benchmark, instance). See [DESIGN.md](DESIGN.md).
 
-Generation is **container-only**: the harness always runs inside the same
-eval image evaluation will grade the patch in, not a plain host checkout, so
-its dev environment matches evaluation exactly instead of whatever happens to
-be on the machine running `acb`. This means Podman is required to run
-anything, not just to evaluate — see below.
+Generation is **container-only**. Harbor runs agents in Docker or Podman task
+environments; native benchmark verifiers grade the resulting work separately.
+See [operations](docs/harbor-operations.md) for supported environments and limits.
 
 ## Install
 
@@ -95,12 +94,15 @@ export OPENAI_API_KEY=sk-...          # if using OpenAI / for local, none needed
 ```
 
 Matched baseline, response-skill, RTK and context-compression examples for Harbor
-and the retained runners are in [config.example/phase4](config.example/phase4/README.md).
+and SWE-bench through Harbor are in [config.example/phase4](config.example/phase4/README.md).
 See [Harbor operations](docs/harbor-operations.md) for functional evidence and runtime limits.
 
 SWE-bench, SWE-bench Lite, and ScarfBench now use Harbor by default. See
 [benchmark migration](docs/harbor-benchmark-migration.md) for native grader
 dependencies, model-free controls, and retained grading evidence.
+
+See [report rendering](docs/report-rendering.md) for output structure and module
+boundaries, and [cleanup status](docs/harbor-cleanup.md) for remaining tasks.
 
 ## How generation works
 
@@ -117,7 +119,7 @@ inputs are kept outside the agent environment.
 
 See [operations](docs/harbor-operations.md) for lifecycle and isolation details,
 and [benchmark migration](docs/harbor-benchmark-migration.md) for native grader
-setup and controls. Historical reports remain readable.
+setup and controls. Report rendering targets the current output format; backward compatibility is not required.
 
 ## Building the containers
 

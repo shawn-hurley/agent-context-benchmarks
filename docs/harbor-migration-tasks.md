@@ -11,20 +11,15 @@ authoritative; deferred-phase notes below describe earlier checkpoints.
 
 **Phase 6 implementation complete under the selected scope.** See the [Phase 6 checkpoint](harbor-phase6-checkpoint.md) and [post-integration cleanup](harbor-cleanup.md). H06-05 experiments are user-owned; Phase 5 was subsequently completed as cleanup C14. Phase 6 checkpoint regression: 413 passed, four existing skips. All controlled checks were rerun after the user cleaned `runs/`; a fresh Qwen RH baseline/combined pair and real-data reports are retained. Both RH agents timed out at 600 seconds, explicitly shown as incomplete comparisons.
 
-**September 18 cleanup review:** [review findings](code-review-2026-09-18.md) and
-[prioritized cleanup tasks](harbor-cleanup.md#review-follow-up-september-18-2026)
-track the review findings and existing structural work. Subsequent user decisions
-initially accepted C01/C04/C05 unchanged, then authorized their implementation:
-missing-versus-zero measurement validation, atomic output reservation and versioned
-permission-sensitive task inventories are now implemented. Packaging C06 remains
-deferred into the next Harbor benchmark migration; C02/C03/C07/C08 retain permissive
-execution/result handling.
-Those fixes are implemented: **465 passed, four skipped**, including local process
-cleanup, concurrent reservations, task/measurement integrity and interleaved
-Make/engine-double checks. No new live container/model gate
-was run. H05-01 through H05-04 are mapped to cleanup C14a–C14d, retaining both grading
-parity requirements before legacy-runner retirement. Accepted phase closures and
-existing live-test waivers remain in effect.
+**Cleanup update:** C01–C10, C14 and C16 are complete. C11/C12 and the
+remaining C15 work are open; C13 remains deferred. Current acceptance criteria,
+module ownership and verification live only in [Harbor cleanup](harbor-cleanup.md).
+Backward compatibility is not required for future cleanup.
+
+## Historical phase checklist and decisions
+
+The dated entries below preserve their original scope and verification. Their
+open/deferred notes are historical unless listed in the current cleanup record.
 
 **Phase 4 complete.** See the [completion checkpoint](harbor-phase4-checkpoint.md). All functional gates and approved pilots are complete. Regression: 388 passed, four skipped; package and cleanup checks passed.
 
@@ -734,7 +729,7 @@ Implementation evidence and supported limits: [Phase 6 checkpoint](harbor-phase6
 
 ## Completion rule
 
-Phases 1/2/3/4 and the selected Phase 6 implementation are complete. Phase 5 remains deferred, so the full migration and old-runner retirement are unfinished. Keep the current SWE-bench and ScarfBench
-execution paths until independent grading-parity checks pass. Do not describe
-experimental code, a successful build, or a preparation probe as a completed
-end-to-end capability.
+All selected migration phases are complete, including Phase 5 through cleanup
+C14. Current implementation work is tracked in [Harbor cleanup](harbor-cleanup.md).
+Effectiveness experiments remain user-owned; accepted live-test waivers and known
+runtime limitations still apply. Historical evidence is not a new acceptance gate.

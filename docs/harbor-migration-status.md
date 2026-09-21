@@ -1,5 +1,9 @@
 # Harbor migration checkpoint
 
+> Historical design/checkpoint record. For current task status and accepted scope,
+> use [Harbor cleanup](harbor-cleanup.md). Later decisions there supersede
+> open-task lists and compatibility requirements below.
+
 > Historical September 16 snapshot. Its open-issue and resume lists are superseded
 > by the [September 17 phase audit](harbor-phase-2-3-audit.md) and
 > [current checklist](harbor-migration-tasks.md). In particular, its accounting,

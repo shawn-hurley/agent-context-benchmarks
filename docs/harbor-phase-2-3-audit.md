@@ -1,5 +1,9 @@
 # Phase 2/3 scope and evidence audit
 
+> Historical design/checkpoint record. For current task status and accepted scope,
+> use [Harbor cleanup](harbor-cleanup.md). Later decisions there supersede
+> open-task lists and compatibility requirements below.
+
 > Subsequent September 17 decisions supersede the remaining list in this audit:
 > the user waived live Docker testing in favor of interface compatibility and bug
 > reports. Offline support is interpreted as disconnected operation with natural

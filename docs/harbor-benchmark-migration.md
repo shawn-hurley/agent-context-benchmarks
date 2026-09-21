@@ -5,7 +5,8 @@ benchmark names, subset/limit selections, harness selections, skills, MCP
 servers, and extensions use the shared resolver and Harbor agent adapter.
 The legacy runner has been retired. Remove an explicit
 `execution_backend: legacy` override from old configs and prepare a new plan.
-Existing reports and effective run ID collision behavior remain supported.
+Effective run ID collision behavior is unchanged. Current reporting targets the
+current output format; old-format compatibility is not required.
 
 ## Running
 
@@ -136,6 +137,7 @@ Harbor is the only execution backend. Shared authentication lives in `acb.auth`,
 output reservation in `acb.run_paths`, and usage parsing in `acb.proxy.metrics`.
 The old scheduler, pod lifecycle, proxy backends and legacy integration runtime
 are removed. Native grading adapters and low-level adapter transports remain
-maintained; historical report readers are unchanged.
+maintained. Subsequent report cleanup removes old-format compatibility paths;
+see [report rendering](report-rendering.md).
 
 See [the cleanup record](harbor-cleanup.md) for verification and remaining work.
