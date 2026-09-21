@@ -1,7 +1,9 @@
 schema_version: 2
 config_dir: config
-run_id: legacy-baseline
-benchmark: swebench-lite
+run_id: swebench-rtk
+benchmark:
+  name: swebench-lite
+  execution_backend: harbor
 harness:
 - goose
 - pi
@@ -14,4 +16,5 @@ execution:
   timeout: 300
 output_dir: runs
 skills: []
-extensions: []
+extensions:
+- rtk

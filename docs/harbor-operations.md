@@ -228,9 +228,8 @@ shows actual compression, model-selected recovery using the supplied handle,
 exact recovered bytes, five accounted requests and cleanup. The prompt
 explicitly asks for recovery; this does not measure unprompted recovery behavior.
 
-The maintained retained-runner check is `python -m scripts.check_legacy_context
-FIXTURE OUTPUT`; it uses deterministic commands across all four harnesses and
-also supports combined RTK, service-failure and cancellation modes.
+The legacy-runner scripts are retired. Their recorded results below are
+historical. Current commands are listed in [maintenance checks](../scripts/README.md).
 
 For Harbor, `scripts.check_harbor_caveman` takes a deterministic bridge plan and
 a new output directory. `runs/harbor-caveman-compression-all-3/check.json`

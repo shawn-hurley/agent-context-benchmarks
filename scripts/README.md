@@ -12,14 +12,37 @@ Maintained capability checks include:
   images, skill delivery, rgctl delivery, Caveman, and treatment composition.
 - Dataset metrics in `check_harbor_dataset_metrics.py` and multi-step execution
   in `check_harbor_multistep.py`.
-- Retained-runner Caveman behavior in `check_legacy_context.py` until that runner
-  is retired.
 - Download cancellation, provider-image caching, and Caveman store isolation.
+- Benchmark migration in `check_harbor_benchmark_migration.py`: model-free
+  SWE-bench/ScarfBench Harbor controls and an official SWE-bench parity matrix.
+  See [setup and evidence](../docs/harbor-benchmark-migration.md).
 
-The Phase 4 pilot runner and summarizer were removed after their frozen results
-were recorded. Normal run configurations and reports now cover their ongoing
-functionality. The smaller local-model `check_legacy_caveman.py` was also
-removed because `check_legacy_context.py` covers the maintained lifecycle,
-compression, failure, cancellation, and combined-extension contracts.
+The Phase 4 pilot and legacy-runner checks were retired. Their frozen evidence
+remains historical; maintained lifecycle and treatment checks use Harbor.
+
+## Required local regression gate
+
+```sh
+uv sync --group dev
+uv run pytest tests -q
+uv build --out-dir dist
+uv run python scripts/check_package.py dist/agent_context_benchmarks-0.1.0-py3-none-any.whl
+```
+
+`uv build` builds the wheel from a fresh source distribution. This avoids stale
+modules left in a previous build directory. The package check installs the wheel
+into a temporary directory and checks imports/resources and ScarfBench export
+from outside the checkout. It makes no model or container requests.
+
+For live recovery-store isolation, build the pinned Caveman image and run:
+
+```sh
+podman build -t acb-caveman-check -f acb/integrations/assets/caveman/Containerfile acb/integrations/assets/caveman
+uv run python -m scripts.check_caveman_store_isolation acb-caveman-check runs/store-isolation-check
+```
+
+This starts two Harbor environments, checks exact recovery in the originating
+store and rejection in the other, then deletes both environments. `check.json`
+records session names, results and cleanup errors. It uses no model.
 
 The shell scripts are user-facing smoke or example runners and remain supported.

@@ -1,7 +1,9 @@
 schema_version: 2
 config_dir: config
-run_id: legacy-response-skill
-benchmark: swebench-lite
+run_id: swebench-response-skill
+benchmark:
+  name: swebench-lite
+  execution_backend: harbor
 harness:
 - goose
 - pi

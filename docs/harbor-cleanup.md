@@ -110,8 +110,8 @@ run was performed.
 
 - [x] **Audit migration scripts before removing them.** Removed the completed
   Phase 4 pilot runner/summarizer and the overlapping local-model legacy Caveman
-  helper. `check_legacy_context.py` retains the stronger deterministic legacy
-  contracts. Renamed Phase 6 checks for dataset metrics and multi-step behavior.
+  helper. The remaining legacy context check was retired with the runner on
+  September 21; Harbor lifecycle/treatment checks remain maintained. Renamed Phase 6 checks for dataset metrics and multi-step behavior.
   `scripts/README.md` identifies the remaining opt-in integration checks and
   supported shell runners. The checks were inventoried; moving them into one
   shared-fixture integration suite remains an optional future refactor.
@@ -125,18 +125,11 @@ run was performed.
 
 ## Code structure and reports
 
-- [ ] **C09 — Separate shared run helpers from the legacy runner.** Harbor currently
-  imports `_resolve_run_dir` and `_fetch_vertex_token` from `acb.runner`.
-  Move shared output naming and authentication to neutral modules, then retain
-  the same collision behavior and credential handling on both paths.
-
-  C04 now extracts output reservation into `acb.run_paths`, used by both backends.
-  The remaining work is provider authentication: put it in a neutral module that
-  imports neither backend. Verify both paths use the
-  effective run ID, missing credentials still fail clearly, and credential values
-  are not added to saved plans or logs. Remove Harbor's imports from `acb.runner`
-  before C14 removes the runner. Preserve existing patch/import compatibility only
-  where it is part of a maintained API.
+- [x] **C09 — Separate shared run helpers from the legacy runner.** Output
+  reservation lives in `acb.run_paths`, Vertex authentication in `acb.auth`, and
+  token parsing in `acb.proxy.metrics`. Harbor imports no legacy runner or proxy
+  backend. Authentication refresh and credential-error redaction are covered in
+  `tests/test_auth.py`; existing run-path and usage tests retain their contracts.
 
 - [ ] **C10 — Consolidate HTML rendering.** The comparison report uses private
   functions from the older HTML renderer and replaces fragments of generated
@@ -182,7 +175,7 @@ run was performed.
   timeout evidence.
 - [x] Relative `output_dir` values now resolve from the invocation directory
   for both `acb run` and `acb clean --config`; existing outputs were not moved.
-- [ ] **C14 — Remove the legacy runner after both grading-parity gates.** Move SWE-bench and ScarfBench execution and
+- [x] **C14 — Remove the legacy runner after both grading-parity gates.** Move SWE-bench and ScarfBench execution and
   grading onto Harbor while preserving their existing configuration and
   extension behavior. Check known passing and failing tasks against the current
   runner's results, then remove `acb/runner.py` and its duplicate scheduling,
@@ -197,23 +190,23 @@ run was performed.
   runtime resources in its acceptance checks. Execute the existing H05 tasks as
   cleanup, without reopening migration phases:
 
-  - [ ] **C14a / H05-01 — ScarfBench export and verifier.** Export the complete
+  - [x] **C14a / H05-01 — ScarfBench export and verifier.** Export the complete
     generated project, source task text and migration guidance. Keep grading
     files isolated from agent work. Define the verifier's container-engine
     arrangement explicitly, preserve native `scarf validate`/`make test` semantics,
     and retain compile, deployment and smoke-test evidence. Carry C07's image
     isolation into the exporter.
-  - [ ] **C14b / H05-02 — ScarfBench parity.** Use frozen known passing and failing
+  - [x] **C14b / H05-02 — ScarfBench parity.** Use frozen known passing and failing
     generated projects as inputs to both graders. Include build failure, startup
     failure, smoke failure and misleading success-marker output. Compare detailed
     outcomes and artifacts, not model-dependent re-generation. Record image IDs,
     verifier commands and fixture identities with the parity result.
-  - [ ] **C14c / H05-03 — SWE-bench export and parity.** Preserve repository/base
+  - [x] **C14c / H05-03 — SWE-bench export and parity.** Preserve repository/base
     commit, patch application/isolation, official test scripts and per-test
     grading. Compare known passing/failing patches, invalid patches and execution
     errors through both graders. Preserve selection/exclusion and language-runtime
     behavior. Record task, grader and image revisions.
-  - [ ] **C14d / H05-04 — Switch execution and retire duplication.** After C14b,
+  - [x] **C14d / H05-04 — Switch execution and retire duplication.** After C14b,
     C14c and C09 pass, route supported existing configurations through Harbor.
     Verify all four harnesses and maintained extension/skill/MCP selections,
     public `acb run`, effective IDs and old report readability. Remove the legacy
@@ -221,6 +214,33 @@ run was performed.
     and tests only after their maintained behavior has replacement coverage.
     Update examples and user-facing migration guidance together. Optional pricing
     is a separate follow-up, not a prerequisite for runner removal.
+
+  September 18 migration evidence: [benchmark migration](harbor-benchmark-migration.md).
+  Both native graders now run through Harbor's custom verifier API, with frozen
+  inputs and controller-owned grading processes/containers. All three benchmark
+  names default to Harbor. Fixed passing/failing controls passed on Podman;
+  detailed failure matrices match the native graders.
+
+  September 21 retirement: removed `acb.runner`, duplicate pod scheduling,
+  host/container proxy backends, legacy integration runtime and obsolete tests.
+  CLI runs and controls dispatch directly to Harbor; explicit legacy selection
+  produces migration guidance. The Phase 4 SWE-bench examples now use Harbor.
+  Native grading, low-level adapter transports and historical report readers
+  remain maintained.
+
+  Replacement coverage: `test_runner_retirement.py` checks routing and removal;
+  `test_harbor_preparation.py` and `test_execution_plan.py` cover inspected RTK,
+  Caveman and response-skill preparation across all four harnesses. Existing
+  component/MCP, skills, runtime cancellation, accounting, run-path and report
+  tests remain. `check_caveman_store_isolation.py` now uses Harbor environments.
+  Live Podman recovery evidence: `runs/harbor-store-isolation-20260921/check.json`
+  records exact local recovery, rejected cross-trial retrieval and clean teardown.
+  Fresh native-grader controls and parity evidence are under
+  `runs/harbor-retirement-check-20260921/`. No paid models were used; live Docker
+  remains waived. Installed-wheel import/resource and offline ScarfBench export
+  checks passed outside the checkout via `scripts/check_package.py`. Final
+  regression: **467 passed, four opt-in skips** (`uv run --offline pytest -q`).
+  Two existing multiprocessing/fork deprecation warnings remain.
 
 ## Review follow-up: September 18, 2026
 
@@ -235,7 +255,7 @@ The later request to implement C01, C04 and C05 supersedes their initial accepta
 | C03 / R03 | Implemented | Every launcher exception stops and reaps the owned worker session, escalating through interrupt/terminate/kill and preserving the initiating error. |
 | C04 / R04 | Implemented | Reserve output with exclusive directory creation in `acb.run_paths`. Keep the original name and `-N` suffix naming; concurrent invocations retry on collisions and retain distinct provenance. |
 | C05 / R05 | Implemented | Version 2 inventories include file contents, entry types and permissions, including directories. Old prepared manifests require re-preparation; historical report readers are unchanged. |
-| C06 / R06 | Deferred into C14 | Verify required resources from the installed package during the ScarfBench/SWE-bench Harbor migration. The current uncached ScarfBench wheel limitation is accepted until then. |
+| C06 / R06 | Implemented in C14 | The wheel includes the ScarfBench Containerfile/prompts and grading bridge. An installed-wheel export passed outside checkout resources; Podman grading creates its own per-trial CLI shim. SWE-bench supports an explicitly configured official-grader interpreter. |
 | C07 / R07 | Implemented | Build with `--iidfile` and run the exact resulting image ID; each conversion retains its image-ID evidence. Older ACB-generated Makefiles are upgraded; upstream recipes are preserved. |
 | C08 / R08 | Implemented, permissive | Read/validate native results independently. Import healthy records, represent missing slots, retain damaged files and write `import-errors.json`. Artifact errors alone do not make execution fail or replace an existing failure. |
 
@@ -259,7 +279,9 @@ The later request to implement C01, C04 and C05 supersedes their initial accepta
   a versioned inventory; local snapshots use the `local/v2/` namespace.
   `test_harbor_results.py` covers changed executable bits, unchanged-cache reuse,
   directory changes, unsupported entries and rejection of old prepared manifests.
-- [ ] **C06 — Installed runtime resources.** Deferred to C14 by user decision.
+- [x] **C06 — Installed runtime resources.** Completed with C14; installed-wheel
+  task export and native SWE-bench SDK image visibility passed. See the
+  [migration checkpoint](harbor-benchmark-migration.md).
 - [x] **C07 — Concurrent ScarfBench grading isolation.** The generated Makefile
   uses `.acb-validation-image-id`. `test_scarfbench_validation.py` interleaves two
   actual Make executions with a deterministic engine double, checking distinct
@@ -281,6 +303,11 @@ The later request to implement C01, C04 and C05 supersedes their initial accepta
   and check packaged/generated copies for drift. Reuse fixtures across live scripts when doing so removes duplication;
   preserve their current behavior coverage. Depends on C06 for the packaging gate.
 
+  September 21 progress: pytest is declared in the `dev` dependency group,
+  default collection is restricted to `tests/`, and [maintenance checks](../scripts/README.md)
+  documents the regression gate and installed-wheel check. Harbor private API
+  inventory and canonical Praxis source/drift enforcement remain open.
+
 - [ ] **C16 — Keep one authoritative cleanup record.** Use this document for
   current status and link implementation changes and test/live artifacts when
   closing tasks. Link historical phase/checkpoint documents here without rewriting
@@ -291,15 +318,13 @@ The later request to implement C01, C04 and C05 supersedes their initial accepta
 
 ## Delivery order and completion rules
 
-1. The selected immediate fixes C01–C05, C07 and C08 are implemented. C06 remains
-   deferred to the benchmark migration. Re-prepare old plans before executing
-   them with the version 2 task inventory.
-2. Next, complete C14a–C14d using frozen grading-parity fixtures. Extract shared
-   helpers (C09) before removing the runner and address packaging (C06) within
-   that migration, supported by C15's installation/test checks.
-3. Complete C10 and incrementally C11/C13, then C12. Structural changes must keep
-   existing serialized output and report semantics readable. Maintain C16 as
-   implementation and accepted decisions evolve.
+1. C01–C09 and C14 are implemented, including native grading parity and runner
+   retirement. Re-prepare old plans before executing with the current inventory.
+2. Complete C10 (shared HTML rendering), then C11 (typed boundaries) and C12
+   (charts). C13 remains deferred under the accepted agent-option scope.
+3. Finish C15's private API contracts and Praxis source/drift checks. Maintain
+   C16 as implementation and accepted decisions evolve. Existing serialized
+   outputs and historical reports must remain readable.
 
 For each task, record the implementation reference, focused regression result and
 any required live evidence before checking it off. Run the full `tests/` suite

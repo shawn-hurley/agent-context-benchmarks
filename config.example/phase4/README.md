@@ -3,9 +3,13 @@
 Copy this directory to an experiment directory. Edit `config/models.yaml` for
 your model and `config/machine.yaml` for the provider/cache. Paths are relative
 to their declaring YAML files; no machine-specific paths or binary checksums
-are required. The retained runner uses Podman. Harbor also accepts Docker.
+are required. Harbor accepts Podman and Docker.
 
-Each backend has four independent arms with the same harnesses, model, task
+The `swebench.*` files run SWE-bench Lite through Harbor; the `harbor.*`
+files select an existing Harbor task bundle. See
+[benchmark migration](../../docs/harbor-benchmark-migration.md).
+
+Each benchmark configuration has four independent arms with the same harnesses, model, task
 selection, 300-second budget and one worker:
 
 | File suffix | Treatment |
@@ -65,22 +69,21 @@ no-op/oracle controls pass with rewards 0/1. This image change is an explicitly
 approved experiment deviation, not an automatic fallback. Neither task's code
 or tests was changed.
 
-## Existing runner
+## SWE-bench Lite
 
-The `legacy.*.yaml` files use the retained SWE-bench Lite runner and the same
-named treatments. Its normal dataset/image prerequisites still apply. ScarfBench
-can use these selections in its existing run configs too; no Harbor export is
-needed.
+The `swebench.*.yaml` files use the same named treatments. Native grader and
+dataset/image prerequisites apply. ScarfBench supports these selections too;
+ACB exports its tasks during preparation.
 
 ```sh
-acb resolve --config legacy.rtk.yaml
-acb run --config legacy.baseline.yaml
-acb run --config legacy.response-skill.yaml
-acb run --config legacy.rtk.yaml
-acb run --config legacy.context.yaml
+acb resolve --config swebench.rtk.yaml
+acb run --config swebench.baseline.yaml
+acb run --config swebench.response-skill.yaml
+acb run --config swebench.rtk.yaml
+acb run --config swebench.context.yaml
 ```
 
 Add `claude-code` when its binary can run in the selected task image. The local
 ARM host's emulated amd64 Claude failure remains an accepted upstream limitation.
 All four harnesses have native ARM functional evidence. Full dependency locking,
-MCP and benchmark-runner retirement remain deferred.
+and further treatment experiments remain deferred.

@@ -98,74 +98,33 @@ Matched baseline, response-skill, RTK and context-compression examples for Harbo
 and the retained runners are in [config.example/phase4](config.example/phase4/README.md).
 See [Harbor operations](docs/harbor-operations.md) for functional evidence and runtime limits.
 
+SWE-bench, SWE-bench Lite, and ScarfBench now use Harbor by default. See
+[benchmark migration](docs/harbor-benchmark-migration.md) for native grader
+dependencies, model-free controls, and retained grading evidence.
+
 ## How generation works
 
-Per instance, a Podman **pod** (shared network namespace) holds two sibling
-containers:
+Harbor schedules each trial and owns its Docker or Podman environment. ACB
+exports benchmark inputs into immutable task bundles, prepares the selected
+harness and extensions, and runs the harness through Harbor's environment API.
+Goose, Claude Code, OpenCode and Pi use the same adapter path.
 
-```
-┌─ pod ──────────────────────────────────────────────────┐
-│  testbed container              praxis-ai container     │
-│  (SWE-bench eval image,   ──►   (built from this repo's  │
-│   harness binary copied in,      Containerfile)          │
-│   /testbed checkout)                                     │
-│        │                              │                  │
-└────────┼──────────────────────────────┼──────────────────┘
-         │ podman exec                  │ host.containers.internal
-         ▼                              ▼
-   goose or claude-code            your local model server
-   runs headless                   (e.g. vLLM on :8000) --
-                                    or api.anthropic.com,
-                                    translated if needed
-```
+Praxis runs as a trial service for model routing and token accounting. Optional
+RTK, Caveman, skills and MCP configuration are prepared before execution.
+Agent services are stopped before grading. SWE-bench and ScarfBench use their
+native graders in controller-owned processes and containers; their grading
+inputs are kept outside the agent environment.
 
-- **Testbed container** — the SWE-bench eval image for that instance, built
-  on demand from the public task repo (`SWE-bench/swe-bench-tasks`, one
-  Dockerfile per instance) — see `acb/benchmarks/image_builder.py`. Already
-  contains a single-branch, future-history-pruned `/testbed` checkout at
-  `base_commit` (baked in at image-build time, same anti-leakage guarantee a
-  host-mode clone would need to construct itself). The harness's own binary
-  is staged in separately by `HarnessAdapter.setup_container()` (each
-  harness's own hook, called after this container starts) and run via
-  `podman exec`.
-- **Praxis-ai container** — built once from the `Containerfile` at the root
-  of this repo (which clones [praxis-proxy/ai](https://github.com/praxis-proxy/ai)
-  at a pinned commit and compiles our custom filter in), tagged
-  `acb-praxis-ai:latest`, and reused across every instance/run after that.
-  Not the core
-  [praxis-proxy/praxis](https://github.com/praxis-proxy/praxis) gateway --
-  praxis-ai is a superset that adds the `benchmark_metrics` filter
-  (comprehensive token tracking including cache_read and cache_creation
-  tokens) and, for claude-code specifically, an
-  Anthropic↔OpenAI translation chain (`anthropic_messages_format` /
-  `anthropic_to_openai` / `anthropic_stream_events`) that lets an Anthropic-
-  speaking harness target an OpenAI-compatible local model -- see
-  `acb/proxy/praxis.py`'s module docstring for what's actually verified
-  live about both.
-- The two containers share a network namespace, so the harness reaches
-  praxis-ai on plain `127.0.0.1`; praxis-ai reaches your host's model server
-  via Podman's `host.containers.internal` gateway (gvproxy), or the real
-  Anthropic/OpenAI API directly for cloud models.
-- Files move in/out via `podman cp`, not bind mounts: Podman-machine-on-macOS
-  doesn't share arbitrary host directories into the VM by default (verified:
-  `-v <hostpath>:...` silently fails inside the VM even for paths that exist
-  on the Mac host).
-
-All four harnesses support container-mode today (`HarnessAdapter.run_container()`):
-goose (static release binary), claude-code (standalone native executable in the
-`@anthropic-ai/claude-code-linux-{arm64,x64}` npm package -- *not* a Node.js
-package needing a runtime; see `acb/harnesses/claude_code.py`'s module
-docstring), opencode (standalone binary from GitHub Releases), and pi (same
-pattern). Each binary is downloaded once, cached under `runs/.cache/`,
-and `podman cp`'d into every container for every run under that output directory.
+See [operations](docs/harbor-operations.md) for lifecycle and isolation details,
+and [benchmark migration](docs/harbor-benchmark-migration.md) for native grader
+setup and controls. Historical reports remain readable.
 
 ## Building the containers
 
-Both images are built automatically the first time they're needed
-(`acb/runner.py`'s `_ensure_praxis_image()`, `acb/benchmarks/image_builder.py`'s
-`ensure_instance_image()`) and cached in `podman images` for every run after
-that. This section is the manual/by-hand equivalent, useful for
-understanding what's happening or troubleshooting a build failure.
+Preparation builds and caches provider images from packaged resources. Harbor
+builds task images from exported environment recipes and records their image
+identities. `acb prepare --config run.yaml` performs this work before execution.
+The commands below are manual equivalents for troubleshooting.
 
 **1. The praxis-ai image** (`acb-praxis-ai:latest`) — built from the
 `Containerfile` at the root of this repo.  It is self-contained: the build

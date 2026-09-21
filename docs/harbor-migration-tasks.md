@@ -1,8 +1,15 @@
 # Harbor migration tasks
 
-Updated: September 18, 2026.
+Updated: September 21, 2026.
 
-**Phase 6 implementation complete under the selected scope.** See the [Phase 6 checkpoint](harbor-phase6-checkpoint.md) and [post-integration cleanup](harbor-cleanup.md). H06-05 experiments are user-owned; Phase 5 remains deferred. Phase 6 checkpoint regression: 413 passed, four existing skips. All controlled checks were rerun after the user cleaned `runs/`; a fresh Qwen RH baseline/combined pair and real-data reports are retained. Both RH agents timed out at 600 seconds, explicitly shown as incomplete comparisons.
+**Benchmark migration update:** SWE-bench, SWE-bench Lite, and ScarfBench now
+default to Harbor. Task export, controller-side native verifiers, fixed-fixture
+grading parity, and C06 packaging are implemented. See
+[benchmark migration and evidence](harbor-benchmark-migration.md). H05-04 is complete: Harbor is the sole runner, shared helpers are extracted,
+and legacy scheduling is removed. [Cleanup status](harbor-cleanup.md) is
+authoritative; deferred-phase notes below describe earlier checkpoints.
+
+**Phase 6 implementation complete under the selected scope.** See the [Phase 6 checkpoint](harbor-phase6-checkpoint.md) and [post-integration cleanup](harbor-cleanup.md). H06-05 experiments are user-owned; Phase 5 was subsequently completed as cleanup C14. Phase 6 checkpoint regression: 413 passed, four existing skips. All controlled checks were rerun after the user cleaned `runs/`; a fresh Qwen RH baseline/combined pair and real-data reports are retained. Both RH agents timed out at 600 seconds, explicitly shown as incomplete comparisons.
 
 **September 18 cleanup review:** [review findings](code-review-2026-09-18.md) and
 [prioritized cleanup tasks](harbor-cleanup.md#review-follow-up-september-18-2026)
@@ -583,25 +590,27 @@ Execution order: H04-05, H04-01/02, H04-06/07, then H04-03/04.
   Latest regression: 388 passed, four skipped, after the preflight fix. The rebuilt
   wheel matches the current integration code/assets.
 
-## Phase 5: deferred benchmark-conversion follow-on
+## Phase 5: benchmark conversion and remaining retirement
 
-H05-01 through H05-04 are deferred from this implementation. No external issue
-has been created. Retain the existing runners; their extension compatibility is
-Phase 4 work. Model aliases, discovery, paths and provenance are already complete.
-Optional pricing remains follow-on work and is not a renewed Phase 4 gate.
+The benchmark migration is now implemented under cleanup C14. Both benchmark
+families use Harbor by default and retain native grading. Fixed-fixture tests
+and live Podman controls are recorded in the
+[migration checkpoint](harbor-benchmark-migration.md). Optional pricing remains
+follow-on work and is not a prerequisite for runner retirement.
 
-- [ ] **H05-01 — ScarfBench task export and verifier.** Preserve the complete
+- [x] **H05-01 — ScarfBench task export and verifier.** Preserve the complete
   generated project; keep grading files hidden during agent work; run native
   `scarf validate`/`make test` in an isolated verifier with an explicit container
   engine arrangement. Retain compile/deploy/smoke-test evidence.
-- [ ] **H05-02 — ScarfBench grading parity.** Compare known passing and failing
+- [x] **H05-02 — ScarfBench grading parity.** Compare known passing and failing
   migrations through the old and Harbor paths before switching execution.
-- [ ] **H05-03 — SWE-bench task export and grading parity.** Preserve official
+- [x] **H05-03 — SWE-bench task export and grading parity.** Preserve official
   test scripts, grading semantics, patch isolation, and per-test evidence.
-- [ ] **H05-04 — Configuration completion and old runner retirement.** Finish
-  optional pricing and migration guidance; aliases and portable paths are already
-  complete. Remove
-  duplicate scheduling/pod orchestration only after both benchmark parity gates.
+- [x] **H05-04 — Configuration completion and old runner retirement.** Completed
+  September 21 under cleanup C09/C14d after both native grading parity gates.
+  Shared helpers, CLI routing, replacement coverage, installed resources and
+  examples are updated. See [current evidence and limitations](harbor-cleanup.md).
+
 ## Phase 6: concrete advanced capabilities and experiments
 
 **Closed by user decision on September 18, 2026.** The selected implementation

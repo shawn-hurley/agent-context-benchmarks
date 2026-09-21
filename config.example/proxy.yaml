@@ -85,7 +85,7 @@ models:
   #   rewrites the path to Vertex's rawPredict URL via vertex_anthropic_prepare
   #   + path_rewrite filters (see acb/proxy/praxis.py build_config()).
   # key_env: VERTEX_AUTH_TOKEN -- a short-lived GCP OAuth2 Bearer token;
-  #   acb/runner.py fetches it from GOOGLE_APPLICATION_CREDENTIALS before each
+  #   acb/auth.py fetches it from GOOGLE_APPLICATION_CREDENTIALS before each
   #   instance and passes it to the praxis container via extra_env.
   # vertex_model: the Vertex AI model path segment (differs from the proxy
   #   model key and from the Anthropic API model ID).
@@ -113,26 +113,6 @@ models:
     vertex_model: claude-sonnet-4-6
 
 
-# --- Proxy backends (how usage is captured) -----------------------------------
-backends:
-  praxis:
-    # Container-mode generation (the only mode -- see acb/runner.py) always
-    # runs praxis-ai (https://github.com/praxis-proxy/ai), not this `binary`
-    # -- see acb/proxy/praxis.py's PraxisContainerBackend and
-    # config/benchmarks.yaml's `praxis_ai_repo`. `binary` here only matters
-    # for the host-mode PraxisBackend, which the runner never instantiates
-    # today (dead code path kept for potential future host-mode use).
-    #
-    # access_log + token_count (praxis-ai only; core praxis has no
-    # token_count) lines are parsed into usage records, correlated by
-    # request_id -- see acb/proxy/praxis.py's module docstring for the
-    # live-verified specifics (both harness/backend same-API and, for
-    # claude-code specifically, translated anthropic-harness ->
-    # openai-backend via praxis-ai's anthropic_to_openai chain).
-    binary: /path/to/praxis/binary
-
-  recording:
-    # Zero-dependency stdlib fallback / cross-check. Same-API only
-    # (anthropic harness -> anthropic backend, or openai -> openai);
-    # cross-API translation is Praxis-only.
-    {}
+# Harbor uses the packaged Praxis provider image for usage capture.
+# Routing configuration lives in acb/proxy/praxis.py; normalized metrics are
+# read by acb/proxy/metrics.py. The retired host proxy backend needs no config.

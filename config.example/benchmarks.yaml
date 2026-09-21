@@ -1,4 +1,5 @@
-# Benchmark registry.
+# Benchmark registry. SWE-bench and ScarfBench default to Harbor.
+# See docs/harbor-benchmark-migration.md for grading dependencies and controls.
 
 swebench:
   # NOTE: SWE-bench/SWE-bench_Verified, not princeton-nlp/SWE-bench_Verified.
@@ -11,8 +12,8 @@ swebench:
   dataset: SWE-bench/SWE-bench_Verified
   split: test
   max_workers: 4
-  # Container backend for evaluation. "auto" uses DOCKER_HOST if set, else a
-  # running Podman machine's socket, else the docker default.
+  # Deprecated setting. Harbor uses execution.environment for
+  # both task execution and grading (podman by default, or docker).
   container_backend: auto        # auto | podman | docker
   # docker_host: unix:///path/to.sock   # explicit override if needed
   # namespace: ""                # set "" to build images locally (e.g. arm64
@@ -37,14 +38,16 @@ swebench:
     - "*.swo"                  # Vim backup files
     - .DS_Store                # macOS metadata
 
-  # --- Container-mode generation (the only mode -- see acb/runner.py) ----
+  # --- Harbor task environment ----
   # The harness runs *inside* the same SWE-bench eval image evaluation will
   # grade the patch in (built on demand from the task repo -- see
   # acb/benchmarks/image_builder.py), so its dev environment matches
-  # evaluation exactly. Requires Podman. All four harnesses (goose, claude-code,
+  # evaluation exactly. Supports Podman or Docker. All four harnesses (goose, claude-code,
   # opencode, pi) support container mode today (HarnessAdapter.run_container()).
   image_arch: auto                 # auto | amd64 | arm64 (auto = host arch)
   task_repo: SWE-bench/swe-bench-tasks   # source of per-instance Dockerfiles
+  # Installed-wheel users can supply an official SWE-bench interpreter:
+  # swebench_python: /path/to/swebench-venv/bin/python
   # The praxis-ai image (acb-praxis-ai:latest) is built automatically from
   # the Containerfile at the repo root when the image is absent.  That
   # Containerfile is self-contained: it clones praxis-proxy/ai at a pinned
