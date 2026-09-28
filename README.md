@@ -269,7 +269,24 @@ reused across instances and later runs under the same output directory.
 
 ## Run
 
+Run `acb run` in a terminal to open the full-screen setup UI. Create a run or
+load an existing YAML file, then select a benchmark, one or more harnesses, a
+configured model, task IDs or a limit, skills, extensions, timeout, and workers.
+The review screen validates the selection before offering **Save and run**,
+**Run without saving**, and **Cancel**. Save and run writes a YAML file; edits
+to a loaded file preserve settings and comments outside the form. Run without
+saving uses the edited values without changing the YAML file. Its run directory
+still contains `requested.json` and `resolved.json`, marked `interactive_run:
+"unsaved"`. Model connections are configured separately in `config/models.yaml`
+or `config/proxy.yaml`. Paste task IDs separated by spaces or commas.
+
+For scripts and repeatable runs, pass a YAML file or all required run flags.
+Bare `acb run` requires an interactive terminal.
+
 ```bash
+# interactive setup
+acb run
+
 # from a config file (SWE-bench Lite examples)
 acb run --config config/swebench-lite/run.goose-lite.yaml         # goose, local model
 acb run --config config/swebench-lite/run.claude-code-lite.yaml   # claude-code, local model (translated)

@@ -1,5 +1,6 @@
 """acb command-line entrypoint.
 
+    acb run   # interactive run configuration
     acb run   --config config/run.requests-1142.yaml
     acb run   --benchmark swebench --harness goose --model mlx-community/Qwen3.8-27B-4bit \
               --run-id demo --limit 1 --proxy praxis
@@ -13,6 +14,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import sys
 from pathlib import Path
 
 from acb.config import RunConfig, Registries
@@ -22,12 +24,24 @@ def _cmd_run(args):
     if args.config:
         cfg = RunConfig.from_file(args.config)
     else:
+        direct = any(getattr(args, key) is not None for key in (
+            "benchmark", "harness", "model", "run_id", "limit", "max_workers", "proxy", "control"))
+        if not direct:
+            if not (sys.stdin.isatty() and sys.stdout.isatty()):
+                raise SystemExit("bare acb run requires an interactive terminal; use --config or explicit run flags")
+            from acb.interactive_run import configure
+            selected = configure(args.config_dir)
+            if selected is None:
+                return
+            from acb.harbor.backend import run_plan
+            run_plan(selected, verbose=args.verbose)
+            return
         if not (args.benchmark and args.harness and args.model and args.run_id):
             raise SystemExit("need --config OR (--benchmark --harness --model --run-id)")
         cfg = RunConfig(
             run_id=args.run_id, benchmark=args.benchmark, harness=args.harness,
-            model=args.model, proxy=args.proxy, limit=args.limit,
-            max_workers=args.max_workers,
+            model=args.model, proxy=args.proxy or "praxis", limit=args.limit,
+            max_workers=args.max_workers if args.max_workers is not None else 4,
         )
     if args.config_dir:
         cfg.config_dir = str(Path(args.config_dir).expanduser().absolute())
@@ -172,9 +186,9 @@ def main(argv=None):
     r.add_argument("--harness")
     r.add_argument("--model")
     r.add_argument("--run-id")
-    r.add_argument("--proxy", default="praxis")
+    r.add_argument("--proxy")
     r.add_argument("--limit", type=int)
-    r.add_argument("--max-workers", type=int, default=4)
+    r.add_argument("--max-workers", type=int)
     r.add_argument("--verbose", "-v", action="store_true",
                    help="show stderr output live during run (disables stderr redirection)")
     r.set_defaults(func=_cmd_run)

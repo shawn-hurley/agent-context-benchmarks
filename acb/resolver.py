@@ -416,8 +416,11 @@ def resolve(cfg: RunConfig, registries: Registries | None = None) -> ResolvedPla
     if binary and ("/" in binary or binary.startswith("~")):
         origin = base if "binary" in overrides.get("proxy", {}) else source_base("proxy.yaml")
         proxy_config["binary"] = absolute(binary, origin)
+    requested = asdict(cfg)
+    if requested["interactive_run"] is None:
+        requested.pop("interactive_run")
     document = {
-        "requested_config": requested_config(asdict(cfg)),
+        "requested_config": requested_config(requested),
         "protocol_version": 1, "catalog_revision": catalog["revision"],
         "run_id": cfg.run_id, "benchmark": name, "benchmark_config": benchmark,
         "execution_backend": backend, "environment": environment,
@@ -431,4 +434,6 @@ def resolve(cfg: RunConfig, registries: Registries | None = None) -> ResolvedPla
         "sources": registry.sources + ([cfg.source_file] if cfg.source_file else []),
         "pending_checks": sorted(set(pending + ["task manifest", "container runtime and image prerequisites"])),
     }
+    if cfg.interactive_run:
+        document["interactive_run"] = cfg.interactive_run
     return ResolvedPlan(json.dumps(document, sort_keys=True))

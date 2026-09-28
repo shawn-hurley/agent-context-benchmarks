@@ -48,6 +48,7 @@ class RunConfig:
     execution: dict[str, Any] = field(default_factory=dict)
     config_dir: str | None = None
     source_file: str | None = field(default=None, repr=False)
+    interactive_run: str | None = field(default=None, repr=False)
 
     def __post_init__(self):
         self.validate_schema()
@@ -92,7 +93,7 @@ class RunConfig:
             # actual problem.
             raise FileNotFoundError(f"run config not found: {path}")
         data = _load_yaml(path)
-        unknown = set(data) - {item.name for item in fields(cls) if item.name != "source_file"}
+        unknown = set(data) - {item.name for item in fields(cls) if item.name not in {"source_file", "interactive_run"}}
         if unknown:
             raise ValueError(f"run config {path}: unknown fields {sorted(unknown, key=str)}")
         data["source_file"] = str(path.resolve())
