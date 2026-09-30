@@ -6,7 +6,9 @@ import shutil
 import pytest
 
 from acb.harbor.dataset import prepare_dataset, verify_manifest
-from acb.harbor.benchmark_verifier import BenchmarkVerifier, validate_candidate_tree
+from acb.harbor.benchmark_verifier import (BenchmarkVerifier,
+    strip_workflow_artifacts, validate_candidate_tree)
+from acb.workflows import load_workflow
 
 
 def scarf_plan(tmp_path):
@@ -26,10 +28,13 @@ def scarf_plan(tmp_path):
 
 
 def test_scarfbench_snapshot_separates_agent_and_grading_inputs(tmp_path):
+    from harbor.models.task.task import Task
+
     plan = scarf_plan(tmp_path)
     manifest = prepare_dataset(plan)
     task = manifest["tasks"][0]
     root = Path(task["path"])
+    assert Task(root).config.steps is None
     assert task["metadata"]["instance_id"] == "business_domain/cart/jakarta-to-quarkus"
     assert (root / "environment/source/Main.java").read_text() == "jakarta"
     assert not (root / "environment/source/Dockerfile").exists()
@@ -43,6 +48,121 @@ def test_scarfbench_snapshot_separates_agent_and_grading_inputs(tmp_path):
     (Path(plan["benchmark_config"]["benchmark_cache_dir"]) / target / "Main.java").write_text("changed")
     verify_manifest(manifest)
     assert prepare_dataset(plan)["tasks"][0]["sha256"] != task["sha256"]
+
+
+def test_kantra_workflow_export_and_plan_gate(tmp_path):
+    from harbor.models.task.task import Task
+    from harbor.models.trial.paths import TrialPaths
+
+    plan = scarf_plan(tmp_path)
+    plan["workflow"] = load_workflow("kantra-controller", tmp_path, "scarfbench", ["goose"])
+    root = Path(prepare_dataset(plan)["tasks"][0]["path"])
+    task = Task(root)
+    assert [step.name for step in task.config.steps] == ["plan", "execute", "verify"]
+    assert all(step.agent.timeout_sec == 900 for step in task.config.steps)
+    assert task.config.multi_step_reward_strategy.value == "final"
+    assert "kantra.linux.${asset}.zip" in (root / "environment/Dockerfile").read_text()
+    assert "COPY skills/kantra/SKILL.md" in (root / "environment/Dockerfile").read_text()
+    assert (root / "environment/skills/kantra/SKILL.md").is_file()
+    assert (root / "environment/kantra-plan.sh").is_file()
+    assert (root / "steps/plan/instruction.md").is_file()
+
+    work = tmp_path / "work"
+    findings = work / ".konveyor/kantra"
+    findings.mkdir(parents=True)
+    (findings / "output.yaml").write_text("- name: quarkus\n  violations:\n    ejb-rule:\n      incidents: []\n")
+    (findings / "violations-summary.md").write_text("## ejb-rule\n")
+    (findings / "analysis.ok").write_text("success\n")
+    (work / ".konveyor/kantra.log").write_text("analysis complete\n")
+    (work / "PLAN.md").write_text("Migrate EJB to CDI and build with Maven.\n")
+
+    class Environment:
+        async def download_dir(self, source, destination):
+            shutil.copytree(work / source.removeprefix("/work/"), destination)
+
+        async def download_file(self, source, destination):
+            shutil.copy2(work / source.removeprefix("/work/"), destination)
+
+    trial = TrialPaths(tmp_path / "trial")
+    trial.verifier_dir.mkdir(parents=True)
+    verifier = BenchmarkVerifier(task=task, trial_paths=trial, environment=Environment(),
+                                 benchmark_config=plan["benchmark_config"], step_name="plan")
+    assert asyncio.run(verifier.verify()).rewards == {"reward": 1}
+    assert (trial.verifier_dir / "kantra-plan/PLAN.md").is_file()
+    assert json.loads((trial.verifier_dir / "kantra-plan/summary.json").read_text()) == {"violations": 1}
+    (findings / "analysis.ok").unlink()
+    failed_trial = TrialPaths(tmp_path / "failed-trial")
+    failed_trial.verifier_dir.mkdir(parents=True)
+    failed_verifier = BenchmarkVerifier(task=task, trial_paths=failed_trial, environment=Environment(),
+                                        benchmark_config=plan["benchmark_config"], step_name="plan")
+    with pytest.raises(RuntimeError, match="analysis.ok"):
+        asyncio.run(failed_verifier.verify())
+
+
+def test_user_workflow_exports_without_benchmark_specific_stage_code(tmp_path):
+    from harbor.models.task.task import Task
+    from harbor.models.trial.paths import TrialPaths
+
+    source = tmp_path / "custom"
+    source.mkdir()
+    (source / "plan.md").write_text("Write a plan to /work/PLAN.md.\n")
+    (source / "finish.md").write_text("Finish the migration.\n")
+    (source / "workflow.yaml").write_text("""\
+version: 1
+name: custom-migration
+steps:
+  - name: plan
+    instruction: plan.md
+    timeout_sec: 25
+    gate:
+      type: artifacts
+      archive: [PLAN.md]
+      required: [PLAN.md]
+  - name: finish
+    instruction: finish.md
+    timeout_sec: 30
+    gate:
+      type: native
+exclude_from_grading: [PLAN.md]
+""")
+    plan = scarf_plan(tmp_path)
+    plan["workflow"] = load_workflow("./custom", tmp_path, "scarfbench", ["goose"])
+    root = Path(prepare_dataset(plan)["tasks"][0]["path"])
+    task = Task(root)
+    assert [step.name for step in task.config.steps] == ["plan", "finish"]
+    assert [step.agent.timeout_sec for step in task.config.steps] == [25, 30]
+    assert (root / "steps/plan/instruction.md").read_text() == "Write a plan to /work/PLAN.md.\n"
+    assert json.loads((root / "tests/workflow.json").read_text())["name"] == "custom-migration"
+    work = tmp_path / "work"
+    work.mkdir()
+    (work / "PLAN.md").write_text("A migration plan.\n")
+
+    class Environment:
+        async def download_file(self, source_path, destination):
+            shutil.copy2(work / source_path.removeprefix("/work/"), destination)
+
+    trial = TrialPaths(tmp_path / "trial")
+    trial.verifier_dir.mkdir(parents=True)
+    verifier = BenchmarkVerifier(task=task, trial_paths=trial, environment=Environment(),
+                                 benchmark_config=plan["benchmark_config"], step_name="plan")
+    assert asyncio.run(verifier.verify()).rewards == {"reward": 1}
+    assert (trial.verifier_dir / "workflow-plan/PLAN.md").is_file()
+    (source / "plan.md").write_text("Changed after resolution.\n")
+    with pytest.raises(ValueError, match="changed after resolution"):
+        prepare_dataset(plan)
+
+
+def test_scarfbench_workflow_artifacts_do_not_enter_native_candidate(tmp_path):
+    for name in ("PLAN.md", "TODO.md"):
+        (tmp_path / name).write_text("planning only")
+    for name in (".konveyor", ".goosehints"):
+        (tmp_path / name).mkdir()
+        (tmp_path / name / "report.txt").write_text("planning only")
+    (tmp_path / "pom.xml").write_text("application file")
+
+    strip_workflow_artifacts(tmp_path, ("PLAN.md", "TODO.md", ".konveyor", ".goosehints"))
+
+    assert {path.name for path in tmp_path.iterdir()} == {"pom.xml"}
 
 
 def test_unknown_subset_fails_before_running(tmp_path):

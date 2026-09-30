@@ -7,7 +7,7 @@ import pytest
 import yaml
 
 from acb.cli import main
-from acb.interactive_run import RunDraft, finish
+from acb.interactive_run import RunDraft, _Screen, bundled_workflows, finish
 
 
 @pytest.fixture
@@ -39,6 +39,121 @@ def test_new_run_save_resolves_screen_values(configured):
     assert set(document["harnesses"]) == {"goose", "pi"}
     assert document["subset"] == ["task-1", "task-2"]
     assert document["requested_config"]["source_file"] == str(path)
+
+
+def test_bundled_workflow_is_selectable_and_saved(configured):
+    assert "kantra-controller" in bundled_workflows()
+    draft = RunDraft.create()
+    draft.set("benchmark", "scarfbench")
+    draft.set("workflow", "kantra-controller")
+    path = configured / "with-workflow.yaml"
+    document = finish(draft, "save", path).to_dict()
+    assert yaml.safe_load(path.read_text())["workflow"] == "kantra-controller"
+    assert document["workflow"]["name"] == "kantra-controller"
+    assert document["requested_config"]["workflow"] == "kantra-controller"
+
+
+def test_workflow_editor_selects_bundled_custom_and_none(configured, monkeypatch):
+    draft = RunDraft.create()
+    screen = _Screen(None, None)
+    monkeypatch.setattr(screen, "menu", lambda *args, **kwargs: "kantra-controller")
+    screen.edit(draft, "workflow")
+    assert draft.value("workflow") == "kantra-controller"
+
+    monkeypatch.setattr(screen, "menu", lambda *args, **kwargs: "Enter workflow directory...")
+    monkeypatch.setattr(screen, "prompt", lambda *args, **kwargs: "./my-workflow")
+    screen.edit(draft, "workflow")
+    assert draft.value("workflow") == "./my-workflow"
+
+    monkeypatch.setattr(screen, "menu", lambda *args, **kwargs: "No workflow")
+    screen.edit(draft, "workflow")
+    assert draft.value("workflow") is None
+
+
+def test_custom_workflow_path_resolves_relative_to_saved_yaml(configured):
+    workflow = configured / "my-workflow"
+    workflow.mkdir()
+    (workflow / "instruction.md").write_text("Finish the task.\n")
+    (workflow / "workflow.yaml").write_text("""version: 1
+name: my-workflow
+benchmarks: [scarfbench]
+harnesses: [goose]
+steps:
+  - name: finish
+    instruction: instruction.md
+    timeout_sec: 60
+    gate: {type: native}
+""")
+    draft = RunDraft.create()
+    draft.set("benchmark", "scarfbench")
+    draft.set("workflow", "./my-workflow")
+    path = configured / "custom.yaml"
+    document = finish(draft, "save", path).to_dict()
+    assert yaml.safe_load(path.read_text())["workflow"] == "./my-workflow"
+    assert document["workflow"]["source_dir"] == str(workflow)
+
+
+def test_new_run_can_review_workflow_relative_to_future_save_path(configured, monkeypatch):
+    destination = configured / "runs" / "run.yaml"
+    workflow = destination.parent / "my-workflow"
+    workflow.mkdir(parents=True)
+    (workflow / "instruction.md").write_text("Finish the task.\n")
+    (workflow / "workflow.yaml").write_text("""version: 1
+name: my-workflow
+benchmarks: [scarfbench]
+harnesses: [goose]
+steps:
+  - name: finish
+    instruction: instruction.md
+    timeout_sec: 60
+    gate: {type: native}
+""")
+    draft = RunDraft.create()
+    draft.set("benchmark", "scarfbench")
+    draft.set("workflow", "my-workflow")
+    monkeypatch.setattr(RunDraft, "create", classmethod(lambda cls, config_dir=None: draft))
+    screen = _Screen(None, None)
+    actions = iter(["Create new run", "Review", "Save and run"])
+
+    def choose(title, options, **kwargs):
+        action = next(actions)
+        assert action in options
+        return action
+
+    monkeypatch.setattr(screen, "menu", choose)
+    monkeypatch.setattr(screen, "prompt", lambda *args, **kwargs: str(destination))
+    document = screen.run().to_dict()
+    assert document["workflow"]["source_dir"] == str(workflow)
+    assert yaml.safe_load(destination.read_text())["workflow"] == "my-workflow"
+
+
+def test_workflow_validation_and_unsaved_edit(configured):
+    path = configured / "loaded.yaml"
+    path.write_text("""# keep this comment
+run_id: workflow-test
+benchmark: scarfbench
+harness: goose
+model: local
+workflow: kantra-controller
+""")
+    original = path.read_bytes()
+    draft = RunDraft.load(path)
+    draft.set("workflow", None)
+    document = finish(draft, "unsaved").to_dict()
+    assert document["workflow"] is None
+    assert document["requested_config"]["workflow"] is None
+    assert path.read_bytes() == original
+    finish(draft, "save", path)
+    assert "# keep this comment" in path.read_text()
+    assert "workflow" not in yaml.safe_load(path.read_text())
+
+    draft.set("workflow", "kantra-controller")
+    draft.set("benchmark", "swebench-lite")
+    with pytest.raises(ValueError, match="does not support benchmarks"):
+        finish(draft, "unsaved")
+    draft.set("workflow", "./missing-workflow")
+    with pytest.raises(FileNotFoundError, match="workflow definition not found"):
+        finish(draft, "unsaved")
 
 
 def test_loaded_edit_preserves_comments_and_advanced_fields(configured):

@@ -255,6 +255,10 @@ def resolve(cfg: RunConfig, registries: Registries | None = None) -> ResolvedPla
         raise ValueError("benchmark.grade_tolerance must be a finite nonnegative number")
     if "offline" in benchmark and type(benchmark["offline"]) is not bool:
         raise ValueError("benchmark.offline must be a boolean")
+    from acb.workflows import load_workflow
+    workflow = load_workflow(cfg.workflow, base, name, cfg.harnesses) if cfg.workflow else None
+    if workflow and (name not in ("scarfbench", "swebench", "swebench-lite") or benchmark.get("path")):
+        raise ValueError("run-level workflows currently require an ACB-exported ScarfBench or SWE-bench task")
     for key in ("max_workers", "validate_timeout_minutes"):
         if key in benchmark:
             _positive(benchmark[key], "benchmark." + key)
@@ -423,6 +427,7 @@ def resolve(cfg: RunConfig, registries: Registries | None = None) -> ResolvedPla
         "requested_config": requested_config(requested),
         "protocol_version": 1, "catalog_revision": catalog["revision"],
         "run_id": cfg.run_id, "benchmark": name, "benchmark_config": benchmark,
+        "workflow": workflow,
         "execution_backend": backend, "environment": environment,
         "model_alias": cfg.model, "model": asdict(model), "harnesses": resolved,
         "proxy": cfg.proxy, "proxy_config": proxy_config,

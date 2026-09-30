@@ -108,6 +108,8 @@ Matched baseline, response-skill, RTK and context-compression examples for Harbo
 and SWE-bench through Harbor are in [config.example/phase4](config.example/phase4/README.md).
 See [Harbor operations](docs/harbor-operations.md) for functional evidence and runtime limits.
 
+To define your own staged run, see [staged workflows](docs/workflows.md).
+
 SWE-bench, SWE-bench Lite, and ScarfBench now use Harbor by default. See
 [benchmark migration](docs/harbor-benchmark-migration.md) for native grader
 dependencies, model-free controls, and retained grading evidence.
@@ -271,8 +273,11 @@ reused across instances and later runs under the same output directory.
 
 Run `acb run` in a terminal to open the full-screen setup UI. Create a run or
 load an existing YAML file, then select a benchmark, one or more harnesses, a
-configured model, task IDs or a limit, skills, extensions, timeout, and workers.
-The review screen validates the selection before offering **Save and run**,
+configured model, an optional workflow, task IDs or a limit, skills, extensions,
+timeout, and workers. The workflow selector lists bundled workflows and accepts
+a custom directory relative to the run YAML file (or current directory for an
+unsaved new run). The review screen validates compatibility with the selected
+benchmark and harnesses before offering **Save and run**,
 **Run without saving**, and **Cancel**. Save and run writes a YAML file; edits
 to a loaded file preserve settings and comments outside the form. Run without
 saving uses the edited values without changing the YAML file. Its run directory

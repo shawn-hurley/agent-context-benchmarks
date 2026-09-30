@@ -1,0 +1,53 @@
+version: 1
+name: kantra-controller
+benchmarks: [scarfbench]
+harnesses: [goose]
+reward_strategy: final
+agent_adapter: local-qwen-no-think
+environment:
+  dockerfile: Containerfile.kantra
+  assets:
+    - kantra-plan.sh
+    - kantra-summary.py
+    - no-think-proxy.py
+    - skills/kantra/SKILL.md
+  dockerfile_append: |
+    COPY kantra-plan.sh /opt/acb/kantra-plan.sh
+    COPY kantra-summary.py /opt/acb/kantra-summary.py
+    COPY no-think-proxy.py /opt/acb/no-think-proxy.py
+    COPY skills/kantra/SKILL.md /root/.agents/skills/kantra/SKILL.md
+    RUN chmod +x /opt/acb/kantra-plan.sh
+steps:
+  - name: plan
+    instruction: steps/plan.md
+    timeout_sec: 900
+    gate:
+      type: artifacts
+      evidence_dir: kantra-plan
+      archive:
+        - .konveyor/kantra/
+        - PLAN.md
+        - .konveyor/kantra.log
+      required:
+        - .konveyor/kantra/analysis.ok
+        - .konveyor/kantra/violations-summary.md
+        - PLAN.md
+      yaml_violations: .konveyor/kantra/output.yaml
+  - name: execute
+    instruction: steps/execute.md
+    timeout_sec: 900
+    gate:
+      type: artifacts
+      archive: [PLAN.md]
+      required: [PLAN.md]
+  - name: verify
+    instruction: steps/verify.md
+    timeout_sec: 900
+    gate:
+      type: native
+exclude_from_grading:
+  - PLAN.md
+  - TODO.md
+  - todo.md
+  - .konveyor
+  - .goosehints

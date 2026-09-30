@@ -15,6 +15,8 @@ import signal
 import sys
 from uuid import uuid4
 
+import yaml
+
 from harbor.models.verifier.result import VerifierResult
 from harbor.verifier.base import BaseVerifier
 
@@ -53,12 +55,20 @@ class BenchmarkVerifier(BaseVerifier):
 
     async def verify(self):
         record = json.loads((self.task.paths.tests_dir / "benchmark.json").read_text())
+        workflow_file = self.task.paths.tests_dir / "workflow.json"
+        workflow = json.loads(workflow_file.read_text()) if workflow_file.is_file() else None
+        if workflow:
+            step = next((item for item in workflow["steps"] if item["name"] == self.step_name), None)
+            if step is None:
+                raise ValueError(f"unknown workflow stage: {self.step_name!r}")
+            if step["gate"]["type"] == "artifacts":
+                return await self._artifact_gate(step["name"], step["gate"], workflow["workdir"])
         output = self.trial_paths.verifier_dir / "native"
         output.mkdir(parents=True, exist_ok=True)
         if record["benchmark"] == "scarfbench":
-            command, env = await self._scarfbench(record, output)
+            command, env = await self._scarfbench(record, output, workflow)
         else:
-            command, env = await self._swebench(record, output)
+            command, env = await self._swebench(record, output, workflow)
         code = await run_grader(command, cwd=output, env=env, log=output / "grader.log")
         status = output / "grade.json"
         if code != 0 or not status.is_file():
@@ -70,7 +80,43 @@ class BenchmarkVerifier(BaseVerifier):
         self.trial_paths.reward_json_path.write_text(json.dumps(rewards))
         return VerifierResult(rewards=rewards)
 
-    async def _scarfbench(self, record, output):
+    async def _artifact_gate(self, stage, gate, workdir):
+        evidence = self.trial_paths.verifier_dir / gate.get("evidence_dir", f"workflow-{stage}")
+        evidence.mkdir(parents=True, exist_ok=True)
+        try:
+            for item in gate["archive"]:
+                relative = item.rstrip("/")
+                target = evidence / relative
+                target.parent.mkdir(parents=True, exist_ok=True)
+                if item.endswith("/"):
+                    await self.environment.download_dir(workdir + "/" + relative, target)
+                else:
+                    await self.environment.download_file(workdir + "/" + relative, target)
+        except Exception as error:
+            raise RuntimeError(f"{stage} stage: missing workflow artifact: {error}") from error
+        for item in gate.get("required", []):
+            required = evidence / item
+            if not required.is_file() or not required.read_bytes().strip():
+                raise RuntimeError(f"{stage} stage: required artifact missing or empty: {item}")
+        if gate.get("yaml_violations"):
+            report = evidence / gate["yaml_violations"]
+            if not report.is_file():
+                raise RuntimeError(f"{stage} stage: violations report missing: {gate['yaml_violations']}")
+            try:
+                rulesets = yaml.safe_load(report.read_text())
+                if not isinstance(rulesets, list) or not all(isinstance(item, dict) for item in rulesets):
+                    raise ValueError("expected a list of rulesets")
+                if any(not isinstance(item.get("violations") or {}, dict) for item in rulesets):
+                    raise ValueError("ruleset violations must be mappings")
+                violations = sum(len(item.get("violations") or {}) for item in rulesets)
+            except (ValueError, TypeError, yaml.YAMLError) as error:
+                raise RuntimeError(f"{stage} stage: invalid violations report: {error}") from error
+            if violations < 1:
+                raise RuntimeError(f"{stage} stage: no parseable violations")
+            (evidence / "summary.json").write_text(json.dumps({"violations": violations}, indent=2))
+        return VerifierResult(rewards={"reward": 1})
+
+    async def _scarfbench(self, record, output, workflow=None):
         from acb.benchmarks.scarfbench import ScarfBench, _write_metadata_json
         config = dict(self.config)
         target = output / "benchmark"
@@ -80,6 +126,8 @@ class BenchmarkVerifier(BaseVerifier):
         run = bench._run_dir_for_instance(output, record["instance_id"])
         run.mkdir(parents=True)
         await self.environment.download_dir("/work", run / "output")
+        if workflow:
+            strip_workflow_artifacts(run / "output", workflow.get("exclude_from_grading", []))
         validate_candidate_tree(run / "output")
         shutil.copytree(self.task.paths.environment_dir / "source", run / "input")
         (run / "validation").mkdir()
@@ -110,7 +158,7 @@ class BenchmarkVerifier(BaseVerifier):
         command = [sys.executable, str(Path(__file__).with_name("benchmark_grade.py")), str(output / "request.json")]
         return command, env
 
-    async def _swebench(self, record, output):
+    async def _swebench(self, record, output, workflow=None):
         from acb.benchmarks.swebench import SWEBench, _ensure_swebench_venv
         async def capture(command):
             result = await self.environment.exec(command, timeout_sec=60)
@@ -120,7 +168,15 @@ class BenchmarkVerifier(BaseVerifier):
         await capture("git -C /testbed add -u")
         baseline = set((await capture("cat /tmp/.acb-baseline-untracked.txt")).splitlines())
         current = (await capture("git -C /testbed ls-files --others --exclude-standard")).splitlines()
+        excluded = tuple((workflow or {}).get("exclude_from_grading", []))
+        def workflow_artifact(path):
+            return any(path == prefix or path.startswith(prefix.rstrip("/") + "/") for prefix in excluded)
+        for path in (await capture("git -C /testbed diff --cached --name-only")).splitlines():
+            if workflow_artifact(path):
+                await capture("git -C /testbed reset -q HEAD -- " + shlex.quote(path))
         for path in SWEBench(self.config)._filter_excluded_paths([p for p in current if p not in baseline]):
+            if workflow_artifact(path):
+                continue
             # Match legacy staging semantics: a bad untracked path must not
             # discard a valid tracked-file patch.
             await self.environment.exec("git -C /testbed add -- " + shlex.quote(path), timeout_sec=30)
@@ -150,3 +206,13 @@ def validate_candidate_tree(root):
                 raise ValueError(f"candidate symlink escapes the project: {path.relative_to(root)}")
         elif not (path.is_file() or path.is_dir()):
             raise ValueError(f"unsupported candidate entry: {path.relative_to(root)}")
+
+
+def strip_workflow_artifacts(root, names):
+    """Remove declared workflow evidence from the native candidate copy."""
+    for name in names:
+        candidate_artifact = root / name
+        if candidate_artifact.is_dir() and not candidate_artifact.is_symlink():
+            shutil.rmtree(candidate_artifact)
+        else:
+            candidate_artifact.unlink(missing_ok=True)

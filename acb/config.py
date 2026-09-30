@@ -34,6 +34,7 @@ class RunConfig:
     benchmark: str  # key into benchmarks.yaml
     harness: str | list[str]  # key(s) into harnesses.yaml; str or list of str
     model: str  # model id sent to the proxy (drives Praxis routing)
+    workflow: str | None = None  # bundled name or path to a workflow directory
     proxy: str = "praxis"  # key into proxy.yaml
     subset: list[str] | None = None  # instance_ids; None = full split
     limit: int | None = None

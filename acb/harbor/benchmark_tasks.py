@@ -19,11 +19,15 @@ import yaml
 from acb.benchmarks import make_benchmark
 from acb.harbor.dataset import snapshot_local_task
 from acb.utils import normalize_instance_id_for_path
+from acb.workflows import validate_workflow_snapshot
 
 BENCHMARKS = {"scarfbench", "swebench", "swebench-lite"}
 
 
 def export_tasks(plan):
+    workflow = plan.get("workflow")
+    if workflow:
+        validate_workflow_snapshot(workflow)
     config = {**plan["benchmark_config"], "offline": plan["offline"],
               "container_backend": plan.get("environment", "podman")}
     benchmark = make_benchmark(plan["benchmark"], config)
@@ -60,7 +64,7 @@ def export_tasks(plan):
             record = {"benchmark": plan["benchmark"], "instance_id": instance.instance_id,
                       "extra": instance.extra}
             if plan["benchmark"] == "scarfbench":
-                export_scarfbench(root, instance, config)
+                export_scarfbench(root, instance, config, workflow=workflow)
                 workdir, conda = "/work", None
             else:
                 conda = export_swebench(root, instance, config, offline=plan["offline"])
@@ -71,17 +75,27 @@ def export_tasks(plan):
             (root / "tests/test.sh").write_text(
                 "#!/bin/sh\necho 'Use acb.harbor.benchmark_verifier:BenchmarkVerifier' >&2\nexit 1\n")
             runtime = '[metadata.acb_runtime]\n' + (f'conda_env = {json.dumps(conda)}\n' if conda else '')
-            (root / "task.toml").write_text(
-                'version = "1.0"\n' + runtime +
+            if workflow:
+                export_workflow(root, workflow, workdir)
+            task_toml = (
+                'version = "1.0"\n' +
+                ('multi_step_reward_strategy = "final"\n' if workflow else '') + runtime +
                 '\n[environment]\nbuild_timeout_sec = 3600\n' +
                 f'workdir = {json.dumps(workdir)}\n' +
                 '\n[agent]\ntimeout_sec = 1800\n' +
                 f'\n[verifier]\ntimeout_sec = {int(config.get("validate_timeout_minutes", 60)) * 60}\n')
+            if workflow:
+                for step in workflow["steps"]:
+                    task_toml += f'\n[[steps]]\nname = {json.dumps(step["name"])}\n'
+                    if step["gate"]["type"] == "artifacts":
+                        task_toml += 'min_reward = 1\n'
+                    task_toml += f'[steps.agent]\ntimeout_sec = {step["timeout_sec"]}\n'
+            (root / "task.toml").write_text(task_toml)
             paths.append(snapshot_local_task(root, cache))
     return paths
 
 
-def export_scarfbench(root, instance, config):
+def export_scarfbench(root, instance, config, *, workflow=None):
     from acb.benchmarks.scarfbench import _CONTAINERFILE, _HARNESS_FILES, _ensure_validation_harness
     info = instance.extra
     bundle = Path(config["benchmark_cache_dir"])
@@ -106,7 +120,7 @@ def export_scarfbench(root, instance, config):
     if image:
         inspected = subprocess.run([config["container_backend"], "image", "inspect", image,
                                     "--format", "{{.Id}}"], capture_output=True, text=True, timeout=30)
-        if inspected.returncode == 0:
+        if inspected.returncode == 0 and not (workflow and workflow.get("environment", {}).get("dockerfile")):
             identity = inspected.stdout.strip()
             if not re.fullmatch(r"(?:sha256:)?[a-f0-9]{64}", identity):
                 raise ValueError("container engine returned an invalid ScarfBench image identity")
@@ -115,6 +129,36 @@ def export_scarfbench(root, instance, config):
         # from the packaged recipe. Never require a local-only tag to exist
         # in a remote registry.
     (root / "environment/Dockerfile").write_text(recipe + '\nCOPY source/ /work/\nWORKDIR /work\n')
+
+
+def export_workflow(root, workflow, workdir):
+    """Freeze workflow instructions and image assets into each Harbor task."""
+    source = Path(workflow["source_dir"])
+    environment = workflow.get("environment", {})
+    destination = root / "environment"
+    if environment.get("dockerfile"):
+        recipe = (source / environment["dockerfile"]).read_text()
+        if workdir == "/work":
+            recipe += "\nCOPY source/ /work/\n"
+        recipe += f"\nWORKDIR {workdir}\n"
+    else:
+        recipe = (destination / "Dockerfile").read_text()
+    recipe += "\n" + environment.get("dockerfile_append", "")
+    (destination / "Dockerfile").write_text(recipe)
+    for asset in environment.get("assets", []):
+        target = destination / asset
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source / asset, target)
+    for step in workflow["steps"]:
+        instruction = root / "steps" / step["name"] / "instruction.md"
+        instruction.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source / step["instruction"], instruction)
+    (root / "tests/workflow.json").write_text(json.dumps({
+        "name": workflow["name"], "sha256": workflow["sha256"],
+        "workdir": workdir,
+        "steps": [{"name": step["name"], "gate": step["gate"]} for step in workflow["steps"]],
+        "exclude_from_grading": workflow.get("exclude_from_grading", []),
+    }, indent=2))
 
 
 def export_swebench(root, instance, config, *, offline):

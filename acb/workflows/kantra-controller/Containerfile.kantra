@@ -1,0 +1,37 @@
+# Opt-in ScarfBench Kantra treatment image. Goose is installed by ACB's
+# existing per-architecture Goose.setup_container() path.
+FROM registry.fedoraproject.org/fedora:41
+
+RUN dnf install -y java-21-openjdk-devel maven git procps-ng python3 python3-pyyaml \
+        util-linux-core curl unzip \
+    && dnf clean all
+ENV JAVA_HOME=/usr/lib/jvm/java-21-openjdk
+ENV KANTRA_DIR=/opt/kantra
+
+# GitHub release v0.10.0-beta.1, API asset digests. Keep the bundled
+# rulesets, JDT language server, report, and Maven helpers together.
+ARG TARGETARCH
+RUN set -eux; \
+    case "${TARGETARCH:-$(uname -m)}" in \
+      amd64|x86_64) asset=amd64; digest=f2ef902d4de32a27839753417814454257d91d76dada1a4ad96a1feb698b863d;; \
+      arm64|aarch64) asset=arm64; digest=d258d725287adf10cb985e42bb9bd8f0b22e9c939f9cfd116868aed0328073ab;; \
+      *) echo 'Unsupported Kantra architecture' >&2; exit 1;; \
+    esac; \
+    curl -fL --retry 3 -o /tmp/kantra.zip "https://github.com/konveyor/kantra/releases/download/v0.10.0-beta.1/kantra.linux.${asset}.zip"; \
+    echo "${digest}  /tmp/kantra.zip" | sha256sum -c -; \
+    mkdir -p "$KANTRA_DIR"; unzip -q /tmp/kantra.zip -d "$KANTRA_DIR"; \
+    rm /tmp/kantra.zip; \
+    test -x "$KANTRA_DIR/kantra"; \
+    test -d "$KANTRA_DIR/rulesets"; \
+    test -d "$KANTRA_DIR/jdtls"; \
+    test -d "$KANTRA_DIR/jdtls/java-analyzer-bundle"; \
+    test -e "$KANTRA_DIR/java-external-provider"; \
+    test -s "$KANTRA_DIR/maven-index.txt"; \
+    test -d "$KANTRA_DIR/static-report"; \
+    ln -s "$KANTRA_DIR/kantra" /usr/local/bin/kantra; \
+    kantra version; java -version; mvn -version
+
+RUN git config --global user.email "acb@bench" \
+ && git config --global user.name "acb"
+WORKDIR /work
+CMD ["sleep", "infinity"]

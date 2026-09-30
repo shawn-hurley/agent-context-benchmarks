@@ -29,6 +29,27 @@ def test_shared_selection_and_baseline_parity():
     assert resolve(config(), r) == resolve(config(), r)
 
 
+def test_workflow_is_selected_at_run_level(tmp_path):
+    workflow = tmp_path / "flow"
+    workflow.mkdir()
+    (workflow / "instruction.md").write_text("Finish the task.\n")
+    (workflow / "workflow.yaml").write_text("""\
+version: 1
+name: user-flow
+steps:
+  - name: finish
+    instruction: instruction.md
+    timeout_sec: 60
+    gate: {type: native}
+""")
+    cfg = config(benchmark="scarfbench", harness="goose", workflow="./flow",
+                 source_file=str(tmp_path / "run.yaml"))
+    plan = resolve(cfg, registry()).to_dict()
+    assert plan["workflow"]["name"] == "user-flow"
+    assert plan["workflow"]["source_dir"] == str(workflow)
+    assert "workflow" not in plan["benchmark_config"]
+
+
 def test_per_harness_empty_list_replaces_shared():
     plan = resolve(config(extensions=["rtk"], overrides={"harnesses": {"pi": {"extensions": []}}}), registry()).to_dict()
     assert plan["harnesses"]["pi"]["execution_integrations"] == []

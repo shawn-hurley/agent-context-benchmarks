@@ -4,6 +4,7 @@ from __future__ import annotations
 import curses
 from copy import deepcopy
 from dataclasses import asdict, dataclass, field
+from importlib.resources import files
 import os
 from pathlib import Path
 import re
@@ -15,9 +16,17 @@ from acb.config import Registries, RunConfig
 from acb.resolver import HARNESSES, ResolvedPlan, defaults, resolve
 
 
-FORM_KEYS = ("run_id", "benchmark", "harness", "model", "subset", "limit",
+FORM_KEYS = ("run_id", "benchmark", "harness", "model", "workflow", "subset", "limit",
              "skills", "extensions", "timeout", "max_workers")
 UI_ERRORS = (OSError, ValueError, KeyError, TypeError, yaml.YAMLError)
+NO_WORKFLOW = "No workflow"
+CUSTOM_WORKFLOW = "Enter workflow directory..."
+
+
+def bundled_workflows() -> list[str]:
+    """Names accepted by the resolver's bundled-workflow lookup."""
+    return sorted(item.name for item in files("acb.workflows").iterdir()
+                  if item.is_dir() and item.joinpath("workflow.yaml").is_file())
 
 
 @dataclass
@@ -315,6 +324,29 @@ class _Screen:
 
     def edit(self, draft: RunDraft, key: str):
         current = draft.value(key)
+        if key == "workflow":
+            bundled = bundled_workflows()
+            options = [NO_WORKFLOW, *bundled]
+            if current and current not in bundled:
+                options.append(current)
+            options.append(CUSTOM_WORKFLOW)
+            result = self.menu("Select workflow", options,
+                               details=["Choose a bundled workflow or enter a directory path.",
+                                        "Custom paths are relative to the run YAML, or current directory if unsaved."])
+            if result == CUSTOM_WORKFLOW:
+                value = self.prompt("Workflow directory (relative to run YAML or current directory)", current or "")
+                if value is None:
+                    return
+                if not value:
+                    self.error = "Enter a workflow directory or choose No workflow"
+                    return
+                draft.set(key, value)
+            elif result == NO_WORKFLOW:
+                draft.set(key, None)
+            elif result is not None:
+                draft.set(key, result)
+            self.error = ""
+            return
         if key in {"benchmark", "harness", "model", "skills", "extensions"}:
             options = self.choices(draft, key)
             if not options:
@@ -370,7 +402,7 @@ class _Screen:
             except UI_ERRORS as error:
                 self.error = str(error)
         labels = {"run_id": "Run ID", "benchmark": "Benchmark", "harness": "Harnesses",
-                  "model": "Model", "subset": "Task IDs", "limit": "Task limit",
+                  "model": "Model", "workflow": "Workflow", "subset": "Task IDs", "limit": "Task limit",
                   "skills": "Skills", "extensions": "Extensions", "timeout": "Timeout (seconds)",
                   "max_workers": "Workers"}
         while True:
@@ -389,11 +421,21 @@ class _Screen:
                     title = f"Review: {summary['run_id']} · {summary['benchmark']} · {summary['model_alias']}"
                     choices = ["Save and run", "Run without saving", "Back", "Cancel"]
                 except UI_ERRORS as error:
-                    self.error = str(error)
-                    title = "Review: fix validation error"
-                    choices = ["Back", "Cancel"]
+                    custom = draft.value("workflow")
+                    needs_save_origin = (isinstance(error, FileNotFoundError) and draft.source is None
+                                         and isinstance(custom, str) and not Path(custom).is_absolute()
+                                         and custom not in bundled_workflows())
+                    if needs_save_origin:
+                        self.error = "Workflow path will be checked relative to the save file"
+                        title = "Review: choose a save path"
+                        choices = ["Save and run", "Back", "Cancel"]
+                    else:
+                        self.error = str(error)
+                        title = "Review: fix validation error"
+                        choices = ["Back", "Cancel"]
                 details = [
                     f"Harnesses: {', '.join(draft.config.harnesses)}",
+                    f"Workflow: {draft.value('workflow') or 'none'}",
                     f"Tasks: {', '.join(draft.config.subset) if draft.config.subset else 'all'}  Limit: {draft.config.limit or 'none'}",
                     f"Skills: {draft.config.skills or 'none'}  Extensions: {draft.config.extensions or 'none'}",
                     f"Timeout: {draft.value('timeout') or 'default'}  Workers: {draft.value('max_workers')}",
