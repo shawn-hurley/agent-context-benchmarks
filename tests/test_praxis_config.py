@@ -66,6 +66,22 @@ def test_same_api_route_does_not_strip_query_parameters():
     assert "url_rewrite" not in names
 
 
+def test_same_api_responses_uses_existing_observability_filters():
+    spec = ModelSpec(name="local-model", api="openai", endpoint="127.0.0.1:8000", tls=False)
+    for config in (build_config(8080, spec, "openai", include_token_count=True),
+                   build_container_config(8080, spec, "openai")):
+        observability = next(chain for chain in config["filter_chains"]
+                             if chain["name"] == "observability")
+        filters = observability["filters"]
+        names = [item["filter"] for item in filters]
+        assert names.index("token_usage_to_metrics") < names.index("request_classifier")
+        assert names.index("request_classifier") < names.index("benchmark_metrics")
+        assert "conditions" not in filters[names.index("request_classifier")]
+        router = next(item for chain in config["filter_chains"] for item in chain["filters"]
+                      if item["filter"] == "router")
+        assert any(route["path_prefix"] == "/v1/" for route in router["routes"])
+
+
 def test_upstream_authority_replaces_loopback_host_for_both_harness_apis():
     spec = ModelSpec(name="fixture", api="openai", endpoint="fixture-model:18080", tls=False)
     for api in ("openai", "anthropic"):

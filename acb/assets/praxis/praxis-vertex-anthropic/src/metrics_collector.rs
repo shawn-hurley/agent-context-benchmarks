@@ -100,11 +100,11 @@ pub struct BenchmarkMetric {
 
 /// Per-request state accumulated across `on_response_body` calls.
 #[derive(Clone, Debug, Default)]
-struct MetricsData {
+pub(crate) struct MetricsData {
     request_id: String,
     start_timestamp_ms: u64,
     endpoint: String,
-    status_code: u16,
+    pub(crate) status_code: u16,
     request_body_bytes: usize,
     response_body_bytes: usize,
     input_tokens: u64,
@@ -214,9 +214,8 @@ impl BenchmarkMetricsFilter {
     ///
     /// With `BodyMode::Stream` the filter sees individual network chunks, not
     /// the full assembled body, so this is only reliable when the entire JSON
-    /// body fits in the final chunk. Token counts from Vertex response headers
-    /// (set in `on_response`) are the primary source for non-streaming; this
-    /// is a fallback that fills in cache tokens if they appear in the body.
+    /// body fits in the final chunk. Token counts from response headers
+    /// (set in `on_response`) remain the fallback for split bodies.
     fn extract_from_json_body(body: &[u8], data: &mut MetricsData) {
         let value: serde_json::Value = match serde_json::from_slice(body) {
             Ok(v) => v,
@@ -310,6 +309,14 @@ impl BenchmarkMetricsFilter {
                     }
                 }
             }
+            "response.completed" => {
+                if let Some(usage) = evt
+                    .get("response")
+                    .and_then(|response| response.get("usage"))
+                {
+                    Self::extract_anthropic_usage(usage, data);
+                }
+            }
             // OpenAI/vLLM compatible streaming responses (ChatCompletionChunk).
             // For OpenAI-compatible servers (vLLM, Ollama, etc.), streaming responses
             // include a `usage` field that may be null except for the final chunk.
@@ -350,6 +357,59 @@ impl BenchmarkMetricsFilter {
     }
 
     fn extract_response_tools(evt: &serde_json::Value, data: &mut MetricsData) {
+        // Responses uses typed output items in both JSON bodies and SSE events.
+        if let Some(output) = evt.get("output").and_then(|value| value.as_array()) {
+            for item in output {
+                Self::record_responses_tool(item, data);
+            }
+        }
+        if let Some(output) = evt
+            .get("response")
+            .and_then(|value| value.get("output"))
+            .and_then(|value| value.as_array())
+        {
+            for item in output {
+                Self::record_responses_tool(item, data);
+            }
+        }
+        if let Some(item) = evt.get("item") {
+            if let (Some(index), Some(id)) = (
+                evt.get("output_index").and_then(|value| value.as_u64()),
+                item.get("call_id").and_then(|value| value.as_str()),
+            ) {
+                data.response_tool_ids_by_index
+                    .insert(index as usize, id.to_string());
+            }
+            Self::record_responses_tool(item, data);
+        }
+        if let Some(index) = evt.get("output_index").and_then(|value| value.as_u64()) {
+            if let Some(id) = data
+                .response_tool_ids_by_index
+                .get(&(index as usize))
+                .cloned()
+            {
+                match evt.get("type").and_then(|value| value.as_str()) {
+                    Some("response.function_call_arguments.delta") => {
+                        if let Some(delta) = evt.get("delta").and_then(|value| value.as_str()) {
+                            data.response_tool_arguments
+                                .entry(id)
+                                .or_default()
+                                .push_str(delta);
+                        }
+                    }
+                    Some("response.function_call_arguments.done") => {
+                        if let Some(arguments) =
+                            evt.get("arguments").and_then(|value| value.as_str())
+                        {
+                            data.response_tool_arguments
+                                .insert(id, arguments.to_string());
+                        }
+                    }
+                    _ => {}
+                }
+            }
+        }
+
         // Anthropic content_block_start carries the complete tool identity.
         if evt.get("type").and_then(|v| v.as_str()) == Some("content_block_start") {
             if let Some(block) = evt.get("content_block") {
@@ -426,6 +486,35 @@ impl BenchmarkMetricsFilter {
                     }
                 }
             }
+        }
+    }
+
+    fn record_responses_tool(item: &serde_json::Value, data: &mut MetricsData) {
+        if item.get("type").and_then(|value| value.as_str()) != Some("function_call") {
+            return;
+        }
+        let (Some(name), Some(id)) = (
+            item.get("name").and_then(|value| value.as_str()),
+            item.get("call_id").and_then(|value| value.as_str()),
+        ) else {
+            return;
+        };
+        if let Some(arguments) = item.get("arguments").and_then(|value| value.as_str()) {
+            if !arguments.is_empty() {
+                data.response_tool_arguments
+                    .insert(id.to_string(), arguments.to_string());
+            }
+        }
+        if !data
+            .response_tools
+            .iter()
+            .any(|tool| tool.call_id.as_deref() == Some(id))
+        {
+            data.response_tools.push(ToolIdentity {
+                name: name.to_string(),
+                detail: None,
+                call_id: Some(id.to_string()),
+            });
         }
     }
 
@@ -779,9 +868,7 @@ impl HttpFilter for BenchmarkMetricsFilter {
                     // See: https://tools.ietf.org/html/rfc7230#section-4.1
                     *body = Some(filtered);
                 } else if end_of_stream {
-                    // Non-streaming: attempt JSON parse on the final chunk.
-                    // Vertex headers (set in on_response) are the primary token source;
-                    // this fills in cache tokens if they appear in the body.
+                    // All non-streaming APIs follow the same final-chunk JSON path.
                     Self::extract_from_json_body(chunk, &mut data);
                 }
             }
@@ -924,5 +1011,51 @@ mod tests {
         assert_eq!(data.response_tools.len(), 1);
         assert_eq!(data.response_tools[0].name, "shell");
         assert_eq!(data.response_tools[0].detail.as_deref(), Some("sed"));
+    }
+
+    #[test]
+    fn extracts_responses_tools_from_split_sse_and_deduplicates_completed_output() {
+        let mut data = MetricsData::default();
+        let first = concat!(
+            "event: response.output_item.added\n",
+            "data: {\"type\":\"response.output_item.added\",\"output_index\":0,\"item\":{\"type\":\"function_call\",\"call_id\":\"call-1\",\"name\":\"Bash\",\"arguments\":\"\"}}\n\n",
+            "event: response.function_call_arguments.delta\n",
+            "data: {\"type\":\"response.function_call_arguments.delta\",\"output_index\":0,\"delta\":\"{\\\"command\\\":\\\"rg "
+        );
+        let second = concat!(
+            "TODO\\\"}\"}\n\n",
+            "event: response.output_item.done\n",
+            "data: {\"type\":\"response.output_item.done\",\"output_index\":0,\"item\":{\"type\":\"function_call\",\"call_id\":\"call-1\",\"name\":\"Bash\",\"arguments\":\"{\\\"command\\\":\\\"rg TODO\\\"}\"}}\n\n",
+            "event: response.completed\n",
+            "data: {\"type\":\"response.completed\",\"response\":{\"output\":[{\"type\":\"function_call\",\"call_id\":\"call-1\",\"name\":\"Bash\",\"arguments\":\"{\\\"command\\\":\\\"rg TODO\\\"}\"}],\"usage\":{\"input_tokens\":12,\"output_tokens\":4}}}\n\n"
+        );
+        let first_output =
+            BenchmarkMetricsFilter::process_sse_chunk(first.as_bytes(), &mut data, false);
+        let second_output =
+            BenchmarkMetricsFilter::process_sse_chunk(second.as_bytes(), &mut data, true);
+        assert_eq!(
+            [first_output.as_ref(), second_output.as_ref()].concat(),
+            [first.as_bytes(), second.as_bytes()].concat()
+        );
+        BenchmarkMetricsFilter::finalize_response_tool_details(&mut data);
+        assert_eq!(data.response_tools.len(), 1);
+        assert_eq!(data.response_tools[0].detail.as_deref(), Some("rg"));
+        assert_eq!(data.input_tokens, 12);
+        assert_eq!(data.output_tokens, 4);
+    }
+
+    #[test]
+    fn extracts_responses_tools_from_nonstreaming_json() {
+        let mut data = MetricsData::default();
+        let body = json!({"output": [
+            {"type": "function_call", "call_id": "call-1", "name": "Bash", "arguments": "{\"command\":\"pwd\"}"},
+            {"type": "function_call", "call_id": "call-2", "name": "Task", "arguments": "{\"subagent_type\":\"research\"}"}
+        ], "usage": {"input_tokens": 8, "output_tokens": 3}}).to_string();
+        BenchmarkMetricsFilter::extract_from_json_body(body.as_bytes(), &mut data);
+        BenchmarkMetricsFilter::finalize_response_tool_details(&mut data);
+        assert_eq!(data.response_tools.len(), 2);
+        assert_eq!(data.response_tools[0].detail.as_deref(), Some("pwd"));
+        assert_eq!(data.response_tools[1].detail.as_deref(), Some("research"));
+        assert_eq!(data.input_tokens, 8);
     }
 }

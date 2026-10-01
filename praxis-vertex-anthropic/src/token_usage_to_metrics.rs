@@ -7,6 +7,7 @@
 //! access to both token_count's extracted tokens (in metadata) and context data
 //! like status, duration, etc.
 
+use crate::metrics_collector::MetricsData;
 use async_trait::async_trait;
 use bytes::Bytes;
 use lazy_static::lazy_static;
@@ -123,6 +124,25 @@ impl TokenUsageToMetricsFilter {
         Ok(Box::new(Self))
     }
 
+    fn merge_tool_calls(
+        request_type: Option<ContentType>,
+        request_tools: Vec<ToolIdentity>,
+        response_tools: Vec<ToolIdentity>,
+    ) -> (Option<ContentType>, Vec<ToolIdentity>, Vec<ToolIdentity>) {
+        if !response_tools.is_empty() {
+            let tool_results = if request_type == Some(ContentType::ToolResult) {
+                request_tools
+            } else {
+                Vec::new()
+            };
+            (Some(ContentType::ToolCall), response_tools, tool_results)
+        } else if request_type == Some(ContentType::ToolResult) {
+            (request_type, Vec::new(), request_tools)
+        } else {
+            (request_type, request_tools, Vec::new())
+        }
+    }
+
     /// Check if request_id already exists in the metrics file.
     fn request_id_exists(request_id: &str) -> bool {
         match File::open(METRICS_FILE_PATH) {
@@ -219,8 +239,7 @@ impl HttpFilter for TokenUsageToMetricsFilter {
         &self,
         _ctx: &mut HttpFilterContext<'_>,
     ) -> Result<FilterAction, FilterError> {
-        // Defer all metric writing to on_response_body at end_of_stream,
-        // when token metadata has been populated by benchmark_metrics or token_count.
+        // Defer metric writing until benchmark_metrics has completed the body.
         Ok(FilterAction::Continue)
     }
 
@@ -240,9 +259,9 @@ impl HttpFilter for TokenUsageToMetricsFilter {
         let request_id = ctx.request_id().unwrap_or("-").to_string();
         let endpoint = ctx.request.uri.path().to_string();
         let status_code = ctx
-            .response_header
-            .as_ref()
-            .map(|h| h.status.as_u16())
+            .extensions
+            .get::<MetricsData>()
+            .map(|data| data.status_code)
             .unwrap_or(0);
         let request_body_bytes = ctx.request_body_bytes as usize;
         let response_body_bytes = ctx.response_body_bytes as usize;
@@ -267,38 +286,22 @@ impl HttpFilter for TokenUsageToMetricsFilter {
             .get::<ResponseToolCalls>()
             .map(|calls| calls.0.clone())
             .unwrap_or_default();
-        let (
-            content_type,
-            tool_name,
-            tool_detail,
-            mut tools,
-            mut tool_results,
-            tool_count,
-            message_count,
-        ) = if let Some(classification) = ctx.extensions.get::<RequestClassification>() {
-            (
-                Some(classification.content_type.clone()),
-                classification.tool_name.clone(),
-                classification.tool_detail.clone(),
-                classification.tools.clone(),
-                Vec::new(),
-                classification.tool_count,
-                classification.message_count,
-            )
-        } else {
-            (None, None, None, Vec::new(), Vec::new(), None, None)
-        };
-
-        if !response_tools.is_empty() {
-            tool_results = tools;
-            tools = response_tools;
-        }
+        let (content_type, tool_name, tool_detail, request_tools, tool_count, message_count) =
+            if let Some(classification) = ctx.extensions.get::<RequestClassification>() {
+                (
+                    Some(classification.content_type.clone()),
+                    classification.tool_name.clone(),
+                    classification.tool_detail.clone(),
+                    classification.tools.clone(),
+                    classification.tool_count,
+                    classification.message_count,
+                )
+            } else {
+                (None, None, None, Vec::new(), None, None)
+            };
+        let (content_type, tools, tool_results) =
+            Self::merge_tool_calls(content_type, request_tools, response_tools);
         let response_first = tools.first();
-        let content_type = if !tools.is_empty() {
-            Some(ContentType::ToolCall)
-        } else {
-            content_type
-        };
         let tool_name = response_first.map(|tool| tool.name.clone()).or(tool_name);
         let tool_detail = response_first
             .and_then(|tool| tool.detail.clone())
@@ -338,5 +341,54 @@ impl HttpFilter for TokenUsageToMetricsFilter {
         }
 
         Ok(FilterAction::Continue)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{ContentType, TokenUsageToMetricsFilter, ToolIdentity};
+
+    fn tool(name: &str, id: &str) -> ToolIdentity {
+        ToolIdentity {
+            name: name.to_string(),
+            detail: None,
+            call_id: Some(id.to_string()),
+        }
+    }
+
+    #[test]
+    fn tool_results_stay_results_until_the_response_calls_another_tool() {
+        let result = tool("Bash", "call-1");
+        let (kind, calls, results) = TokenUsageToMetricsFilter::merge_tool_calls(
+            Some(ContentType::ToolResult),
+            vec![result.clone()],
+            Vec::new(),
+        );
+        assert_eq!(kind, Some(ContentType::ToolResult));
+        assert!(calls.is_empty());
+        assert_eq!(results, vec![result.clone()]);
+
+        let next_call = tool("Task", "call-2");
+        let (kind, calls, results) = TokenUsageToMetricsFilter::merge_tool_calls(
+            Some(ContentType::ToolResult),
+            vec![result.clone()],
+            vec![next_call.clone()],
+        );
+        assert_eq!(kind, Some(ContentType::ToolCall));
+        assert_eq!(calls, vec![next_call]);
+        assert_eq!(results, vec![result]);
+    }
+
+    #[test]
+    fn prompt_tools_are_not_recorded_as_tool_results() {
+        let response_call = tool("Bash", "call-1");
+        let (kind, calls, results) = TokenUsageToMetricsFilter::merge_tool_calls(
+            Some(ContentType::SystemPrompt),
+            Vec::new(),
+            vec![response_call.clone()],
+        );
+        assert_eq!(kind, Some(ContentType::ToolCall));
+        assert_eq!(calls, vec![response_call]);
+        assert!(results.is_empty());
     }
 }

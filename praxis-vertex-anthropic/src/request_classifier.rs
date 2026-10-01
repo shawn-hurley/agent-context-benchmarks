@@ -29,12 +29,22 @@ impl RequestClassifierFilter {
     fn classify_request(body: &Bytes, endpoint: &str) -> Option<RequestClassification> {
         let json: serde_json::Value = serde_json::from_slice(body).ok()?;
 
-        let is_openai = endpoint.contains("/v1/chat/completions");
-        let is_anthropic = endpoint.contains("/v1/messages");
-
-        if !is_openai && !is_anthropic {
-            return None;
-        }
+        type MessageClassifier = fn(
+            &[serde_json::Value],
+            bool,
+        ) -> (
+            ContentType,
+            Option<String>,
+            Option<String>,
+            Vec<ToolIdentity>,
+            u32,
+        );
+        let classify_messages: MessageClassifier = match endpoint {
+            "/v1/responses" => return Some(Self::classify_responses_request(&json)),
+            "/v1/chat/completions" => Self::classify_openai_request,
+            "/v1/messages" => Self::classify_anthropic_request,
+            _ => return None,
+        };
 
         let messages = json.get("messages").and_then(|m| m.as_array());
         let available_tools = json.get("tools").and_then(|t| t.as_array());
@@ -47,11 +57,7 @@ impl RequestClassifierFilter {
             if msgs.is_empty() {
                 (ContentType::Unknown, None, None, Vec::new(), 0)
             } else {
-                if is_openai {
-                    Self::classify_openai_request(msgs, system.is_some())
-                } else {
-                    Self::classify_anthropic_request(msgs, system.is_some())
-                }
+                classify_messages(msgs, system.is_some())
             }
         } else if system.is_some() {
             (ContentType::SystemPrompt, None, None, Vec::new(), 0)
@@ -73,6 +79,113 @@ impl RequestClassifierFilter {
             tools,
             tool_count,
             message_count,
+        })
+    }
+
+    fn classify_responses_request(json: &serde_json::Value) -> RequestClassification {
+        let input = json.get("input");
+        let items = input.and_then(|value| value.as_array());
+        let available_tools = json.get("tools").and_then(|value| value.as_array());
+        let message_count = items
+            .map(|items| items.len() as u32)
+            .or_else(|| input.and_then(|value| value.as_str()).map(|_| 1));
+        let has_instructions = json.get("instructions").is_some();
+
+        let (content_type, tools, tool_count) = match items.and_then(|items| items.last()) {
+            Some(last)
+                if last.get("type").and_then(|v| v.as_str()) == Some("function_call_output") =>
+            {
+                let results: Vec<_> = items
+                    .unwrap()
+                    .iter()
+                    .rev()
+                    .take_while(|item| {
+                        item.get("type").and_then(|v| v.as_str()) == Some("function_call_output")
+                    })
+                    .collect();
+                let tools = results
+                    .iter()
+                    .filter_map(|result| {
+                        let call_id = result.get("call_id")?.as_str()?;
+                        items
+                            .unwrap()
+                            .iter()
+                            .rev()
+                            .find(|item| {
+                                item.get("type").and_then(|v| v.as_str()) == Some("function_call")
+                                    && item.get("call_id").and_then(|v| v.as_str()) == Some(call_id)
+                            })
+                            .and_then(|call| Self::responses_tool_identity(call))
+                            .or_else(|| {
+                                Some(ToolIdentity {
+                                    name: "unknown".to_string(),
+                                    detail: None,
+                                    call_id: Some(call_id.to_string()),
+                                })
+                            })
+                    })
+                    .collect();
+                (ContentType::ToolResult, tools, results.len() as u32)
+            }
+            Some(last) if last.get("type").and_then(|v| v.as_str()) == Some("function_call") => {
+                let calls: Vec<_> = items
+                    .unwrap()
+                    .iter()
+                    .rev()
+                    .take_while(|item| {
+                        item.get("type").and_then(|v| v.as_str()) == Some("function_call")
+                    })
+                    .collect();
+                let tools = calls
+                    .iter()
+                    .rev()
+                    .filter_map(|call| Self::responses_tool_identity(call))
+                    .collect();
+                (ContentType::ToolCall, tools, calls.len() as u32)
+            }
+            Some(last) if last.get("role").and_then(|v| v.as_str()) == Some("assistant") => {
+                (ContentType::AssistantContinuation, Vec::new(), 0)
+            }
+            Some(_) if has_instructions && message_count == Some(1) => {
+                (ContentType::SystemPrompt, Vec::new(), 0)
+            }
+            Some(_) => (ContentType::UserMessage, Vec::new(), 0),
+            None if input.and_then(|value| value.as_str()).is_some() => (
+                if has_instructions {
+                    ContentType::SystemPrompt
+                } else {
+                    ContentType::UserMessage
+                },
+                Vec::new(),
+                0,
+            ),
+            None if has_instructions => (ContentType::SystemPrompt, Vec::new(), 0),
+            None => (ContentType::Unknown, Vec::new(), 0),
+        };
+        let first = tools.first();
+        RequestClassification {
+            content_type,
+            tool_name: first.map(|tool: &ToolIdentity| tool.name.clone()),
+            tool_detail: first.and_then(|tool| tool.detail.clone()),
+            tools,
+            tool_count: if tool_count > 0 {
+                Some(tool_count)
+            } else {
+                available_tools.map(|tools| tools.len() as u32)
+            },
+            message_count,
+        }
+    }
+
+    fn responses_tool_identity(call: &serde_json::Value) -> Option<ToolIdentity> {
+        let name = call.get("name")?.as_str()?.to_string();
+        Some(ToolIdentity {
+            detail: Self::extract_tool_detail(call, &name),
+            call_id: call
+                .get("call_id")
+                .and_then(|v| v.as_str())
+                .map(str::to_string),
+            name,
         })
     }
 
@@ -593,5 +706,70 @@ mod tests {
         .unwrap();
         assert_eq!(classification.tools[0].name, "bash");
         assert_eq!(classification.tools[0].detail.as_deref(), Some("rg"));
+    }
+
+    #[test]
+    fn classifies_responses_prompt_and_function_call_output() {
+        let prompt = json!({"instructions": "You are an agent", "input": "Find the TODOs", "tools": [{"type": "function", "name": "Bash"}]});
+        let classification = RequestClassifierFilter::classify_request(
+            &Bytes::from(serde_json::to_vec(&prompt).unwrap()),
+            "/v1/responses",
+        )
+        .unwrap();
+        assert_eq!(classification.content_type, ContentType::SystemPrompt);
+        assert_eq!(classification.message_count, Some(1));
+        assert_eq!(classification.tool_count, Some(1));
+
+        let result = json!({"input": [
+            {"type": "function_call", "call_id": "call-1", "name": "Bash", "arguments": "{\"command\":\"cd /tmp && rg TODO\"}"},
+            {"type": "function_call_output", "call_id": "call-1", "output": "matches"}
+        ]});
+        let classification = RequestClassifierFilter::classify_request(
+            &Bytes::from(serde_json::to_vec(&result).unwrap()),
+            "/v1/responses",
+        )
+        .unwrap();
+        assert_eq!(classification.content_type, ContentType::ToolResult);
+        assert_eq!(classification.tools[0].name, "Bash");
+        assert_eq!(classification.tools[0].detail.as_deref(), Some("rg"));
+        assert_eq!(classification.tools[0].call_id.as_deref(), Some("call-1"));
+    }
+
+    #[test]
+    fn classifies_responses_result_with_previous_response_id() {
+        let body = json!({"previous_response_id": "resp-1", "input": [
+            {"type": "function_call_output", "call_id": "call-2", "output": "done"}
+        ]});
+        let classification = RequestClassifierFilter::classify_request(
+            &Bytes::from(serde_json::to_vec(&body).unwrap()),
+            "/v1/responses",
+        )
+        .unwrap();
+        assert_eq!(classification.content_type, ContentType::ToolResult);
+        assert_eq!(classification.tools[0].name, "unknown");
+        assert_eq!(classification.tools[0].call_id.as_deref(), Some("call-2"));
+    }
+
+    #[test]
+    fn classifies_responses_latest_user_message_after_old_tool_result() {
+        let body = json!({"input": [
+            {"type": "function_call_output", "call_id": "call-1", "output": "done"},
+            {"role": "user", "content": "Now explain"}
+        ]});
+        let classification = RequestClassifierFilter::classify_request(
+            &Bytes::from(serde_json::to_vec(&body).unwrap()),
+            "/v1/responses",
+        )
+        .unwrap();
+        assert_eq!(classification.content_type, ContentType::UserMessage);
+    }
+
+    #[test]
+    fn ignores_other_endpoints() {
+        let body = Bytes::from_static(br#"{"messages":[{"role":"user","content":"hi"}]}"#);
+        assert!(
+            RequestClassifierFilter::classify_request(&body, "/v1/messages/count_tokens").is_none()
+        );
+        assert!(RequestClassifierFilter::classify_request(&body, "/v1/models").is_none());
     }
 }
