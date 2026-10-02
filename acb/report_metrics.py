@@ -155,21 +155,23 @@ def normalize_tool_interactions(metrics: list[dict]) -> list[dict]:
     while retaining the summed token cost of both model requests.
     """
     interactions: dict[str, dict] = {}
-    result_call_ids = {
-        (metric.get("instance_id"), metric.get("step_name"), tool.get("call_id"))
-        for metric in metrics
-        for tool in (metric.get("tool_results") or [])
-        if tool.get("call_id")
-    }
     anonymous_index = 0
     for metric in metrics:
-        if metric.get("content_type") not in {"tool_call", "tool_result"}:
+        kind = metric.get("content_type")
+        if kind not in {"tool_call", "tool_result"}:
             continue
         tools = tool_identities(metric)
-        if not tools:
-            tools = [{"name": "unknown", "detail": None, "call_id": None}]
-        token_share = metric_total_tokens(metric) / len(tools)
-        for tool_index, tool in enumerate(tools):
+        results = metric.get("tool_results") or []
+        events = []
+        if kind == "tool_call":
+            events.extend(("tool_call", tool) for tool in tools)
+            events.extend(("tool_result", tool) for tool in results)
+        else:
+            events.extend(("tool_result", tool) for tool in (results or tools))
+        if not events:
+            events = [(kind, {"name": "unknown", "detail": None, "call_id": None})]
+        token_share = metric_total_tokens(metric) / len(events)
+        for tool_index, (event_kind, tool) in enumerate(events):
             call_id = tool.get("call_id")
             if call_id:
                 key = str((metric.get("instance_id"), metric.get("step_name"), call_id))
@@ -185,6 +187,7 @@ def normalize_tool_interactions(metrics: list[dict]) -> list[dict]:
                 "source_types": set(),
                 "tokens": 0.0,
                 "duration_ms": 0.0,
+                "turns": [],
             })
             # Prefer the most informative detail if the paired records differ.
             if not interaction["detail"] and tool.get("detail"):
@@ -192,15 +195,16 @@ def normalize_tool_interactions(metrics: list[dict]) -> list[dict]:
             request_id = metric.get("request_id")
             if request_id and request_id not in interaction["request_ids"]:
                 interaction["request_ids"].append(request_id)
-            interaction["source_types"].add(metric["content_type"])
+            interaction["source_types"].add(event_kind)
             interaction["tokens"] += token_share
-            interaction["duration_ms"] += (metric.get("duration_ms") or 0) / len(tools)
+            interaction["duration_ms"] += (metric.get("duration_ms") or 0) / len(events)
+            turn = metric.get("turn_index")
+            if type(turn) is int and turn not in interaction["turns"]:
+                interaction["turns"].append(turn)
 
     normalized = []
     for interaction in interactions.values():
         source_types = interaction.pop("source_types")
-        if (*interaction["scope"], interaction.get("call_id")) in result_call_ids:
-            source_types.add("tool_result")
         interaction["source_types"] = sorted(source_types)
         interaction["complete_pair"] = source_types == {"tool_call", "tool_result"}
         interaction["call_only"] = source_types == {"tool_call"}
@@ -313,7 +317,7 @@ def prepare_timeline_data(metrics: list[dict]) -> dict:
 
 
 def shell_command_breakdown(metrics: list[dict]) -> dict:
-    """Extract and aggregate shell command usage from bash tool calls.
+    """Aggregate shell commands from normalized call/result interactions.
 
     Returns:
         {
@@ -324,30 +328,23 @@ def shell_command_breakdown(metrics: list[dict]) -> dict:
         Sorted by total_tokens (descending)
     """
     commands = {}
-
-    for m in metrics:
-        # Only process bash-executed commands
-        if m.get('tool_detail') == 'bash':
-            cmd = m.get('tool_name', 'unknown')
-            content_type = m.get('content_type')
-            tokens = metric_total_tokens(m)
-            turn = m.get('turn_index', 0)
-
-            if cmd not in commands:
-                commands[cmd] = {
-                    'calls': 0,
-                    'results': 0,
-                    'total_tokens': 0,
-                    'turns': []
-                }
-
-            if content_type == 'tool_call':
-                commands[cmd]['calls'] += 1
-            elif content_type == 'tool_result':
-                commands[cmd]['results'] += 1
-
-            commands[cmd]['total_tokens'] += tokens
-            commands[cmd]['turns'].append(turn)
+    for interaction in normalize_tool_interactions(metrics):
+        name = interaction['name']
+        detail = interaction['detail']
+        if name.lower() in {'bash', 'shell'}:
+            command = detail or 'unknown'
+        elif detail and detail.lower() == 'bash':
+            # Older records stored the command in tool_name and the tool in detail.
+            command = name
+        else:
+            continue
+        entry = commands.setdefault(command, {
+            'calls': 0, 'results': 0, 'total_tokens': 0, 'turns': [],
+        })
+        entry['calls'] += int('tool_call' in interaction['source_types'])
+        entry['results'] += int('tool_result' in interaction['source_types'])
+        entry['total_tokens'] += interaction['tokens']
+        entry['turns'].extend(interaction['turns'])
 
     # Sort by total tokens (descending)
     return dict(sorted(commands.items(), key=lambda x: x[1]['total_tokens'], reverse=True))

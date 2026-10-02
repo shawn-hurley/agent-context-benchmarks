@@ -16,7 +16,7 @@ import sys
 installed = Path(sys.argv[1]).resolve()
 sys.path.insert(0, str(installed))
 for name in ("acb.cli", "acb.auth", "acb.proxy.metrics", "acb.harbor.worker",
-             "acb.harbor.benchmark_verifier"):
+             "acb.harbor.benchmark_verifier", "acb.report_bundle"):
     module = importlib.import_module(name)
     assert Path(module.__file__).resolve().is_relative_to(installed), name
 for name in ("acb.runner", "acb.integrations.legacy", "acb.integrations.runtime",
@@ -29,8 +29,13 @@ for pattern in ("catalog/*.yaml", "scarfbench/Containerfile", "scarfbench/prompt
                 "integrations/assets/rtk/*.py", "integrations/assets/rtk/*.ts",
                 "integrations/assets/rtk/*.mjs", "integrations/assets/caveman/*.py",
                 "integrations/assets/caveman/*.ts", "integrations/assets/caveman/Containerfile",
-                "harnesses/assets/*.json", "catalog/caveman/*.md"):
+                "harnesses/assets/*.json", "catalog/caveman/*.md",
+                "report_assets/*.js", "report_assets/*.md"):
     assert list(root.glob(pattern)), pattern
+from acb.html_components import render_page, Section
+page = render_page("Offline report", [Section("<canvas id=\"chart\"></canvas>", {"chart": {"type": "bar", "data": {"labels": [], "datasets": []}}})])
+assert "cdn.jsdelivr.net" not in page
+assert "Chart" in page
 from acb.harbor.dataset import prepare_dataset, verify_manifest
 work = Path.cwd()
 bundle = work / "bundle"

@@ -94,8 +94,9 @@ def test_cross_harness_comparison_matches_benchmark_and_links(tmp_path):
     write_reports([a,b],tmp_path/'report.html')
     import re
     links=re.findall('href="([^"]+)"',(tmp_path/'report.html').read_text())
-    assert len(links)==2
-    assert all((tmp_path/link).exists() for link in links)
+    detail_links = [link for link in links if link.endswith('.html')]
+    assert len(detail_links)==2
+    assert all((tmp_path/link).exists() for link in detail_links)
     from acb.comparison_html import build_report
     assert 'Worse' in build_report([a,b])
 

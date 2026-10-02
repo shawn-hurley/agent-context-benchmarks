@@ -1,6 +1,6 @@
 """Tests for report-time tool call/result normalization."""
 
-from acb.report_metrics import content_type_breakdown, normalize_tool_interactions
+from acb.report_metrics import content_type_breakdown, normalize_tool_interactions, shell_command_breakdown
 
 
 def _record(request_id, content_type, tokens, call_id, name="bash"):
@@ -65,3 +65,44 @@ def test_duplicate_call_ids_are_one_logical_interaction():
     assert len(interactions) == 1
     assert interactions[0]["tokens"] == 300
     assert interactions[0]["request_ids"] == ["request-call-1", "request-call-2"]
+
+
+def test_result_and_next_call_in_one_response_keep_both_interactions():
+    first = _record("request-1", "tool_call", 100, "call-1", name="Bash")
+    second = _record("request-2", "tool_call", 200, "call-2", name="Task")
+    second["tool_results"] = [{"name": "Bash", "call_id": "call-1"}]
+
+    interactions = normalize_tool_interactions([first, second])
+
+    assert [(item["call_id"], item["complete_pair"], item["call_only"])
+            for item in interactions] == [("call-1", True, False), ("call-2", False, True)]
+    assert sum(item["tokens"] for item in interactions) == 300
+    assert interactions[0]["request_ids"] == ["request-1", "request-2"]
+
+
+def test_result_without_matching_call_remains_visible_with_next_call():
+    record = _record("request-2", "tool_call", 80, "call-2", name="Task")
+    record["tool_results"] = [{"name": "Bash", "call_id": "call-1"}]
+
+    interactions = normalize_tool_interactions([record])
+
+    assert {(item["call_id"], item["result_only"]) for item in interactions} == {
+        ("call-2", False), ("call-1", True),
+    }
+    assert sum(item["tokens"] for item in interactions) == 80
+
+
+def test_shell_breakdown_reads_new_tool_identities_and_legacy_shape():
+    modern_call = _record("request-1", "tool_call", 10, "call-1", name="Bash")
+    modern_call["tools"][0]["detail"] = "rg"
+    modern_result = _record("request-2", "tool_result", 20, "call-1", name="Bash")
+    modern_result["tools"][0]["detail"] = "rg"
+    legacy = {"request_id": "request-3", "content_type": "tool_call",
+              "input_tokens": 5, "output_tokens": 0, "tool_name": "git", "tool_detail": "bash"}
+
+    commands = shell_command_breakdown([modern_call, modern_result, legacy])
+
+    assert commands["rg"]["calls"] == commands["rg"]["results"] == 1
+    assert commands["rg"]["total_tokens"] == 30
+    assert commands["git"]["calls"] == 1
+    assert commands["git"]["total_tokens"] == 5

@@ -9,12 +9,33 @@ totals. The current cleanup status lives in [the cleanup record](harbor-cleanup.
 ```sh
 acb report runs/example --html
 acb compare runs/baseline runs/candidate runs/another-candidate --html runs/comparison.html
+acb report runs/example --bundle example-report.zip
+acb compare runs/baseline runs/candidate --bundle comparison-report.zip
 ```
 
-The output consists of an overview and `<report-name>-benchmarks/` detail pages.
-Comparisons also write `<report-name>.comparison.json`. Keep these files together.
-For an in-memory document, use `acb.comparison_html.build_report(run_dirs)`;
-`write_reports(run_dirs, destination)` writes the bundle.
+HTML output consists of an overview and `<report-name>-benchmarks/`, which contains
+detail pages, local scripts, and selected trial evidence. Comparisons also write
+`<report-name>.comparison.json`. Keep the HTML, its directory, and comparison JSON together.
+
+Use `--bundle FILE.zip` to share a report. Extract the archive and open `index.html`;
+charts, filters, sorting, and navigation work offline without a web server. The ZIP
+includes its comparison JSON when applicable. `--bundle` works by itself or alongside
+`--html`. Source diffs and agent patches are exported in full; log previews retain
+their existing size limits. Startup configuration is excluded and structured credential fields are redacted.
+Saved logs and source changes retain their application content.
+
+Overview tables support search, result/harness filters, incomplete-measurement filters,
+and sorting. Comparisons also filter grade changes and initially list regressions first.
+Each benchmark and its diagnostics move together during sorting and filtering.
+Detail pages link back to the overview, to adjacent benchmarks, and to their sections.
+
+Comparison summaries show grade-outcome counts, settings that differ between runs,
+and paired token bars over comparable measurements only. Grades keep their original
+scale and benchmark-specific direction; no normalized suite score is introduced.
+
+For an in-memory document, use `acb.comparison_html.build_report(run_dirs)`; it embeds
+local scripts inline. `write_reports(run_dirs, destination)` writes portable files;
+`acb.report_bundle.write_bundle(run_dirs, destination)` writes a ZIP.
 
 ## Module boundaries
 
@@ -26,6 +47,9 @@ For an in-memory document, use `acb.comparison_html.build_report(run_dirs)`;
 | `acb/html_components.py` | Compose documents/sections, allocate chart IDs, escape text/JSON and bound evidence previews. |
 | `acb/html_report.py` | Render benchmark evidence, requests, tool statistics, charts and patch previews. |
 | `acb/comparison_html.py` | Compose comparison overviews and coordinate in-memory or file output. |
+| `acb/report_ui.py` | Result table controls, navigation, settings differences, and comparison bars. |
+| `acb/report_bundle.py` | Export selected evidence and package portable ZIPs. |
+| `acb/report_assets/` | Pinned Chart.js distribution/license and local table interaction script. |
 
 A `ReportSource` owns one run/suite. `HarnessReport` reads its report and indexes
 metrics, usage and classification records once. Detail pages select the benchmark's
@@ -52,13 +76,16 @@ Patch views are escaped text, removing the separate diff2html script dependency.
 
 Each artifact preview reads at most 32 KiB, with at most 40 artifacts and 128 KiB
 of artifact content per trial. Large structured evidence and patches also have
-bounded previews. Local file links expose full original evidence without embedding
-it all. Links need the original run directory, so copied bundles retain previews
-but may lose access to full originals. Evidence symlinks outside the trial are not
-followed for embedded previews.
+bounded previews. File reports export selected evidence with relative links, so copying or unzipping
+the generated report does not require the original run directory. Exported structured
+evidence redacts credential fields. Log previews select trial/transcript/grader/validation
+logs; startup configuration, Praxis configuration, and full source trees are excluded.
+Evidence text is stored with a `.txt` suffix and embedded previews stay escaped.
+Evidence symlinks outside the trial are not followed. In-memory reports retain original
+artifact links because they do not create an evidence directory.
 
-Chart.js loads from a CDN. When unavailable, evidence tables, statuses and patch
-previews remain readable. Request charts show captured observations; they do not
+Chart.js 4.5.1 is packaged locally with its MIT license; report rendering does not
+fetch scripts from a CDN. Request charts show captured observations; they do not
 turn incomplete measurements into comparable totals. Sparse request indices use
 missing values rather than fabricated zeros.
 
@@ -68,4 +95,6 @@ missing values rather than fabricated zeros.
 artifacts, one-time input loading, task selection, multiple candidates/harnesses,
 partial measurements and multi-step evidence. Comparison semantics remain covered
 by `tests/test_comparison.py`; chart transformations by usage/tool tests.
+`tests/test_report_bundle.py` covers relocated archives, local links/assets, exported
+patches, bounded evidence, credential-field redaction, and CLI bundle generation.
 Run the full gate described in [maintenance checks](../scripts/README.md).

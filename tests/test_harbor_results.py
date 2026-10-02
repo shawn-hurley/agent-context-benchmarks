@@ -34,6 +34,33 @@ def test_zero_traffic_failure_is_in_report(tmp_path):
     assert report["avg_total_tokens"] == 0
 
 
+def test_directory_submission_diff_is_saved_with_trial(tmp_path):
+    from acb.harbor.paths import job_dir
+    native = job_dir(tmp_path) / 'trial' / 'verifier' / 'native'
+    candidate = native / 'candidate'
+    before, after = candidate / 'input', candidate / 'output'
+    before.mkdir(parents=True)
+    after.mkdir()
+    (before / 'app.txt').write_text('original\n')
+    (after / 'app.txt').write_text('updated\n')
+    (native / 'prediction.json').write_text(json.dumps({
+        'instance_id': 'task', 'model_patch': None, 'output': str(candidate),
+    }))
+    plan = {'benchmark_config': {'reward_metric': 'reward', 'success_value': 1},
+            'harnesses': {'goose': {}}, 'run_id': 'test', 'benchmark': 'scarfbench',
+            'model': {'name': 'local'}, 'proxy': 'praxis',
+            'manifest': {'source': 'local', 'revision': None}}
+    result = {'id': 'id-1', 'task_name': 'task', 'trial_name': 'trial',
+              'config': {'agent': {'kwargs': {'harness': 'goose'}}},
+              'verifier_result': {'rewards': {'reward': 1}}}
+
+    import_results(plan, tmp_path, [result])
+
+    saved = tmp_path / 'goose' / 'id-1' / 'source-changes.diff'
+    assert saved.is_file()
+    assert '-original' in saved.read_text() and '+updated' in saved.read_text()
+
+
 def test_selection_determinism_and_tamper_detection(tmp_path):
     assert select(["b", "a", "c"], ["c", "a"], 1) == ["a"]
     with pytest.raises(ValueError, match="unknown task"):

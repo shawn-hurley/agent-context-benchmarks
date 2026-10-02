@@ -120,6 +120,9 @@ def _cmd_report(args):
         from acb.comparison_html import write_reports
         write_reports(run_dirs, out_path)
         print(f"html report: {out_path}")
+    if args.bundle:
+        from acb.report_bundle import write_bundle
+        print(f"report bundle: {write_bundle(run_dirs, args.bundle)}")
 
 
 def _cmd_clean(args):
@@ -172,6 +175,9 @@ def _cmd_compare(args):
         out_path = Path(args.html) if args.html else roots[0] / "comparison.html"
         write_reports(roots, out_path)
         print(f"html comparison: {out_path}")
+    if args.bundle:
+        from acb.report_bundle import write_bundle
+        print(f"comparison bundle: {write_bundle(roots, args.bundle)}")
 
 
 def main(argv=None):
@@ -211,12 +217,14 @@ def main(argv=None):
                     help="one or more run directories; multiple dirs produce a combined report")
     rp.add_argument("--html", nargs="?", const="", default=None,
                      help="also write an HTML visualization (default: <first_run_dir>/report.html)")
+    rp.add_argument("--bundle", metavar="ZIP", help="write a portable ZIP with offline charts and saved evidence")
     rp.set_defaults(func=_cmd_report)
 
     c = sub.add_parser("compare", help="compare multiple runs")
     c.add_argument("run_dirs", nargs="+")
     c.add_argument("--html", nargs="?", const="", default=None,
                    help="write an interactive HTML comparison (default: <baseline>/comparison.html)")
+    c.add_argument("--bundle", metavar="ZIP", help="write a portable comparison ZIP with offline charts and saved evidence")
     c.set_defaults(func=_cmd_compare)
 
     cl = sub.add_parser("clean", help="delete all run directories, keeping the cache")

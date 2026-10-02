@@ -191,6 +191,19 @@ def import_results(plan: dict, output: Path, results: list[dict], *, control=Non
                 (destination / "prediction-import-error.json").write_text(json.dumps({
                     "artifact": str(prediction_path), "error_type": type(error).__name__,
                 }))
+            else:
+                if prediction.get("model_patch") is None and isinstance(prediction.get("output"), str):
+                    try:
+                        native_root = (trial_dir / "verifier/native").resolve()
+                        candidate_run = Path(prediction["output"]).resolve()
+                        if candidate_run.is_relative_to(native_root) and (candidate_run / "input").is_dir() and (candidate_run / "output").is_dir():
+                            from acb.tree_diff import source_tree_diff
+                            (destination / "source-changes.diff").write_text(
+                                source_tree_diff(candidate_run / "input", candidate_run / "output"))
+                    except OSError as error:
+                        (destination / "source-diff-error.json").write_text(json.dumps({
+                            "error_type": type(error).__name__, "message": str(error),
+                        }))
         record = evaluation(result, config.get("reward_metric"), config.get("success_value"))
         if result.get("missing_trial"):
             record.update(trial_id=None, trial_name=None, error_phase="scheduling_or_execution", missing_trial=True)
