@@ -1,0 +1,14 @@
+schema_version: 2
+config_dir: .
+run_id: smoke
+benchmark: smoke
+harness: goose
+model: quickstart-model
+skills: []
+extensions: []
+mcp_servers: []
+subset: [smoke]
+execution:
+  max_workers: 1
+  timeout: 300
+output_dir: runs/quickstart

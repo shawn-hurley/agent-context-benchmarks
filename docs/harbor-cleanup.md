@@ -1,6 +1,6 @@
 # Harbor integration cleanup
 
-Updated September 21, 2026. **This is the authoritative task/status record.**
+Updated October 6, 2026. **This is the authoritative task/status record.**
 The migration phases are closed. Phase checklists, reviews and checkpoints record
 historical decisions and evidence; they do not define additional open gates.
 
@@ -11,14 +11,15 @@ historical decisions and evidence; they do not define additional open gates.
   C15 maintenance work.
 - **Deferred:** C13 (Harbor agent options schema). Effectiveness experiments are
   user-owned; full dependency locking and amd64 emulation repair remain deferred.
-  Live Docker testing remains waived. Existing MCP selection/validation stays
+  Docker Quick Start checks now have [scoped evidence](quick-start-validation.md);
+  the full Docker harness/isolation matrix remains unverified. MCP selection/validation stays
   supported within its documented adapter limits; broader MCP work is deferred.
 - **Backward compatibility is not required.** This supersedes earlier preservation
   requirements for old report formats, private rendering APIs and serialized
   boundaries. Current grade, measurement and execution semantics still apply.
   Historical artifacts may be retained as evidence without supporting their formats.
 
-Latest regression: **474 passed, four opt-in skips**, with two existing
+Latest regression: **635 passed, four opt-in skips**, with two existing
 multiprocessing/fork deprecation warnings. C10/C16 verification is detailed below.
 
 ## Open work, owners and acceptance

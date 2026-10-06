@@ -35,7 +35,10 @@ def compose_overlay(image: str, credential_names: list[str], environment="podman
         "environment": ["PRAXIS_LOG_FORMAT=json", *credential_names],
     }}}
     if environment == "docker":
-        overlay["services"][SERVICE]["extra_hosts"] = ["host.containers.internal:host-gateway"]
+        # Docker rejects extra_hosts on a container joining another service's
+        # network namespace. That service supplies the shared hosts file.
+        overlay["services"]["main"] = {
+            "extra_hosts": ["host.containers.internal:host-gateway"]}
     return overlay
 
 
@@ -121,7 +124,7 @@ class HarborPraxis:
             await asyncio.sleep(0.5)
         raise RuntimeError("Praxis sidecar did not become healthy")
 
-    async def stop(self):
+    async def stop(self, *, require_model_requests=False):
         if self._log_task is not None:
             self._log_task.cancel()
             try:
@@ -161,6 +164,8 @@ class HarborPraxis:
             model_metrics.write_text("".join(json.dumps(record) + "\n" for record in records if is_model_request(record)))
             self.parser.metrics_path = model_metrics
             self.parser.read_metrics_file(records)
+        if require_model_requests and not any(is_model_request(record) for record in records):
+            errors.append("no model requests were measured during agent execution")
         (self.directory / "measurement.json").write_text(json.dumps({
             "complete": not errors and raw.exists(), "errors": errors,
             "collection_complete": not collection_errors and raw.exists(),

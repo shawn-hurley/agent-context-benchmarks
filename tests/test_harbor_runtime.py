@@ -238,3 +238,74 @@ def test_harness_startup_rejects_crash_and_wrong_version_before_model_work(tmp_p
     environment.result = SimpleNamespace(return_code=0, stdout='2.1.241 (Claude Code)', stderr='')
     asyncio.run(verify_harness_startup(environment, 'claude-code', '2.1.241', tmp_path))
     assert json.loads((tmp_path / 'harness-startup.json').read_text())['passed'] is True
+
+
+def test_docker_verifier_copies_reward_without_shared_host_mounts(tmp_path, monkeypatch):
+    import pytest
+    pytest.importorskip('harbor')
+    from acb.harbor.environment import ACBDockerEnvironment, FrozenImageEnvironment
+    from harbor.models.task.task import Task
+    from harbor.models.trial.paths import TrialPaths
+    from harbor.verifier.verifier import Verifier
+
+    mounts = {}
+    def initialize(self, *args, **kwargs):
+        mounts.update(kwargs)
+    monkeypatch.setattr(FrozenImageEnvironment, '__init__', initialize)
+    environment = ACBDockerEnvironment(mounts=[
+        {'type': 'bind', 'source': '/controller/logs', 'target': '/logs/verifier'},
+        {'type': 'volume', 'source': 'maven-cache', 'target': '/root/.m2'},
+    ])
+    assert mounts['mounts'] == [
+        {'type': 'volume', 'source': 'maven-cache', 'target': '/root/.m2'}]
+    environment._is_windows_container = False
+    task_root = Path(__file__).resolve().parents[1] / 'config.example/quickstart/tasks/smoke'
+    task = Task(task_root)
+    environment.task_env_config = task.config.environment
+    environment._enable_egress_control = False
+    trial = TrialPaths(tmp_path / 'trial')
+    trial.verifier_dir.mkdir(parents=True)
+    copied = []
+    async def upload_dir(**kwargs):
+        pass
+    async def execute(**kwargs):
+        return SimpleNamespace(return_code=0, stdout='', stderr='')
+    async def download_dir(source_dir, target_dir):
+        copied.append(source_dir)
+        (target_dir / 'reward.txt').write_text('1')
+    monkeypatch.setattr(environment, 'upload_dir', upload_dir)
+    monkeypatch.setattr(environment, 'exec', execute)
+    monkeypatch.setattr(environment, 'download_dir', download_dir)
+    result = asyncio.run(Verifier(task=task, trial_paths=trial, environment=environment).verify())
+    assert result.rewards == {'reward': 1}
+    assert copied == ['/logs/verifier']
+
+
+def test_docker_proxy_host_mapping_belongs_to_network_owner():
+    from acb.harbor.praxis import compose_overlay
+    services = compose_overlay('proxy:fixed', ['MODEL_KEY'], 'docker')['services']
+    assert services['main']['extra_hosts'] == ['host.containers.internal:host-gateway']
+    assert services['acb-praxis']['network_mode'] == 'service:main'
+    assert 'extra_hosts' not in services['acb-praxis']
+    assert services['acb-praxis']['environment'] == ['PRAXIS_LOG_FORMAT=json', 'MODEL_KEY']
+    assert 'main' not in compose_overlay('proxy:fixed', [], 'podman')['services']
+
+
+def test_agent_without_measured_model_requests_is_incomplete(tmp_path):
+    import json
+    from acb.harbor.praxis import HarborPraxis
+    class Environment:
+        async def service_exec(self, *args, **kwargs):
+            return SimpleNamespace(return_code=0)
+        async def service_download_file(self, source, destination, **kwargs):
+            destination.write_text(
+                '{"endpoint":"/v1/models","input_tokens":0,"output_tokens":0}\n'
+                if source.endswith('.jsonl') else 'proxy stopped')
+    plan = {'model': {'name': 'fixture', 'api': 'openai', 'endpoint': 'fixture:18080', 'tls': False},
+            'run_id': 'test', 'benchmark': 'fixture', 'proxy_config': {}}
+    proxy = HarborPraxis(Environment(), plan, 'goose', 'trial', tmp_path)
+    asyncio.run(proxy.stop(require_model_requests=True))
+    result = json.loads((tmp_path / 'measurement.json').read_text())
+    assert result['complete'] is False
+    assert result['collection_complete'] is True
+    assert result['errors'] == ['no model requests were measured during agent execution']

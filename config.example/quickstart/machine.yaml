@@ -1,0 +1,3 @@
+# Change to docker if using Docker Desktop, Colima, or Docker Engine.
+environment: podman
+cache_dir: ../../runs/quickstart/.cache

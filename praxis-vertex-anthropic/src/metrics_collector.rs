@@ -105,6 +105,7 @@ pub(crate) struct MetricsData {
     start_timestamp_ms: u64,
     endpoint: String,
     pub(crate) status_code: u16,
+    pub(crate) responses_complete: bool,
     request_body_bytes: usize,
     response_body_bytes: usize,
     input_tokens: u64,
@@ -310,6 +311,9 @@ impl BenchmarkMetricsFilter {
                 }
             }
             "response.completed" => {
+                // SDK clients may close as soon as this final application event
+                // arrives, before Pingora observes transport end_of_stream.
+                data.responses_complete = true;
                 if let Some(usage) = evt
                     .get("response")
                     .and_then(|response| response.get("usage"))
@@ -880,7 +884,7 @@ impl HttpFilter for BenchmarkMetricsFilter {
         // Persist updated state for the next chunk call
         ctx.extensions.insert(data.clone());
 
-        if end_of_stream {
+        if end_of_stream || data.responses_complete {
             Self::finalize_response_tool_details(&mut data);
             if !data.response_tools.is_empty() {
                 ctx.extensions
@@ -1040,6 +1044,19 @@ mod tests {
         BenchmarkMetricsFilter::finalize_response_tool_details(&mut data);
         assert_eq!(data.response_tools.len(), 1);
         assert_eq!(data.response_tools[0].detail.as_deref(), Some("rg"));
+        assert_eq!(data.input_tokens, 12);
+        assert_eq!(data.output_tokens, 4);
+    }
+
+    #[test]
+    fn responses_completion_is_final_before_transport_end() {
+        let mut data = MetricsData::default();
+        let event = "event: response.completed\ndata: {\"type\":\"response.completed\",\"response\":{\"usage\":{\"input_tokens\":12,\"output_tokens\":4}}}\n\n";
+        let split = event.len() - 3;
+        BenchmarkMetricsFilter::process_sse_chunk(&event.as_bytes()[..split], &mut data, false);
+        assert!(!data.responses_complete);
+        BenchmarkMetricsFilter::process_sse_chunk(&event.as_bytes()[split..], &mut data, false);
+        assert!(data.responses_complete);
         assert_eq!(data.input_tokens, 12);
         assert_eq!(data.output_tokens, 4);
     }

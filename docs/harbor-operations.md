@@ -1,10 +1,11 @@
 # Harbor operation and supported scope
 
-Reviewed September 17, 2026. Podman has live acceptance evidence. Docker is
-selectable through the same Harbor transport and passed installed-worker config
-checks; live Docker testing is waived by user decision. Engine differences will
-be handled as bugs. Legacy execution still contains Podman-specific code until
-its planned retirement; this does not run on the Harbor transport path.
+Updated October 6, 2026. Podman has acceptance evidence across all four harnesses.
+Docker now has macOS ARM64/Colima evidence for the bundled repair task and native
+ScarfBench Cart controls. The model trial passed the task and exposed a stream
+accounting bug; its fix passed a no-model HTTP replay. Broader Docker harness,
+SWE-bench, and separate-verifier coverage remains unverified. See
+[Quick Start validation](quick-start-validation.md) for results and limits.
 
 Current task status and scope are tracked in [Harbor cleanup](harbor-cleanup.md).
 

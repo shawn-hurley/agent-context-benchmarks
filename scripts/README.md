@@ -63,3 +63,22 @@ template contains no credentials or compiled binaries.
 `uv run pytest tests/test_feature_configs.py -q` validates every matrix config,
 local task export, custom metrics, and backup/reset behavior without model calls
 or container startup. Use the feature guide for controls and live prerequisites.
+
+## Fresh-clone Quick Start check
+
+See [Quick Start](../docs/quick-start.md) for a dedicated starter configuration
+and publication prerequisites for the corrected ScarfBench fork.
+
+```sh
+uv run python scripts/check_quickstart.py /tmp/acb-quickstart-check --environment podman
+uv run python scripts/check_quickstart.py /tmp/acb-quickstart-live --environment podman \
+  --live --model-config config/quickstart/models.yaml
+```
+
+Each output directory must be new. The first command runs model-free oracle/nop
+controls. `--live` adds exactly one model-driven task and may incur provider
+costs. `--scarf` additionally verifies public download of the pinned fork and
+native Cart controls; `--scarf-benchmark` explicitly uses local assets instead.
+`check.json` retains grades, coverage, tool tracking, timings, and offline bundle
+link checks. Cold-install validation needs a separate empty engine store; these
+checks never prune existing experiment caches.

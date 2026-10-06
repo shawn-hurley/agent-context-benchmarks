@@ -48,7 +48,9 @@ alongside the main image. The final Compose overlay pins these IDs after Harbor'
 own policy overlays. Praxis/Caveman references are resolved during preparation;
 measured execution verifies the running provider image IDs. Offline preparation
 fails if an image is missing. Separate-verifier contracts and package verification
-are implemented (see below). Live Docker testing is waived.
+are implemented (see below). Docker Quick Start evidence is recorded in
+[Quick Start validation](quick-start-validation.md); the broader contract matrix
+has only the Podman evidence below.
 
 ## Podman Compose
 
@@ -131,8 +133,8 @@ Evidence:
 - `runs/harbor-transfer-accounting-check`: all four harnesses retain reward 1
   and exact request/token reconciliation through the new Compose process layer.
 
-These checks apply to Podman. Live Docker testing is waived; no live Docker
-coverage is claimed.
+These dated checks apply to Podman. Later Docker Quick Start evidence covers
+the repair task and native Cart controls, not this full isolation/transfer matrix.
 
 ## Managed worker cache validation
 

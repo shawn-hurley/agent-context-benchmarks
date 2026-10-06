@@ -1,0 +1,12 @@
+smoke:
+  execution_backend: harbor
+  path: tasks
+  reward_metric: reward
+  success_value: 1
+  attempts: 1
+scarfbench:
+  benchmark_cache_dir: assets/scarf-benchmark/benchmark
+  source: jakarta
+  target: quarkus
+  maven_cache: true
+  maven_cache_volume: acb-quickstart-maven-v1

@@ -1,0 +1,14 @@
+schema_version: 2
+config_dir: .
+run_id: scarfbench-cart
+benchmark: scarfbench
+harness: goose
+model: quickstart-model
+skills: []
+extensions: []
+mcp_servers: []
+subset: [business_domain/cart/jakarta-to-quarkus]
+execution:
+  max_workers: 1
+  timeout: 900
+output_dir: runs/quickstart

@@ -110,7 +110,22 @@ class ManagedComposeEnvironment:
 
 
 class ACBDockerEnvironment(FrozenImageEnvironment, ManagedComposeEnvironment, DockerEnvironment):
-    pass
+    """Copy logs so Docker daemons need not share the controller filesystem."""
+
+    def __init__(self, *args, **kwargs):
+        # Harbor downloads verifier rewards and logs when mounted=False.
+        # Bind sources otherwise refer to paths on the daemon's machine.
+        kwargs["mounts"] = copy_log_mounts(kwargs.get("mounts"))
+        super().__init__(*args, **kwargs)
+
+    @property
+    def capabilities(self):
+        return super().capabilities.model_copy(update={"mounted": False})
+
+    async def start(self, force_build):
+        await super().start(force_build)
+        await self.ensure_dirs(["/logs/agent", "/logs/verifier", "/logs/artifacts", "/logs/user_agent"])
+
 
 
 class ACBPodmanEnvironment(FrozenImageEnvironment, ManagedComposeEnvironment, PodmanEnvironment):

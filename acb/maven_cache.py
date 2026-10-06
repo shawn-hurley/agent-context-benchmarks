@@ -82,11 +82,16 @@ def validation_env(config, env, directory):
     backend = config.get('container_backend', 'auto')
     if backend == 'auto':
         backend = 'podman' if 'podman' in env.get('DOCKER_HOST', '') or not shutil.which('docker') else 'docker'
+    # Resolve before prepending the wrapper directory. A bare "docker" would
+    # find this wrapper again and recurse instead of invoking the engine.
+    binary = shutil.which(backend, path=env.get('PATH', os.environ.get('PATH', '')))
+    if not binary:
+        raise FileNotFoundError(f'{backend} is required by the selected grading backend')
     directory = Path(directory) / 'maven-cache-bin'
     directory.mkdir(parents=True, exist_ok=True)
     script = directory / 'docker'
     script.write_text('#!/bin/sh\nexec ' + shlex.join([sys.executable, str(Path(__file__).resolve()),
-                                                     backend, volume]) + ' "$@"\n')
+                                                     binary, volume]) + ' "$@"\n')
     script.chmod(0o755)
     return {**env, 'PATH': str(directory) + os.pathsep + env.get('PATH', os.environ.get('PATH', '')),
             'DOCKER_BUILDKIT': '1'}

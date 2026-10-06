@@ -1,0 +1,8 @@
+# Set model to an actual model ID available through your provider.
+# endpoint is host:port, without a URL scheme or /v1 suffix.
+quickstart-model:
+  model: YOUR_MODEL_ID
+  api: openai
+  endpoint: api.openai.com:443
+  tls: true
+  key_env: OPENAI_API_KEY

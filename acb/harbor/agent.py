@@ -262,7 +262,7 @@ class ACBHarborAgent(BaseAgent):
                 except Exception as error:
                     cleanup_errors.append(str(error))
             try:
-                await self.praxis.stop()
+                await self.praxis.stop(require_model_requests=True)
             except Exception as error:
                 cleanup_errors.append(str(error))
             if primary_error is not None:

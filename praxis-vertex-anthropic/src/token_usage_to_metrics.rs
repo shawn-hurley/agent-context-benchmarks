@@ -251,9 +251,13 @@ impl HttpFilter for TokenUsageToMetricsFilter {
     ) -> Result<FilterAction, FilterError> {
         // Only write the metric once the entire response body has streamed and
         // all metadata (token counts, cache info) has been populated by upstream filters.
-        if !end_of_stream {
+        let responses_complete = ctx.extensions.get::<MetricsData>()
+            .map(|data| data.responses_complete).unwrap_or(false);
+        if !end_of_stream && !responses_complete {
             return Ok(FilterAction::Continue);
         }
+        // The existing request-ID deduplication prevents a second row if the
+        // transport subsequently closes normally after response.completed.
 
         // Extract all available data from context
         let request_id = ctx.request_id().unwrap_or("-").to_string();

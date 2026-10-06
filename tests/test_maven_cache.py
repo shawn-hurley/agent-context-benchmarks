@@ -151,3 +151,16 @@ def test_invalid_cache_options_fail_during_resolution(settings, match):
                     overrides={'benchmark': settings})
     with pytest.raises(ValueError, match=match):
         resolve(cfg, registry)
+
+
+def test_docker_cache_wrapper_invokes_engine_without_recursing(tmp_path):
+    engine_dir = tmp_path / 'engine'
+    engine_dir.mkdir()
+    binary = engine_dir / 'docker'
+    binary.write_text('#!/bin/sh\nprintf "%s\\n" "$@"\n')
+    binary.chmod(0o755)
+    env = validation_env({'container_backend': 'docker'},
+                         {**os.environ, 'PATH': str(engine_dir)}, tmp_path)
+    result = subprocess.run(['docker', 'run', '--rm', 'fixture'], env=env,
+                            capture_output=True, text=True, timeout=5, check=True)
+    assert result.stdout.splitlines() == ['run', '--volume', DEFAULT_VOLUME + ':/root/.m2/repository/cached', '--rm', 'fixture']
