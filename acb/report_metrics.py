@@ -326,9 +326,10 @@ def shell_command_breakdown(metrics: list[dict]) -> dict:
     commands = {}
 
     for m in metrics:
-        # Only process bash-executed commands
-        if m.get('tool_detail') == 'bash':
-            cmd = m.get('tool_name', 'unknown')
+        # Only process bash-executed commands. The praxis filters put the shell
+        # tool in tool_name and the leading command word in tool_detail.
+        if (m.get('tool_name') or '').lower() in ('bash', 'shell') and m.get('tool_detail'):
+            cmd = m['tool_detail']
             content_type = m.get('content_type')
             tokens = metric_total_tokens(m)
             turn = m.get('turn_index', 0)
