@@ -32,13 +32,6 @@ See [operations](docs/harbor-operations.md) for supported environments and limit
    git submodule update --init
    ```
 
-4. **Podman shim for macOS** (SWE-bench's evaluation code shells out to `docker`):
-   ```bash
-   mkdir -p bin
-   echo '#!/bin/sh\nexec podman "$@"' > bin/docker
-   chmod +x bin/docker
-   ```
-
 ### Install ACB
 
 ```bash
@@ -54,8 +47,9 @@ pip install -e '.[datasets]'          # datasets extra needed for SWE-bench
 git clone --recursive https://github.com/shawn-hurley/agent-context-benchmarks.git
 ```
 
-`acb` auto-detects Podman (`container_backend: auto` in `benchmarks.yaml`) and
-the `bin/docker` shim makes SWE-bench's evaluation subprocess work seamlessly.
+`acb` auto-detects Podman (`container_backend: auto` in `benchmarks.yaml`). The
+native graders shell out to `docker`, so under Podman they get a generated
+`docker` shim on their `PATH`.
 
 ## Configure
 

@@ -1,5 +1,6 @@
 import asyncio
 import json
+import os
 from pathlib import Path
 import shutil
 
@@ -192,3 +193,17 @@ def test_worker_uses_native_verifier_for_benchmarks_only(tmp_path):
     assert config.verifier.kwargs["benchmark_config"]["container_backend"] == "podman"
     plan["benchmark_config"]["path"] = "/already-exported-native-harbor-tasks"
     assert job_config(plan, tmp_path, control="oracle").verifier.import_path is None
+
+
+def test_grader_env_shims_docker_for_podman(tmp_path, monkeypatch):
+    from acb.harbor.benchmark_verifier import grader_env
+
+    monkeypatch.setattr("acb.container.container_env", lambda _: {"PATH": "/usr/bin"})
+    monkeypatch.setattr("shutil.which", lambda name: "/opt/podman/bin/podman" if name == "podman" else None)
+
+    env = grader_env({"container_backend": "podman"}, tmp_path)
+
+    shim = tmp_path / "bin" / "docker"
+    assert env["PATH"].split(os.pathsep)[0] == str(tmp_path / "bin")
+    assert shim.read_text() == '#!/bin/sh\nexec /opt/podman/bin/podman "$@"\n'
+    assert os.access(shim, os.X_OK)
