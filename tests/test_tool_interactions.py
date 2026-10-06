@@ -106,3 +106,23 @@ def test_shell_breakdown_reads_new_tool_identities_and_legacy_shape():
     assert commands["rg"]["total_tokens"] == 30
     assert commands["git"]["calls"] == 1
     assert commands["git"]["total_tokens"] == 5
+
+
+def test_shell_command_breakdown_groups_bash_calls_by_command():
+    from acb.report_metrics import shell_command_breakdown
+
+    rows = [
+        {"content_type": "tool_call", "tool_name": "Bash", "tool_detail": "git",
+         "input_tokens": 10, "output_tokens": 0, "turn_index": 0},
+        {"content_type": "tool_result", "tool_name": "bash", "tool_detail": "git",
+         "input_tokens": 20, "output_tokens": 0, "turn_index": 1},
+        {"content_type": "tool_call", "tool_name": "Read", "tool_detail": None,
+         "input_tokens": 5, "output_tokens": 0, "turn_index": 2},
+    ]
+
+    breakdown = shell_command_breakdown(rows)
+
+    assert list(breakdown) == ["git"]
+    assert breakdown["git"]["calls"] == 1
+    assert breakdown["git"]["results"] == 1
+    assert breakdown["git"]["total_tokens"] == 30
