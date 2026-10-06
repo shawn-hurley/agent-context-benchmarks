@@ -63,36 +63,70 @@ class HarnessReport:
             return None
         return self.directory / name
 
-    def prediction(self, trial_id):
+    @cached_property
+    def benchmark_contracts(self):
+        """Recover identities for older reports without rewriting their artifacts."""
+        from acb.benchmark_contract import benchmark_contract
+        plan = read_object(self.directory / 'resolved.json')
+        if not plan:
+            plan = read_object(self.directory.parent / 'resolved.json')
+        if plan.get('run_id') != self.report.get('run_id'):
+            return {}
+        result = {}
+        for task in (plan.get('manifest') or {}).get('tasks', []):
+            if task.get('path'):
+                contract = benchmark_contract(Path(task['path']))
+                if contract is not None:
+                    result[task['id']] = contract
+        return result
+
+    def submission_path(self, trial_id):
         directory = self.trial_directory(trial_id)
         if directory is None:
-            return ''
+            return None
         path = directory / 'prediction.json'
-        try:
-            return json.loads(path.read_text()).get('model_patch') or ''
-        except (OSError, ValueError):
-            return ''
+        if path.is_file():
+            return path
+        result = read_object(directory / 'harbor-result.json')
+        name = result.get('trial_name')
+        if not isinstance(name, str) or not name or Path(name).name != name or name in ('.', '..'):
+            return None
+        from acb.harbor.submission import prediction_path
+        return prediction_path(self.directory.parent / '.harbor' / name, result)
+
+    def prediction(self, trial_id):
+        path = self.submission_path(trial_id)
+        return read_object(path).get('model_patch') or '' if path is not None else ''
 
     def source_changes(self, trial_id):
-        """Return a saved directory diff, or derive one for older Harbor runs."""
+        """Return a saved diff, or recover one without modifying archived runs."""
         directory = self.trial_directory(trial_id)
         if directory is None:
             return None
         artifact = directory / 'source-changes.diff'
         if artifact.is_file():
             return {'diff': artifact.read_text(), 'artifact': artifact, 'source': None, 'candidate': None}
-        prediction = read_object(directory / 'prediction.json')
-        if prediction.get('model_patch') is not None or not isinstance(prediction.get('output'), str):
+        path = self.submission_path(trial_id)
+        if path is None:
             return None
-        native_root = (directory / 'verifier/native').resolve()
-        candidate_run = Path(prediction['output']).resolve()
-        harbor_root = (self.directory.parent / '.harbor').resolve()
-        if not candidate_run.is_relative_to(native_root) and not candidate_run.is_relative_to(harbor_root):
-            return None
-        before, after = candidate_run / 'input', candidate_run / 'output'
-        if not before.is_dir() or not after.is_dir():
+        prediction = read_object(path)
+        from acb.harbor.submission import snapshot_pair
+        snapshots = snapshot_pair(prediction, path)
+        if snapshots is None and path.parent == directory:
+            output = prediction.get('output')
+            if isinstance(output, str):
+                candidate = Path(output).resolve()
+                allowed = [(self.directory.parent / '.harbor').resolve(),
+                           (directory / 'verifier' / 'native').resolve()]
+                for native in candidate.parents:
+                    if (native.name == 'native' and native.parent.name == 'verifier'
+                            and any(native.is_relative_to(root) for root in allowed)):
+                        snapshots = snapshot_pair(prediction, native / 'prediction.json')
+                        break
+        if snapshots is None:
             return None
         from acb.tree_diff import source_tree_diff
+        before, after = snapshots
         return {'diff': source_tree_diff(before, after), 'artifact': None,
                 'source': before, 'candidate': after}
 

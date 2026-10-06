@@ -63,6 +63,10 @@ class BenchmarkVerifier(BaseVerifier):
                 raise ValueError(f"unknown workflow stage: {self.step_name!r}")
             if step["gate"]["type"] == "artifacts":
                 return await self._artifact_gate(step["name"], step["gate"], workflow["workdir"])
+            if step["gate"].get("archive"):
+                # Save final reports before native submission strips workflow files.
+                # Artifact success does not replace the native benchmark reward.
+                await self._artifact_gate(step["name"], step["gate"], workflow["workdir"])
         output = self.trial_paths.verifier_dir / "native"
         output.mkdir(parents=True, exist_ok=True)
         if record["benchmark"] == "scarfbench":

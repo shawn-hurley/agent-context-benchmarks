@@ -31,6 +31,7 @@ BENCH_FIELDS = {
     "task_repo_cache_dir", "benchmark_cache_dir", "scarf_binary",
     "image_arch", "task_repo", "namespace", "patch_exclude_patterns",
     "source", "target", "validate_timeout_minutes", "swebench_python",
+    "maven_cache", "maven_cache_volume",
 }
 EXEC_FIELDS = {"max_workers", "timeout", "environment", "offline", "cache_policy"}
 SKILL_FIELDS = {
@@ -255,6 +256,9 @@ def resolve(cfg: RunConfig, registries: Registries | None = None) -> ResolvedPla
         raise ValueError("benchmark.grade_tolerance must be a finite nonnegative number")
     if "offline" in benchmark and type(benchmark["offline"]) is not bool:
         raise ValueError("benchmark.offline must be a boolean")
+    if name == "scarfbench":
+        from acb.maven_cache import cache_volume
+        cache_volume(benchmark)
     from acb.workflows import load_workflow
     workflow = load_workflow(cfg.workflow, base, name, cfg.harnesses) if cfg.workflow else None
     if workflow and (name not in ("scarfbench", "swebench", "swebench-lite") or benchmark.get("path")):

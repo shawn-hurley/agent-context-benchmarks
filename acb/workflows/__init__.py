@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from hashlib import sha256
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import re
 
 import yaml
@@ -51,8 +51,13 @@ def load_workflow(selection: str, origin: Path, benchmark: str, harnesses: list[
     if data.get("reward_strategy", "final") != "final":
         raise ValueError("workflow reward_strategy currently supports only final")
     environment = data.get("environment") or {}
-    if not isinstance(environment, dict) or set(environment) - {"dockerfile", "assets", "dockerfile_append"}:
+    if not isinstance(environment, dict) or set(environment) - {"dockerfile", "assets", "dockerfile_append", "skills_dir"}:
         raise ValueError("workflow environment has unknown fields")
+    skills_dir = environment.get("skills_dir")
+    if skills_dir is not None and (not isinstance(skills_dir, str) or
+                                   not PurePosixPath(skills_dir).is_absolute() or
+                                   ".." in PurePosixPath(skills_dir).parts):
+        raise ValueError("workflow environment.skills_dir must be an absolute container path")
     if "dockerfile" in environment:
         _asset(root, environment["dockerfile"])
     assets = environment.get("assets", [])

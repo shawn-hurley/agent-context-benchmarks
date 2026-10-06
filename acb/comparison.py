@@ -1,8 +1,8 @@
 """Per-benchmark comparisons shared by machine-readable, text and HTML reports.
 
 A benchmark here is one dataset task, not a model request or a suite average.
-Missing provenance never establishes compatibility; diagnostics retain partial
-observations without turning them into comparable measurements.
+Application inputs and grading define compatibility. Experimental setup changes
+are comparison context; incomplete measurements remain unavailable.
 """
 from __future__ import annotations
 
@@ -84,6 +84,12 @@ def benchmark_records(harnesses):
             buckets = {field: sum(u[field] for u in all_usage if type(u.get(field)) is int and u[field] >= 0) for field in TOKEN_FIELDS}
             provenance = report.get('comparison_provenance')
             task_provenance = (provenance or {}).get('tasks', {}).get(task_id)
+            if task_provenance is not None:
+                task_provenance = dict(task_provenance)
+                if not task_provenance.get('benchmark_contract'):
+                    contract = source.benchmark_contracts.get(task_id)
+                    if contract is not None:
+                        task_provenance['benchmark_contract'] = contract
             rows[key] = {'dataset': dataset, 'benchmark': task_id, 'harness': report['harness'],
                          'dataset_metrics': report.get('dataset_metrics'),
                          'model': report.get('model'), 'directory': str(directory.resolve()),
@@ -104,17 +110,29 @@ def benchmark_records(harnesses):
     return rows
 
 
-def provenance_available(provenance):
-    conditions, task = provenance.get('conditions'), provenance.get('task')
-    if not conditions or not task or conditions.get('timeout') is None:
-        return False
-    if not (task.get('sha256') or task.get('revision')):
-        return False
-    # Optional defaults such as cache policy can legitimately be null. Runtime
-    # identity for Harbor cannot: it captures the inspected execution contract.
-    if conditions.get('backend') == 'harbor' and not task.get('runtime'):
-        return False
-    return True
+def benchmark_identity(provenance):
+    task = provenance.get('task') or {}
+    contract = task.get('benchmark_contract')
+    if isinstance(contract, dict) and contract.get('version') == 1 and contract.get('inputs') and contract.get('grading'):
+        return contract
+    if task.get('revision'):
+        return {'revision': task['revision']}
+    if task.get('sha256'):
+        # Older tasks without recoverable semantic identity require the same
+        # frozen bundle; do not infer compatibility from matching task names.
+        return {'sha256': task['sha256']}
+    return None
+
+
+def setup_differences(before, after, prefix=''):
+    """Keep differing experiment settings visible without blocking comparisons."""
+    if isinstance(before, dict) and isinstance(after, dict):
+        return [difference for key in sorted(before.keys() | after.keys())
+                for difference in setup_differences(before.get(key), after.get(key),
+                                                    f'{prefix}.{key}' if prefix else key)]
+    if before != after:
+        return [{'setting': prefix, 'baseline': before, 'candidate': after}]
+    return []
 
 
 def compare(baseline, candidate):
@@ -135,15 +153,20 @@ def compare_records(before, after, baseline, candidate):
         if left is None or right is None:
             reasons.append('Benchmark is absent from baseline' if left is None else 'Benchmark is absent from candidate')
         else:
-            for side, record in [('baseline', left), ('candidate', right)]:
-                if not provenance_available(record['provenance']):
-                    reasons.append(f'{side}: comparison provenance unavailable')
-            if left['provenance'] != right['provenance']:
-                reasons.append('Task revision, inputs, grading, budget or resource conditions differ')
+            identities = [benchmark_identity(record['provenance']) for record in (left, right)]
+            for side, identity in zip(('baseline', 'candidate'), identities):
+                if identity is None:
+                    reasons.append(f'{side}: benchmark input and grading identity unavailable')
+            if all(identities) and identities[0] != identities[1]:
+                reasons.append('Benchmark application inputs or grading criteria differ')
+            grader = [(record['provenance'].get('conditions') or {}).get('native_grader')
+                      for record in (left, right)]
+            if grader[0] != grader[1]:
+                reasons.append('Native grader definitions differ')
             if left['definition'] != right['definition']:
                 reasons.append('Grade definitions differ')
-            if len(left['trials']) != len(right['trials']):
-                reasons.append('Attempt counts differ')
+        differences = (setup_differences(left['provenance'], right['provenance'])
+                       if left and right else [])
         direction = 'not_comparable' if reasons else 'unknown'
         if not reasons and left['grade'] is not None and right['grade'] is not None:
             definition = left['definition']
@@ -158,14 +181,17 @@ def compare_records(before, after, baseline, candidate):
         usable = not reasons and left['measurement_complete'] and right['measurement_complete']
         rows.append({'identity': list(key), 'baseline': left, 'candidate': right,
                      'comparable': not reasons, 'reasons': reasons, 'quality': direction,
+                     'setup_differences': differences,
                      'tokens': delta(left['tokens'], right['tokens']) if usable else delta(None, None),
                      'measurement_comparable': usable,
                      'diagnostic_comparability': {
                          field: bool(usable and left[field] is not None and right[field] is not None
                                      and (field != 'turns' or left['harness'] == right['harness']))
                          for field in ('turns', 'model_requests', 'tool_calls')},
-                     'telemetry_notes': ['Turn definitions differ across harnesses; turn counts are shown without a delta.']
-                         if left and right and left['harness'] != right['harness'] else []})
+                     'telemetry_notes': (['Turn definitions differ across harnesses; turn counts are shown without a delta.']
+                         if left and right and left['harness'] != right['harness'] else []) +
+                         ([f"Attempt counts differ ({len(left['trials'])} vs {len(right['trials'])}); grades are means and tokens are totals across attempts."]
+                          if left and right and len(left['trials']) != len(right['trials']) else [])})
     judged = [r for r in rows if r['quality'] in ('same', 'better', 'worse')]
     measured = [r for r in rows if r['measurement_comparable']]
     totals = {side: sum(r[side]['tokens'] for r in measured) if measured else None for side in ('baseline', 'candidate')}

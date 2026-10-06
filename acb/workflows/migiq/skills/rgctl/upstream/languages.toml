@@ -1,0 +1,203 @@
+# rgctl tree-sitter language configuration
+# Source of truth for Tier 1 language metadata.
+
+[metadata]
+version = "2.0"
+description = "Tier 1 custom tree-sitter plugins for rgctl"
+
+# ---------------------------------------------------------------------------
+# Tier 1 — custom LanguagePlugin implementations
+# ---------------------------------------------------------------------------
+
+[languages.rust]
+handler = "custom"
+plugin = "RustPlugin"
+module = "crate::languages::builtin::rust"
+crate = "tree-sitter-rust"
+extensions = ["rs"]
+aliases = ["rs"]
+function_kinds = ["function_item", "function_signature_item"]
+class_kinds = ["struct_item", "enum_item", "impl_item"]
+import_kinds = ["use_declaration"]
+enable_complexity = true
+enable_type_inference = false
+
+[languages.python]
+handler = "custom"
+plugin = "PythonPlugin"
+module = "crate::languages::builtin::python"
+crate = "tree-sitter-python"
+extensions = ["py", "pyw"]
+aliases = ["python", "python3", "py"]
+shebangs = ["python", "python3"]
+function_kinds = ["function_definition"]
+class_kinds = ["class_definition"]
+import_kinds = ["import_statement", "import_from_statement"]
+enable_complexity = true
+enable_type_inference = true
+
+[languages.typescript]
+handler = "custom"
+plugin = "TypeScriptPlugin"
+module = "crate::languages::builtin::typescript"
+crate = "tree-sitter-typescript"
+extensions = ["ts", "tsx"]
+aliases = ["ts"]
+function_kinds = ["function_declaration", "method_definition", "arrow_function"]
+class_kinds = ["class_declaration", "interface_declaration"]
+import_kinds = ["import_statement"]
+enable_complexity = true
+enable_type_inference = false
+
+[languages.javascript]
+handler = "custom"
+plugin = "JavaScriptPlugin"
+module = "crate::languages::builtin::javascript"
+crate = "tree-sitter-javascript"
+extensions = ["js", "jsx", "mjs"]
+aliases = ["js"]
+function_kinds = ["function_declaration", "method_definition", "arrow_function"]
+class_kinds = ["class_declaration"]
+import_kinds = ["import_statement"]
+enable_complexity = true
+enable_type_inference = true
+
+[languages.go]
+handler = "custom"
+plugin = "GoPlugin"
+module = "crate::languages::builtin::go"
+crate = "tree-sitter-go"
+extensions = ["go"]
+function_kinds = ["function_declaration", "method_declaration"]
+class_kinds = ["type_declaration"]
+import_kinds = ["import_declaration"]
+enable_complexity = true
+enable_type_inference = false
+
+[languages.java]
+handler = "custom"
+plugin = "JavaPlugin"
+module = "crate::languages::builtin::java"
+crate = "tree-sitter-java"
+extensions = ["java"]
+function_kinds = ["method_declaration"]
+class_kinds = ["class_declaration", "interface_declaration", "enum_declaration"]
+import_kinds = ["import_declaration"]
+enable_complexity = true
+enable_type_inference = false
+
+[languages.csharp]
+handler = "custom"
+plugin = "CSharpPlugin"
+module = "crate::languages::builtin::csharp"
+crate = "tree-sitter-c-sharp"
+extensions = ["cs"]
+aliases = ["cs", "c#"]
+function_kinds = ["method_declaration", "local_function_statement", "constructor_declaration"]
+class_kinds = ["class_declaration", "struct_declaration", "interface_declaration", "enum_declaration"]
+import_kinds = ["using_directive"]
+enable_complexity = true
+enable_type_inference = false
+
+[languages.cpp]
+handler = "custom"
+plugin = "CppPlugin"
+module = "crate::languages::builtin::cpp"
+crate = "tree-sitter-cpp"
+extensions = ["cpp", "cc", "cxx", "hpp", "hh", "hxx"]
+aliases = ["c++", "cxx"]
+function_kinds = ["function_definition"]
+class_kinds = ["class_specifier", "struct_specifier", "enum_specifier"]
+import_kinds = ["preproc_include", "using_declaration"]
+enable_complexity = true
+enable_type_inference = false
+
+[languages.c]
+handler = "custom"
+plugin = "CPlugin"
+module = "crate::languages::builtin::c"
+crate = "tree-sitter-c"
+extensions = ["c", "h"]
+function_kinds = ["function_definition"]
+class_kinds = ["struct_specifier", "enum_specifier"]
+import_kinds = ["preprocessor_include"]
+enable_complexity = true
+enable_type_inference = false
+
+[languages.php]
+handler = "custom"
+plugin = "PhpPlugin"
+module = "crate::languages::builtin::php"
+crate = "tree-sitter-php"
+extensions = ["php"]
+aliases = ["php"]
+function_kinds = ["function_definition", "method_declaration", "arrow_function", "anonymous_function"]
+class_kinds = ["class_declaration", "interface_declaration", "trait_declaration", "enum_declaration"]
+import_kinds = ["namespace_use_declaration", "use_declaration"]
+enable_complexity = true
+enable_type_inference = false
+
+[languages.ruby]
+handler = "custom"
+plugin = "RubyPlugin"
+module = "crate::languages::builtin::ruby"
+crate = "tree-sitter-ruby"
+extensions = ["rb"]
+aliases = ["ruby", "rb"]
+function_kinds = ["method", "singleton_method"]
+class_kinds = ["class", "module", "singleton_class"]
+import_kinds = ["call"]
+enable_complexity = true
+enable_type_inference = false
+
+[languages.puppet]
+handler = "custom"
+plugin = "PuppetPlugin"
+module = "crate::languages::builtin::puppet"
+crate = "tree-sitter-puppet"
+extensions = ["pp"]
+aliases = ["puppet", "pp"]
+function_kinds = ["function_declaration", "class_definition", "defined_resource_type", "node_definition"]
+class_kinds = ["class_definition", "defined_resource_type"]
+import_kinds = ["include_statement", "require_statement"]
+enable_complexity = true
+enable_type_inference = false
+
+[languages.kotlin]
+handler = "custom"
+plugin = "KotlinPlugin"
+module = "crate::languages::builtin::kotlin"
+crate = "tree-sitter-kotlin-ng"
+extensions = ["kt", "kts"]
+aliases = ["kt", "kotlin"]
+function_kinds = ["function_declaration", "primary_constructor", "secondary_constructor"]
+class_kinds = ["class_declaration", "object_declaration", "companion_object"]
+import_kinds = ["import"]
+enable_complexity = true
+enable_type_inference = false
+
+[languages.groovy]
+handler = "custom"
+plugin = "GroovyPlugin"
+module = "crate::languages::builtin::groovy"
+crate = "tree-sitter-groovy"
+extensions = ["groovy", "gradle"]
+aliases = ["groovy", "gradle"]
+function_kinds = ["method_declaration", "function_definition", "constructor_declaration"]
+class_kinds = ["class_declaration", "interface_declaration", "enum_declaration"]
+import_kinds = ["import_declaration"]
+enable_complexity = true
+enable_type_inference = false
+
+[languages.erb]
+handler = "custom"
+plugin = "ErbPlugin"
+module = "crate::languages::builtin::erb"
+crate = "tree-sitter-embedded-template"
+extensions = ["erb"]
+aliases = ["erb", "embedded-ruby"]
+function_kinds = []
+class_kinds = []
+import_kinds = []
+enable_complexity = false
+enable_type_inference = false

@@ -107,11 +107,14 @@ def test_empty_comparable_set_has_no_token_total(tmp_path):
     assert compare(a,b)['matched_tokens']['absolute'] is None
 
 
-def test_budget_and_unknown_task_provenance_are_not_comparable(tmp_path):
+def test_budget_changes_are_comparable_but_unknown_inputs_are_not(tmp_path):
     a=run(tmp_path/'a',{'one':1});b=run(tmp_path/'b',{'one':1})
     r=json.loads((b/'report.json').read_text());r['comparison_provenance']['conditions']['timeout']=200
     (b/'report.json').write_text(json.dumps(r))
-    assert not compare(a,b)['rows'][0]['comparable']
+    result = compare(a,b)
+    assert result['rows'][0]['comparable']
+    assert result['matched_tokens']['percent'] == 0
+    assert result['rows'][0]['setup_differences'][0]['setting'] == 'conditions.timeout'
     for root in (a,b):
         r=json.loads((root/'report.json').read_text());r['comparison_provenance']['tasks']['one']={'revision':None}
         (root/'report.json').write_text(json.dumps(r))
@@ -152,3 +155,59 @@ def test_missing_input_does_not_overwrite_report(tmp_path):
     with pytest.raises(FileNotFoundError):
         write_reports(tmp_path/'missing',destination)
     assert destination.read_text()=='preserved'
+
+
+@pytest.mark.parametrize('field', ['workflow', 'skills', 'image_id', 'timeout', 'cache_policy'])
+def test_experiment_setup_changes_do_not_block_comparison(tmp_path, field):
+    a = run(tmp_path / 'a', {'one': 0}, tokens=100)
+    b = run(tmp_path / 'b', {'one': 1}, tokens=150)
+    contract = {'version': 1, 'benchmark': 'scarfbench', 'inputs': 'input-hash', 'grading': 'grading-hash'}
+    for i, path in enumerate((a, b)):
+        report = json.loads((path / 'report.json').read_text())
+        task = report['comparison_provenance']['tasks']['one']
+        task.update(benchmark_contract=contract, sha256=f'bundle-{i}')
+        report['comparison_provenance']['conditions'][field] = ['baseline', 'candidate'][i]
+        (path / 'report.json').write_text(json.dumps(report))
+    result = compare(a, b)
+    assert result['quality'] == 'better'
+    assert result['coverage'] == {'graded': 1, 'total': 1, 'complete': True, 'measured': 1}
+    assert result['matched_tokens']['percent'] == 50
+    assert result['rows'][0]['setup_differences']
+
+
+@pytest.mark.parametrize('changed', ['inputs', 'grading'])
+def test_changed_benchmark_contract_still_blocks_comparison(tmp_path, changed):
+    a = run(tmp_path / 'a', {'one': 1})
+    b = run(tmp_path / 'b', {'one': 1})
+    for path in (a, b):
+        report = json.loads((path / 'report.json').read_text())
+        contract = {'version': 1, 'benchmark': 'scarfbench', 'inputs': 'same', 'grading': 'same'}
+        if path == b:
+            contract[changed] = 'changed'
+        report['comparison_provenance']['tasks']['one']['benchmark_contract'] = contract
+        (path / 'report.json').write_text(json.dumps(report))
+    result = compare(a, b)
+    assert result['quality'] is None
+    assert not result['rows'][0]['comparable']
+    assert 'grading criteria differ' in result['rows'][0]['reasons'][0]
+
+
+def test_changed_native_grader_blocks_comparison(tmp_path):
+    a = run(tmp_path / 'a', {'one': 1})
+    b = run(tmp_path / 'b', {'one': 1})
+    report = json.loads((b / 'report.json').read_text())
+    report['comparison_provenance']['conditions']['native_grader'] = {'sha256': 'new-grader'}
+    (b / 'report.json').write_text(json.dumps(report))
+    assert 'Native grader definitions differ' in compare(a,b)['rows'][0]['reasons']
+
+
+def test_different_attempt_counts_are_visible_context(tmp_path):
+    a = run(tmp_path / 'a', {'one': 0})
+    b = run(tmp_path / 'b', {'one': 1})
+    report = json.loads((b / 'report.json').read_text())
+    second = dict(report['evaluations'][0], trial_id='second')
+    report['evaluations'].append(second)
+    (b / 'report.json').write_text(json.dumps(report))
+    result = compare(a,b)
+    assert result['quality'] == 'better'
+    assert 'Attempt counts differ' in result['rows'][0]['telemetry_notes'][0]

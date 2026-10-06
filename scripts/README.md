@@ -49,6 +49,9 @@ records session names, results and cleanup errors. It uses no model.
 
 The shell scripts are user-facing smoke or example runners and remain supported.
 
+For persistent ScarfBench Maven downloads and its model-free container check, see
+[cache configuration and verification](../docs/scarfbench-maven-cache.md).
+
 ## Reset local feature configurations
 
 `uv run python -m scripts.reset_config` installs

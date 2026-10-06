@@ -1,0 +1,190 @@
+version: 1
+name: kantra-rgctl
+benchmarks:
+- scarfbench
+harnesses:
+- goose
+reward_strategy: final
+agent_adapter: local-qwen-no-think
+environment:
+  dockerfile: Containerfile.kantra
+  assets:
+  - kantra-plan.sh
+  - kantra-summary.py
+  - no-think-proxy.py
+  - provenance.json
+  - rgctl-plan.sh
+  - skills/kantra/SKILL.md
+  - skills/rgctl/README.md
+  - skills/rgctl/SKILL.md
+  - skills/rgctl/references/command-encyclopedia.md
+  - skills/rgctl/references/communities-and-policy.md
+  - skills/rgctl/references/workflows.md
+  - skills/rgctl/upstream/.github/ISSUE_TEMPLATE/feature_request.md
+  - skills/rgctl/upstream/.github/ISSUE_TEMPLATE/language_request.md
+  - skills/rgctl/upstream/.github/PULL_REQUEST_TEMPLATE.md
+  - skills/rgctl/upstream/.github/workflows/ci.yml
+  - skills/rgctl/upstream/.github/workflows/release.yml
+  - skills/rgctl/upstream/AGENTS.md
+  - skills/rgctl/upstream/CONTRIBUTING.md
+  - skills/rgctl/upstream/Cargo.toml
+  - skills/rgctl/upstream/crates/rgctl-kantra/README.md
+  - skills/rgctl/upstream/docs/Code_structure.md
+  - skills/rgctl/upstream/docs/Introduction.md
+  - skills/rgctl/upstream/docs/LANGUAGE_GUIDE.md
+  - skills/rgctl/upstream/docs/README.md
+  - skills/rgctl/upstream/docs/agents/USER_AGENTS_TEMPLATE.md
+  - skills/rgctl/upstream/docs/analysis-architecture.md
+  - skills/rgctl/upstream/docs/contributor-checklist.md
+  - skills/rgctl/upstream/docs/design/README.md
+  - skills/rgctl/upstream/docs/design/blast-radius-design.md
+  - skills/rgctl/upstream/docs/design/cfg-design.md
+  - skills/rgctl/upstream/docs/design/ci-policy-checks-design.md
+  - skills/rgctl/upstream/docs/design/community-query-and-naming-plan.md
+  - skills/rgctl/upstream/docs/design/dominance-design.md
+  - skills/rgctl/upstream/docs/design/go-language-coverage.md
+  - skills/rgctl/upstream/docs/design/graph-diff-design.md
+  - skills/rgctl/upstream/docs/design/graph-metrics-design.md
+  - skills/rgctl/upstream/docs/design/hybrid-cpg-plan.md
+  - skills/rgctl/upstream/docs/design/kantra-integration-exploration.md
+  - skills/rgctl/upstream/docs/design/migration-planner-design.md
+  - skills/rgctl/upstream/docs/design/pdg-design.md
+  - skills/rgctl/upstream/docs/design/program-slicing-design.md
+  - skills/rgctl/upstream/docs/design/semantic-search-design.md
+  - skills/rgctl/upstream/docs/design/taint-analysis-design.md
+  - skills/rgctl/upstream/docs/examples/policy-permissive.json
+  - skills/rgctl/upstream/docs/examples/policy-strict.json
+  - skills/rgctl/upstream/docs/further-reading.md
+  - skills/rgctl/upstream/docs/graph-storage-architecture.md
+  - skills/rgctl/upstream/docs/guides/README.md
+  - skills/rgctl/upstream/docs/guides/agent-skill.md
+  - skills/rgctl/upstream/docs/guides/blast-radius-analysis.md
+  - skills/rgctl/upstream/docs/guides/ci-policy-checks.md
+  - skills/rgctl/upstream/docs/guides/community-detection.md
+  - skills/rgctl/upstream/docs/guides/discovering-and-indexing.md
+  - skills/rgctl/upstream/docs/guides/exporting-graphs.md
+  - skills/rgctl/upstream/docs/guides/graph-metrics.md
+  - skills/rgctl/upstream/docs/guides/http-server-and-dashboard.md
+  - skills/rgctl/upstream/docs/guides/hybrid-cpg.md
+  - skills/rgctl/upstream/docs/guides/inspecting-cfg-pdg-dominance.md
+  - skills/rgctl/upstream/docs/guides/markdown-context-graph.md
+  - skills/rgctl/upstream/docs/guides/migration-planning.md
+  - skills/rgctl/upstream/docs/guides/program-slicing.md
+  - skills/rgctl/upstream/docs/guides/semantic-search.md
+  - skills/rgctl/upstream/docs/guides/structured-query.md
+  - skills/rgctl/upstream/docs/installation.md
+  - skills/rgctl/upstream/docs/internal/integration-tests.md
+  - skills/rgctl/upstream/docs/internal/profile.md
+  - skills/rgctl/upstream/docs/json-api.md
+  - skills/rgctl/upstream/docs/languages/README.md
+  - skills/rgctl/upstream/docs/migration-algorithms.md
+  - skills/rgctl/upstream/docs/policy-format.md
+  - skills/rgctl/upstream/docs/releases/unreleased.md
+  - skills/rgctl/upstream/docs/releases/v0.4.17.md
+  - skills/rgctl/upstream/docs/releases/v0.4.9.md
+  - skills/rgctl/upstream/docs/releasing.md
+  - skills/rgctl/upstream/docs/tier-1-language-support.md
+  - skills/rgctl/upstream/docs/user-guide.md
+  - skills/rgctl/upstream/example/README.md
+  - skills/rgctl/upstream/languages.toml
+  - skills/rgctl/upstream/release.toml
+  - skills/rgctl/upstream/rgctl-tests/.github/workflows/rgctl-report.yml
+  - skills/rgctl/upstream/rgctl-tests/README.md
+  - skills/rgctl/upstream/rgctl-tests/correctness/QE.md
+  - skills/rgctl/upstream/rgctl-tests/correctness/SCHEMA.md
+  - skills/rgctl/upstream/rgctl-tests/ecommerce-java/README.md
+  - skills/rgctl/upstream/rgctl-tests/gql-verification-smoke/README.md
+  - skills/rgctl/upstream/rgctl-tests/gql-verification-smoke/extraction-gql-common.sh
+  - skills/rgctl/upstream/rgctl-tests/gql-verification-smoke/rgctl-commands-common.sh
+  - skills/rgctl/upstream/rgctl-tests/gql-verification-smoke/rgctl-commands-config.sh
+  - skills/rgctl/upstream/rgctl-tests/gql-verification-smoke/verify-extraction-gql-c.sh
+  - skills/rgctl/upstream/rgctl-tests/gql-verification-smoke/verify-extraction-gql-cpp.sh
+  - skills/rgctl/upstream/rgctl-tests/gql-verification-smoke/verify-extraction-gql-csharp.sh
+  - skills/rgctl/upstream/rgctl-tests/gql-verification-smoke/verify-extraction-gql-go.sh
+  - skills/rgctl/upstream/rgctl-tests/gql-verification-smoke/verify-extraction-gql-java.sh
+  - skills/rgctl/upstream/rgctl-tests/gql-verification-smoke/verify-extraction-gql-javascript.sh
+  - skills/rgctl/upstream/rgctl-tests/gql-verification-smoke/verify-extraction-gql-php.sh
+  - skills/rgctl/upstream/rgctl-tests/gql-verification-smoke/verify-extraction-gql-python.sh
+  - skills/rgctl/upstream/rgctl-tests/gql-verification-smoke/verify-extraction-gql-ruby.sh
+  - skills/rgctl/upstream/rgctl-tests/gql-verification-smoke/verify-extraction-gql-rust.sh
+  - skills/rgctl/upstream/rgctl-tests/gql-verification-smoke/verify-extraction-gql-typescript.sh
+  - skills/rgctl/upstream/rgctl-tests/rgctl-policy.json
+  - skills/rgctl/upstream/rgctl-tests/rgctl-pr-policy.json
+  - skills/rgctl/upstream/rgctl-tests/scripts/README.md
+  - skills/rgctl/upstream/rgctl-tests/scripts/install_rgctl_release.sh
+  - skills/rgctl/workflows/_advanced.md
+  - skills/rgctl/workflows/_see-also.md
+  - skills/rgctl/workflows/discover.md
+  - skills/rgctl/workflows/flow.md
+  - skills/rgctl/workflows/gate.md
+  - skills/rgctl/workflows/impact.md
+  - skills/rgctl/workflows/kantra.md
+  - skills/rgctl/workflows/migrate.md
+  - skills/rgctl/workflows/search.md
+  - skills/rgctl/workflows/vuln.md
+  - Cargo.lock
+  skills_dir: /opt/acb/skills
+  dockerfile_append: 'COPY skills/ /opt/acb/skills/
+
+    COPY no-think-proxy.py /opt/acb/no-think-proxy.py
+
+    COPY provenance.json /opt/acb/provenance.json
+
+    COPY rgctl-plan.sh /opt/acb/rgctl-plan.sh
+
+    RUN chmod +x /opt/acb/rgctl-plan.sh
+
+    COPY kantra-plan.sh /opt/acb/kantra-plan.sh
+
+    COPY kantra-summary.py /opt/acb/kantra-summary.py
+
+    RUN chmod +x /opt/acb/kantra-plan.sh
+
+    '
+steps:
+- name: plan
+  instruction: steps/plan.md
+  timeout_sec: 900
+  gate:
+    type: artifacts
+    evidence_dir: kantra-plan
+    archive:
+    - .konveyor/kantra/
+    - PLAN.md
+    - .konveyor/kantra.log
+    - .konveyor/rgctl/
+    required:
+    - .konveyor/kantra/analysis.ok
+    - .konveyor/kantra/violations-summary.md
+    - .konveyor/rgctl/analysis.ok
+    - .konveyor/rgctl/status.json
+    - PLAN.md
+    yaml_violations: .konveyor/kantra/output.yaml
+- name: execute
+  instruction: steps/execute.md
+  timeout_sec: 900
+  gate:
+    type: artifacts
+    archive:
+    - PLAN.md
+    - .konveyor/rgctl/
+    required:
+    - PLAN.md
+- name: verify
+  instruction: steps/verify.md
+  timeout_sec: 900
+  gate:
+    type: native
+    evidence_dir: kantra-final
+    archive:
+    - PLAN.md
+    - .konveyor/rgctl/
+    required:
+    - PLAN.md
+exclude_from_grading:
+- PLAN.md
+- TODO.md
+- todo.md
+- .konveyor
+- .rgctl
+- .goosehints

@@ -1,0 +1,64 @@
+# Native Linux build: same structural feature set on ARM64 and AMD64.
+FROM docker.io/library/rust:1.99-bookworm AS rgctl-build
+RUN apt-get update && apt-get install -y --no-install-recommends pkg-config libssl-dev ca-certificates curl \
+    && rm -rf /var/lib/apt/lists/*
+WORKDIR /src
+RUN curl -fL --retry 3 -o /tmp/rgctl.tar.gz https://codeload.github.com/sshaaf/rgctl/tar.gz/a7f875d4e2e2f6c183c6cb8a946675f889dc5383 \
+    && echo '1fe4da829ad6013a0ab88c5b26fe9f132b75ee24c80b799958347fbee4a03ff5  /tmp/rgctl.tar.gz' | sha256sum -c - \
+    && tar -xzf /tmp/rgctl.tar.gz --strip-components=1 -C /src \
+    && rm /tmp/rgctl.tar.gz
+RUN curl -fL --retry 3 -o /tmp/rulesets.tar.gz https://codeload.github.com/konveyor/rulesets/tar.gz/022bbd34b34eca53d04b6cb2b97b27e47fef479b \
+    && echo '7b228422c4dc0b30dd2c575a2a2b939916fe09a6190db6edb9cefbd5145ce757  /tmp/rulesets.tar.gz' | sha256sum -c - \
+    && mkdir -p crates/rgctl-kantra/assets/rulesets \
+    && tar -xzf /tmp/rulesets.tar.gz --strip-components=1 -C crates/rgctl-kantra/assets/rulesets \
+    && test -d crates/rgctl-kantra/assets/rulesets/stable/java \
+    && rm /tmp/rulesets.tar.gz
+COPY Cargo.lock /src/Cargo.lock
+# ONNX is excluded explicitly; graph, CFG, communities and migration hints remain.
+ENV CARGO_BUILD_JOBS=2 CARGO_PROFILE_RELEASE_LTO=false
+RUN --mount=type=cache,id=acb-rgctl-v0.4.18-registry,target=/usr/local/cargo/registry \
+    --mount=type=cache,id=acb-rgctl-v0.4.18-git,target=/usr/local/cargo/git \
+    --mount=type=cache,id=acb-rgctl-v0.4.18-target,target=/src/target \
+    cargo build --locked --release --no-default-features --bin rgctl \
+    && install -Dm755 target/release/rgctl /output/rgctl
+
+# Opt-in ScarfBench Kantra treatment image. Goose is installed by ACB's
+# existing per-architecture Goose.setup_container() path.
+FROM registry.fedoraproject.org/fedora:41
+
+RUN dnf install -y java-21-openjdk-devel maven git procps-ng python3 python3-pyyaml \
+        util-linux-core curl unzip \
+    && dnf clean all
+ENV JAVA_HOME=/usr/lib/jvm/java-21-openjdk
+ENV KANTRA_DIR=/opt/kantra
+
+# GitHub release v0.10.0-beta.1, API asset digests. Keep the bundled
+# rulesets, JDT language server, report, and Maven helpers together.
+ARG TARGETARCH
+RUN set -eux; \
+    case "${TARGETARCH:-$(uname -m)}" in \
+      amd64|x86_64) asset=amd64; digest=f2ef902d4de32a27839753417814454257d91d76dada1a4ad96a1feb698b863d;; \
+      arm64|aarch64) asset=arm64; digest=d258d725287adf10cb985e42bb9bd8f0b22e9c939f9cfd116868aed0328073ab;; \
+      *) echo 'Unsupported Kantra architecture' >&2; exit 1;; \
+    esac; \
+    curl -fL --retry 3 -o /tmp/kantra.zip "https://github.com/konveyor/kantra/releases/download/v0.10.0-beta.1/kantra.linux.${asset}.zip"; \
+    echo "${digest}  /tmp/kantra.zip" | sha256sum -c -; \
+    mkdir -p "$KANTRA_DIR"; unzip -q /tmp/kantra.zip -d "$KANTRA_DIR"; \
+    rm /tmp/kantra.zip; \
+    test -x "$KANTRA_DIR/kantra"; \
+    test -d "$KANTRA_DIR/rulesets"; \
+    test -d "$KANTRA_DIR/jdtls"; \
+    test -d "$KANTRA_DIR/jdtls/java-analyzer-bundle"; \
+    test -e "$KANTRA_DIR/java-external-provider"; \
+    test -s "$KANTRA_DIR/maven-index.txt"; \
+    test -d "$KANTRA_DIR/static-report"; \
+    ln -s "$KANTRA_DIR/kantra" /usr/local/bin/kantra; \
+    kantra version; java -version; mvn -version
+
+RUN git config --global user.email "acb@bench" \
+ && git config --global user.name "acb"
+WORKDIR /work
+CMD ["sleep", "infinity"]
+
+COPY --from=rgctl-build /output/rgctl /usr/local/bin/rgctl
+RUN rgctl --version

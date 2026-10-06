@@ -1,0 +1,628 @@
+{
+  "rgctl": {
+    "version": "v0.4.18",
+    "repository": "https://github.com/sshaaf/rgctl",
+    "commit": "a7f875d4e2e2f6c183c6cb8a946675f889dc5383",
+    "rust": "1.99",
+    "features": "--no-default-features",
+    "semantic_onnx": false,
+    "rulesets_commit": "022bbd34b34eca53d04b6cb2b97b27e47fef479b",
+    "rulesets_sha256": "7b228422c4dc0b30dd2c575a2a2b939916fe09a6190db6edb9cefbd5145ce757",
+    "cargo_lock": {
+      "origin": "Generated with cargo generate-lockfile against the pinned source; upstream omits Cargo.lock.",
+      "sha256": "294d83741a2851d73738fcad2f267b1f18e0b872d4179348ebb31de0a8f1546c"
+    }
+  },
+  "skill_files": {
+    "rgctl/README.md": {
+      "source": "skills/rgctl/README.md",
+      "upstream_sha256": "4896e95b960e1b6172ad54372b552d9c4b76b1e37f6e95e3e14ecda7e56d2a88",
+      "packaged_sha256": "2efc88b73c2d3658fcbb70be6da8da2f60fd85f0728faa57b1dcc4e15d164336"
+    },
+    "rgctl/SKILL.md": {
+      "source": "skills/rgctl/SKILL.md",
+      "upstream_sha256": "d781252f40e43f5f7aea7db942751926cb3209861e647ae24571878e98e2bd72",
+      "packaged_sha256": "35f234dd63eef86f3f2a7949fa0bbf3060c9a42dd19a21252298292ff697ac03"
+    },
+    "rgctl/references/workflows.md": {
+      "source": "skills/rgctl/references/workflows.md",
+      "upstream_sha256": "a1c55217ea917eaeafcc6d98fe4c17d3a1aadb88e79947953f35c5bc2de1cc46",
+      "packaged_sha256": "c0ba47d1febbf3e2def1b8085a3c97bdffbf5f964f6be6f280bd7c495a5e22bc"
+    },
+    "rgctl/references/command-encyclopedia.md": {
+      "source": "skills/rgctl/references/command-encyclopedia.md",
+      "upstream_sha256": "20d3bdc377de2f59b43ade8ee35e5b63bab278cc2e64134fcbb663b7d400b72e",
+      "packaged_sha256": "78da859c4dc7726a7e768ccecc5c0d67c65ad70d16ff14deeb27d8838831ca24"
+    },
+    "rgctl/references/communities-and-policy.md": {
+      "source": "skills/rgctl/references/communities-and-policy.md",
+      "upstream_sha256": "b6e0dceb332726637ac536164f446611f360d51ca130532f838ae40d1e9ed967",
+      "packaged_sha256": "7ec269a92fe05dae4b10c5b2e01209d181fb87e6378f400d7e64ea2676c264d4"
+    },
+    "rgctl/workflows/gate.md": {
+      "source": "skills/rgctl/workflows/gate.md",
+      "upstream_sha256": "bcb0d3d26b8b9192d422896b9552c9ebc10efdbf33fa97e1676498e5e7ccab9e",
+      "packaged_sha256": "34dffc71ad9b0265cb360ecadeac661b7ea100cb173bc78c5d122721478546f2"
+    },
+    "rgctl/workflows/search.md": {
+      "source": "skills/rgctl/workflows/search.md",
+      "upstream_sha256": "8f392d97cfd90c8361b1e1eefda8a9f598349af705e7b70b6c163f1598f24e16",
+      "packaged_sha256": "8f392d97cfd90c8361b1e1eefda8a9f598349af705e7b70b6c163f1598f24e16"
+    },
+    "rgctl/workflows/_see-also.md": {
+      "source": "skills/rgctl/workflows/_see-also.md",
+      "upstream_sha256": "564bbb284f50ee0cd3075e51ae9656924c1abb868ea05044b2354b63fe32dea8",
+      "packaged_sha256": "cbf8566b7c3202c1733e5278c76fc95be059df9c18507fe58de41b494487bf14"
+    },
+    "rgctl/workflows/migrate.md": {
+      "source": "skills/rgctl/workflows/migrate.md",
+      "upstream_sha256": "a942c4528b67fa4a94848ec809ec4cb860f86f5b14371634eee1ac4ced8ab230",
+      "packaged_sha256": "a942c4528b67fa4a94848ec809ec4cb860f86f5b14371634eee1ac4ced8ab230"
+    },
+    "rgctl/workflows/impact.md": {
+      "source": "skills/rgctl/workflows/impact.md",
+      "upstream_sha256": "496af687ff0070a9d56c1f4a25076c805e1e16e5e30d91125e07a69b91fd5eb5",
+      "packaged_sha256": "496af687ff0070a9d56c1f4a25076c805e1e16e5e30d91125e07a69b91fd5eb5"
+    },
+    "rgctl/workflows/vuln.md": {
+      "source": "skills/rgctl/workflows/vuln.md",
+      "upstream_sha256": "0997f45528d8105bd298a889a8d1d2c76910ffc6efeaaf6a8c59665a6435375d",
+      "packaged_sha256": "0997f45528d8105bd298a889a8d1d2c76910ffc6efeaaf6a8c59665a6435375d"
+    },
+    "rgctl/workflows/_advanced.md": {
+      "source": "skills/rgctl/workflows/_advanced.md",
+      "upstream_sha256": "4b9098b9afa07926223285a22dafd37ef86df08e8032dad0b7cc853e636e7a8b",
+      "packaged_sha256": "f1fd5de2627b8b591cb33db253ad5af313a2c015a137286b281b673915ef4b2d"
+    },
+    "rgctl/workflows/kantra.md": {
+      "source": "skills/rgctl/workflows/kantra.md",
+      "upstream_sha256": "2a6c840cd9e7e60206aba7310ddf97b0393a963034b6e5d9764f2b4baae46c4a",
+      "packaged_sha256": "bf04c04d577188c49dd43ee7e2005fb3690a9e795f32d1f3001009c70db861a2"
+    },
+    "rgctl/workflows/flow.md": {
+      "source": "skills/rgctl/workflows/flow.md",
+      "upstream_sha256": "06a3083c98cc050c8b20f1fc81954bb569de12aaade9a4286b2a1b50829efdac",
+      "packaged_sha256": "06a3083c98cc050c8b20f1fc81954bb569de12aaade9a4286b2a1b50829efdac"
+    },
+    "rgctl/workflows/discover.md": {
+      "source": "skills/rgctl/workflows/discover.md",
+      "upstream_sha256": "1976700ab8c1011946c9caf141f0d01baba73efeb5acbe12cb4ee5d4d46adeaa",
+      "packaged_sha256": "1976700ab8c1011946c9caf141f0d01baba73efeb5acbe12cb4ee5d4d46adeaa"
+    },
+    "migiq/README.md": {
+      "source": "migiq/README.md",
+      "upstream_sha256": "604e2792c6fb49f03015d8e9e4ada686456aa576704ed3b613222468581f1964",
+      "packaged_sha256": "d429aced18ae34489a6acab5dc768f69dbe4b3e715db4cc4f01d03f63dc59ed4"
+    },
+    "migiq/TEST_PLAN.md": {
+      "source": "migiq/TEST_PLAN.md",
+      "upstream_sha256": "419342cb0fc6427963676f968dbc74fd4af3a4f56dc572b2c3cc21e85fd78068",
+      "packaged_sha256": "419342cb0fc6427963676f968dbc74fd4af3a4f56dc572b2c3cc21e85fd78068"
+    },
+    "migiq/SKILL.md": {
+      "source": "migiq/SKILL.md",
+      "upstream_sha256": "0ad9ec83ccc1eed48952a6218ff9ac2ea904c0047062aac13538ab2393e625a6",
+      "packaged_sha256": "0ad9ec83ccc1eed48952a6218ff9ac2ea904c0047062aac13538ab2393e625a6"
+    },
+    "migiq/test-validator.sh": {
+      "source": "migiq/test-validator.sh",
+      "upstream_sha256": "894d6336a2f673f05abc8ac36fe7bca5d8b2fba726046d7c0e103bcf07e88217",
+      "packaged_sha256": "894d6336a2f673f05abc8ac36fe7bca5d8b2fba726046d7c0e103bcf07e88217"
+    },
+    "mig-rgctl/SKILL.md": {
+      "source": "mig-rgctl/SKILL.md",
+      "upstream_sha256": "cff9f0bcc377d3c5a326501d4e6c72994d76d2b17e7770a45b1faacba3b78dc7",
+      "packaged_sha256": "cff9f0bcc377d3c5a326501d4e6c72994d76d2b17e7770a45b1faacba3b78dc7"
+    },
+    "mig-rgctl/references/workflow.md": {
+      "source": "mig-rgctl/references/workflow.md",
+      "upstream_sha256": "64f750b052d8ee6cd8071ffad5695a7df23289faa89a353b729492dc846369df",
+      "packaged_sha256": "64f750b052d8ee6cd8071ffad5695a7df23289faa89a353b729492dc846369df"
+    },
+    "mig-prompt-builder/SKILL.md": {
+      "source": "mig-prompt-builder/SKILL.md",
+      "upstream_sha256": "dfabe56664ab206362e122aed97056d8cac1f7d9b58642dbcd0eb8ffd510ddb8",
+      "packaged_sha256": "dfabe56664ab206362e122aed97056d8cac1f7d9b58642dbcd0eb8ffd510ddb8"
+    },
+    "mig-plan/SKILL.md": {
+      "source": "mig-plan/SKILL.md",
+      "upstream_sha256": "7b4c629f79743b96ee69ccf62adf41f6dcd898bdbd8a0cd18a24c5383605d4c5",
+      "packaged_sha256": "7b4c629f79743b96ee69ccf62adf41f6dcd898bdbd8a0cd18a24c5383605d4c5"
+    },
+    "mig-execute/SKILL.md": {
+      "source": "mig-execute/SKILL.md",
+      "upstream_sha256": "68c3b5a7cf6e3bbbc6d235d97f53052204f4d5e23bd21d701c7973e4029b712c",
+      "packaged_sha256": "68c3b5a7cf6e3bbbc6d235d97f53052204f4d5e23bd21d701c7973e4029b712c"
+    },
+    "mig-test-gen/SKILL.md": {
+      "source": "mig-test-gen/SKILL.md",
+      "upstream_sha256": "21087b7ca29113f12b4a05cbda619de78b2a544f022ea0a10f2e87646e180d33",
+      "packaged_sha256": "21087b7ca29113f12b4a05cbda619de78b2a544f022ea0a10f2e87646e180d33"
+    },
+    "mig-containerize/SKILL.md": {
+      "source": "mig-containerize/SKILL.md",
+      "upstream_sha256": "481d1e83eb1d72b2e0d4b004c63979e6090ad66c60b39c965c9c2410815d2a18",
+      "packaged_sha256": "481d1e83eb1d72b2e0d4b004c63979e6090ad66c60b39c965c9c2410815d2a18"
+    },
+    "mig-deploy/SKILL.md": {
+      "source": "mig-deploy/SKILL.md",
+      "upstream_sha256": "cf653631989ddba874d9b7142798ab5da85083b71e2e7a36eae67d90f946ba08",
+      "packaged_sha256": "cf653631989ddba874d9b7142798ab5da85083b71e2e7a36eae67d90f946ba08"
+    },
+    "migiq/AGENT.md": {
+      "source": "AGENT.md",
+      "upstream_sha256": "46b156ab123b56fe04fa982d0b836b3abce3527aa68829d67ceaf897cc11cad0",
+      "packaged_sha256": "fa918f1b244b34a6d82e384427800445ba5aa974cbbbb4cccf4bca6b866fff30"
+    },
+    "rgctl/upstream/docs/guides/agent-skill.md": {
+      "source": "docs/guides/agent-skill.md",
+      "upstream_sha256": "64943a068bd6ccc353e9c234e2902c85623e83e6a6f6f85172df0a6228266c34",
+      "packaged_sha256": "64943a068bd6ccc353e9c234e2902c85623e83e6a6f6f85172df0a6228266c34"
+    },
+    "rgctl/upstream/docs/user-guide.md": {
+      "source": "docs/user-guide.md",
+      "upstream_sha256": "fd23f2131fe35b2230a5681a219e7a5eee68aa45051cee56133802397908e009",
+      "packaged_sha256": "f9de2743813d5778024dafe524fc9ab7dd5aaf4b5f5ec677a5e2853bd8b3d7fa"
+    },
+    "rgctl/upstream/docs/guides/http-server-and-dashboard.md": {
+      "source": "docs/guides/http-server-and-dashboard.md",
+      "upstream_sha256": "f48ff628f0002b99c3d3edfe52bc081cc21dfa368eb187363d42a8f902f2bf43",
+      "packaged_sha256": "f48ff628f0002b99c3d3edfe52bc081cc21dfa368eb187363d42a8f902f2bf43"
+    },
+    "rgctl/upstream/docs/json-api.md": {
+      "source": "docs/json-api.md",
+      "upstream_sha256": "0f38f0ce4b519f5583c880d336e83158258ff96c369fd0f54f0157e906995508",
+      "packaged_sha256": "4a041456e1dd8e4af5a0dbe63eef5b9220cfade6ffb45a7c8ba5b2816cd1b65c"
+    },
+    "rgctl/upstream/docs/guides/README.md": {
+      "source": "docs/guides/README.md",
+      "upstream_sha256": "fe957b5d4ac4089a47fc42cf2164e657a60ffe3febcfe98cee8cbd3b26543f08",
+      "packaged_sha256": "c21546aa549a93e8353dcf909a5062af02386c01b314da561caafb40eafb3897"
+    },
+    "rgctl/upstream/docs/guides/discovering-and-indexing.md": {
+      "source": "docs/guides/discovering-and-indexing.md",
+      "upstream_sha256": "72abbf279749d26a467dab854cda9fc86b88997b22e1ca4a3173581ee7fa9965",
+      "packaged_sha256": "72abbf279749d26a467dab854cda9fc86b88997b22e1ca4a3173581ee7fa9965"
+    },
+    "rgctl/upstream/docs/guides/semantic-search.md": {
+      "source": "docs/guides/semantic-search.md",
+      "upstream_sha256": "1a2e8521908f25d845626ca715d0106249b73e470c34b04f49e827e78492a233",
+      "packaged_sha256": "1a2e8521908f25d845626ca715d0106249b73e470c34b04f49e827e78492a233"
+    },
+    "rgctl/upstream/docs/guides/blast-radius-analysis.md": {
+      "source": "docs/guides/blast-radius-analysis.md",
+      "upstream_sha256": "fac0c853881d06bbc8c6f946961f9bff9d3d70ef817d5e85bad33972379ab8ff",
+      "packaged_sha256": "fac0c853881d06bbc8c6f946961f9bff9d3d70ef817d5e85bad33972379ab8ff"
+    },
+    "rgctl/upstream/docs/guides/ci-policy-checks.md": {
+      "source": "docs/guides/ci-policy-checks.md",
+      "upstream_sha256": "9496631abfc22a4e051f99df4a5e34f850e36e5d6cd0575c52ee3bd8892ac0c1",
+      "packaged_sha256": "c32ae695eb06ff4068b0b9b69e5ca2c00f8b418fd91719b83ef9eeff6962b932"
+    },
+    "rgctl/upstream/docs/agents/USER_AGENTS_TEMPLATE.md": {
+      "source": "docs/agents/USER_AGENTS_TEMPLATE.md",
+      "upstream_sha256": "9e9ba8bb72e688ccb1359c3bbcb25d5ec21a2059f1f147b51f031925d797c258",
+      "packaged_sha256": "ba4e9fa336384c56ec29f3900d0fc5650c851e96b00070f04f933a771e3acc04"
+    },
+    "rgctl/upstream/AGENTS.md": {
+      "source": "AGENTS.md",
+      "upstream_sha256": "a1113e88bf8f77725015b8015b8e3b12516baf5a68286d2f617c6b31d08d47a1",
+      "packaged_sha256": "090948980050acb0b5e382f255e88d2580dc4666a34e183dfd91d9753e445dee"
+    },
+    "rgctl/upstream/docs/policy-format.md": {
+      "source": "docs/policy-format.md",
+      "upstream_sha256": "84a74a9c2c0d7566654601c44fb396833d0823af9cbdfb3911870ac1e9502034",
+      "packaged_sha256": "ba3756054f45f81ce1a3132de8571e07b1312c434ce6f045cfa9870bf4eceeeb"
+    },
+    "rgctl/upstream/docs/guides/migration-planning.md": {
+      "source": "docs/guides/migration-planning.md",
+      "upstream_sha256": "3fe7a6c949194f7c6683ae35c3a45d57655829284c70a3a6c6fcf0bb55c66111",
+      "packaged_sha256": "3fe7a6c949194f7c6683ae35c3a45d57655829284c70a3a6c6fcf0bb55c66111"
+    },
+    "rgctl/upstream/docs/guides/community-detection.md": {
+      "source": "docs/guides/community-detection.md",
+      "upstream_sha256": "23b1d43642ae92ce4d1666b18722a8baf53141e3b98dcdf4f83d79da24c1ab55",
+      "packaged_sha256": "23b1d43642ae92ce4d1666b18722a8baf53141e3b98dcdf4f83d79da24c1ab55"
+    },
+    "rgctl/upstream/docs/guides/graph-metrics.md": {
+      "source": "docs/guides/graph-metrics.md",
+      "upstream_sha256": "6d72902193b13e8f36c6d99e1775efa4d8bab0f4062c6984261dd050cf3858e7",
+      "packaged_sha256": "6d72902193b13e8f36c6d99e1775efa4d8bab0f4062c6984261dd050cf3858e7"
+    },
+    "rgctl/upstream/docs/installation.md": {
+      "source": "docs/installation.md",
+      "upstream_sha256": "383f0e6226c56a50282da53c588adcb96b4230356a180cf5a5c3bfcbc27bc3a7",
+      "packaged_sha256": "095d85719b1a17f082911b945f1ab724899c666e47af167a51c4c4ca2c596c65"
+    },
+    "rgctl/upstream/docs/guides/structured-query.md": {
+      "source": "docs/guides/structured-query.md",
+      "upstream_sha256": "91bb5847b0d57af89bee8d6fc4cce7bc7ec6b9ba4caf574173f171a26b2abac9",
+      "packaged_sha256": "91bb5847b0d57af89bee8d6fc4cce7bc7ec6b9ba4caf574173f171a26b2abac9"
+    },
+    "rgctl/upstream/docs/guides/hybrid-cpg.md": {
+      "source": "docs/guides/hybrid-cpg.md",
+      "upstream_sha256": "9502613b8494170d5df41b60bc9f34ba46811b8d8914eb213e517ee1dc391a97",
+      "packaged_sha256": "9502613b8494170d5df41b60bc9f34ba46811b8d8914eb213e517ee1dc391a97"
+    },
+    "rgctl/upstream/docs/Introduction.md": {
+      "source": "docs/Introduction.md",
+      "upstream_sha256": "4cc1fa3eb98fd69d5dcad08f15564e60e668765a199468642d587c68af19700c",
+      "packaged_sha256": "4cc1fa3eb98fd69d5dcad08f15564e60e668765a199468642d587c68af19700c"
+    },
+    "rgctl/upstream/languages.toml": {
+      "source": "languages.toml",
+      "upstream_sha256": "4e1a825145e18e6661d090d34ca80f53c7cbeb8d9a599a3fadf62bc7796d9f8f",
+      "packaged_sha256": "4e1a825145e18e6661d090d34ca80f53c7cbeb8d9a599a3fadf62bc7796d9f8f"
+    },
+    "rgctl/upstream/rgctl-tests/README.md": {
+      "source": "rgctl-tests/README.md",
+      "upstream_sha256": "a7acc688e3d325e1e7480ab8d7fa1e310e133a7383f3e4fe932c6832809e50dd",
+      "packaged_sha256": "9d3b89bc27bc2bfc59d20ae695ea1c9769f535350d6d64f2ea9e9f978a4707ab"
+    },
+    "rgctl/upstream/crates/rgctl-kantra/README.md": {
+      "source": "crates/rgctl-kantra/README.md",
+      "upstream_sha256": "9e28e2d1c156dd34162c6bd46c66d77647783d2eb0394109381320487a588369",
+      "packaged_sha256": "a79724e0b41cd29669fe53181a2ae6f6e7a456c521d0397f19d4813faacfeb21"
+    },
+    "rgctl/upstream/docs/design/kantra-integration-exploration.md": {
+      "source": "docs/design/kantra-integration-exploration.md",
+      "upstream_sha256": "dcc74d5f624cd4c627ecf882877ef32746d45cbd95eed81f22684d7761c1b142",
+      "packaged_sha256": "eed2eb85d86e4e458500f01dc42130a1a5141e00662f661b912ca428af466718"
+    },
+    "rgctl/upstream/docs/analysis-architecture.md": {
+      "source": "docs/analysis-architecture.md",
+      "upstream_sha256": "43bb4b1586dd6e931db95198f1e637762d0968e82479f94677bd6b596e47fd29",
+      "packaged_sha256": "2d36601786f554e79842facf8ced532de9dd65d115d647d95b0668c82250a62d"
+    },
+    "rgctl/upstream/docs/internal/profile.md": {
+      "source": "docs/internal/profile.md",
+      "upstream_sha256": "10b580559bb4829e67b646cc1ef46ae1e45b199b9ec26f90cc1dbf719e5df633",
+      "packaged_sha256": "1d579b470206c1e7ffdd8f060f1cd378f1eec97902c27061d271df6ad31e294a"
+    },
+    "rgctl/upstream/docs/design/community-query-and-naming-plan.md": {
+      "source": "docs/design/community-query-and-naming-plan.md",
+      "upstream_sha256": "44b543ebd638f1271eca51069b0a3ab174d288f8ab6fd38f09fddb004d8cc98b",
+      "packaged_sha256": "dec338b58515c01298d55682d0e693a1391e6e8c81d20d96213d1e6534707adf"
+    },
+    "rgctl/upstream/docs/design/hybrid-cpg-plan.md": {
+      "source": "docs/design/hybrid-cpg-plan.md",
+      "upstream_sha256": "6da08e66e91347a8270a93f8e9429b680783f4bddc7683a60a8c0ef6d28ff04c",
+      "packaged_sha256": "8a0702bd34dc9be36de2f3bfc0d7d61412a05c5d76b0fc828948253e86be7b2e"
+    },
+    "rgctl/upstream/docs/design/semantic-search-design.md": {
+      "source": "docs/design/semantic-search-design.md",
+      "upstream_sha256": "b4de8f51127d3ca7d87540ad95af63c509056e691c710c0634438d539977a487",
+      "packaged_sha256": "7e15707e770a7831a52969682e5fa26d8b7585a5303db367928d48be43108ed9"
+    },
+    "rgctl/upstream/docs/examples/policy-strict.json": {
+      "source": "docs/examples/policy-strict.json",
+      "upstream_sha256": "79f21a163158bc69173f3c9b9076b315a1aa4530de7523abc95ccf931d6bd2bf",
+      "packaged_sha256": "79f21a163158bc69173f3c9b9076b315a1aa4530de7523abc95ccf931d6bd2bf"
+    },
+    "rgctl/upstream/rgctl-tests/rgctl-policy.json": {
+      "source": "rgctl-tests/rgctl-policy.json",
+      "upstream_sha256": "f2a426f26d44101e0c5612f279e15c68d1360448371f297520f1306a075655e1",
+      "packaged_sha256": "f2a426f26d44101e0c5612f279e15c68d1360448371f297520f1306a075655e1"
+    },
+    "rgctl/upstream/docs/guides/program-slicing.md": {
+      "source": "docs/guides/program-slicing.md",
+      "upstream_sha256": "a94f4ab9b713d3ab9f46ddeffd71ef33851305b6a58aa3abb93907a33c3280e5",
+      "packaged_sha256": "a94f4ab9b713d3ab9f46ddeffd71ef33851305b6a58aa3abb93907a33c3280e5"
+    },
+    "rgctl/upstream/docs/guides/inspecting-cfg-pdg-dominance.md": {
+      "source": "docs/guides/inspecting-cfg-pdg-dominance.md",
+      "upstream_sha256": "54f7671bd2913ee8fdc635065be3e1a2ada74be00ad85c7eb05b85dd099d1481",
+      "packaged_sha256": "54f7671bd2913ee8fdc635065be3e1a2ada74be00ad85c7eb05b85dd099d1481"
+    },
+    "rgctl/upstream/docs/guides/exporting-graphs.md": {
+      "source": "docs/guides/exporting-graphs.md",
+      "upstream_sha256": "b951912e6707c5756a56dcdc216fa4ffbc28a6eae9422844cd9abc0407148fec",
+      "packaged_sha256": "b951912e6707c5756a56dcdc216fa4ffbc28a6eae9422844cd9abc0407148fec"
+    },
+    "rgctl/upstream/docs/guides/markdown-context-graph.md": {
+      "source": "docs/guides/markdown-context-graph.md",
+      "upstream_sha256": "e026b991224725296fd0cc4f4515ba67e1da0acb312ede683a0b40dec7c2636e",
+      "packaged_sha256": "a26bd27361b5820976f88e49f0066e4e75e170b2ed5dcde2312041b89936f9be"
+    },
+    "rgctl/upstream/docs/design/ci-policy-checks-design.md": {
+      "source": "docs/design/ci-policy-checks-design.md",
+      "upstream_sha256": "9ba0853b96bc33106c1fe18129693a10693eb6b4013b604a57d38588ca74a58a",
+      "packaged_sha256": "6fcba23dcf55c817386b4bba5dfab9c5dc3cd44de3be4baa189312fe4955f30c"
+    },
+    "rgctl/upstream/docs/releases/unreleased.md": {
+      "source": "docs/releases/unreleased.md",
+      "upstream_sha256": "cfe8bf5cc105de0c2e539904b2c6d57f95a7344fe45bf39351779ac07ccafce2",
+      "packaged_sha256": "cfe8bf5cc105de0c2e539904b2c6d57f95a7344fe45bf39351779ac07ccafce2"
+    },
+    "rgctl/upstream/rgctl-tests/rgctl-pr-policy.json": {
+      "source": "rgctl-tests/rgctl-pr-policy.json",
+      "upstream_sha256": "31ba49e72ad1678196e601c33d785341f9fafe156d7b3c866ec3470fa325fe74",
+      "packaged_sha256": "31ba49e72ad1678196e601c33d785341f9fafe156d7b3c866ec3470fa325fe74"
+    },
+    "rgctl/upstream/docs/examples/policy-permissive.json": {
+      "source": "docs/examples/policy-permissive.json",
+      "upstream_sha256": "b1d4f0b40a14681dc24d15da0f8f50f94c8cae153efec8cb47feaece2a9704ac",
+      "packaged_sha256": "b1d4f0b40a14681dc24d15da0f8f50f94c8cae153efec8cb47feaece2a9704ac"
+    },
+    "rgctl/upstream/docs/design/graph-diff-design.md": {
+      "source": "docs/design/graph-diff-design.md",
+      "upstream_sha256": "0cbc440176e611d678926ebea85b509bdf02f00a4a3f51250ea564a98f6a499a",
+      "packaged_sha256": "0cbc440176e611d678926ebea85b509bdf02f00a4a3f51250ea564a98f6a499a"
+    },
+    "rgctl/upstream/docs/README.md": {
+      "source": "docs/README.md",
+      "upstream_sha256": "1b7f870d9ad68494c90beeac7998ec5a9bdbe23c038dcf3344cbbd6bcf44b1bf",
+      "packaged_sha256": "c6274dd28928a3a37291caca0b680be764a434ae1a3e678a4aaea63ca9e9317f"
+    },
+    "rgctl/upstream/docs/releasing.md": {
+      "source": "docs/releasing.md",
+      "upstream_sha256": "b45b7df0a989d70504f1df7cea08426588518f5db7ebb4962e724f90f6f79d36",
+      "packaged_sha256": "8f30727402527246f214bfafe6bf527799bb798090539b3a0acce6e2b0fc9a43"
+    },
+    "rgctl/upstream/example/README.md": {
+      "source": "example/README.md",
+      "upstream_sha256": "ec976e5f446a7e0485e397f55acb433f7fd479817715a58aa069b7990ce9a0e1",
+      "packaged_sha256": "a3b06e6dda2e130f329365b546f6c3016477ccc2245d26de1b34dbf3fc75332a"
+    },
+    "rgctl/upstream/docs/design/blast-radius-design.md": {
+      "source": "docs/design/blast-radius-design.md",
+      "upstream_sha256": "1caaaf6c44ff6e1927e5f71cf0a5938c40b9a950e2c6efb9c7aad55be5abc123",
+      "packaged_sha256": "5f89b65fd8312adacf7f864a6e83f27597b83814a6fcea4ac5ca843a3ee7d798"
+    },
+    "rgctl/upstream/CONTRIBUTING.md": {
+      "source": "CONTRIBUTING.md",
+      "upstream_sha256": "f63f786551e5b2faebe9555fa76429560c2abdd06543034bee55d0efa7383733",
+      "packaged_sha256": "b3be96fbf84cc7c842c353942905fd616e1ef4cd3b8b7cff60d00bacec85ded7"
+    },
+    "rgctl/upstream/docs/contributor-checklist.md": {
+      "source": "docs/contributor-checklist.md",
+      "upstream_sha256": "d744f21b9bbf42f7822881331e3eb55e77e69a759ac8306094c45921e512ab60",
+      "packaged_sha256": "727dc359fa8a91601cd2b5f8c470b14b969e482772f2ff84d436941f1ab957c5"
+    },
+    "rgctl/upstream/release.toml": {
+      "source": "release.toml",
+      "upstream_sha256": "39144db97e2b59d661fff2ac4fade94e2071ee97a39e0b78db711ddcbd15a9aa",
+      "packaged_sha256": "39144db97e2b59d661fff2ac4fade94e2071ee97a39e0b78db711ddcbd15a9aa"
+    },
+    "rgctl/upstream/.github/workflows/release.yml": {
+      "source": ".github/workflows/release.yml",
+      "upstream_sha256": "71afce54da8400c48b77b0c7664895f7a0188b3e24142766decc44736a4dcefb",
+      "packaged_sha256": "71afce54da8400c48b77b0c7664895f7a0188b3e24142766decc44736a4dcefb"
+    },
+    "rgctl/upstream/docs/migration-algorithms.md": {
+      "source": "docs/migration-algorithms.md",
+      "upstream_sha256": "04bdccbb669ef3a7d6aa6ad9bee855969ffa7776bb536fe3433b24e08b490d1a",
+      "packaged_sha256": "04bdccbb669ef3a7d6aa6ad9bee855969ffa7776bb536fe3433b24e08b490d1a"
+    },
+    "rgctl/upstream/docs/languages/README.md": {
+      "source": "docs/languages/README.md",
+      "upstream_sha256": "ab0ef8acc9889d64760c73758e211df6d03a42904865dca9da3f628f864b061a",
+      "packaged_sha256": "f5d1c62949c1bbb3a781c4b9427cda9bcdd84755c92367409686e30934fe7fdf"
+    },
+    "rgctl/upstream/docs/design/README.md": {
+      "source": "docs/design/README.md",
+      "upstream_sha256": "8e332ad5fd5a917f6cb2ae6b99c027c991e3a7655cadc6915e711916f9e2048e",
+      "packaged_sha256": "f42cc07d273b3fb8b6917c6b25fa7910c13e5f53c42d8cb7d4363afe6c9acac3"
+    },
+    "rgctl/upstream/docs/tier-1-language-support.md": {
+      "source": "docs/tier-1-language-support.md",
+      "upstream_sha256": "c0b3fe215c3f3e96ce37f0b90454888ad2f1a566e3ff5011406c9482bc707b7b",
+      "packaged_sha256": "4a3ec364b079c84ef0d3077ea46c3f185fafc4012dcfe11fd9b535bb8d501540"
+    },
+    "rgctl/upstream/docs/releases/v0.4.17.md": {
+      "source": "docs/releases/v0.4.17.md",
+      "upstream_sha256": "30ca87655e02c7f4fd7ab1c95e1205bb340bf39b45f3290ef9e2cfee775234bd",
+      "packaged_sha256": "e1984a5bc36e4954b547e11f5b58e822e19f2c0ae21ff7132c48c5e2fc8c1542"
+    },
+    "rgctl/upstream/docs/further-reading.md": {
+      "source": "docs/further-reading.md",
+      "upstream_sha256": "0c054a897be5328560a36321e5b9e4a9cf61f6a39f056d2f60e2f002ed606593",
+      "packaged_sha256": "5a737d604076b50af935455eb0240ceb0f8b7dc161b21f3144977b5045762a27"
+    },
+    "rgctl/upstream/rgctl-tests/correctness/SCHEMA.md": {
+      "source": "rgctl-tests/correctness/SCHEMA.md",
+      "upstream_sha256": "0888ffd49a63346889cbdbd436b6fe331bfd49b1bc06542ab5650ae7b9cad2ff",
+      "packaged_sha256": "1d10cec58e33c7a479bce427f381f644a2b4db2f631bf2283f5190cd2677e2dd"
+    },
+    "rgctl/upstream/rgctl-tests/scripts/README.md": {
+      "source": "rgctl-tests/scripts/README.md",
+      "upstream_sha256": "14d496c739a1fbb55bcaee5ce5de62381e4053890b23bccd131b50d7e38c2e9c",
+      "packaged_sha256": "14d496c739a1fbb55bcaee5ce5de62381e4053890b23bccd131b50d7e38c2e9c"
+    },
+    "rgctl/upstream/rgctl-tests/gql-verification-smoke/rgctl-commands-config.sh": {
+      "source": "rgctl-tests/gql-verification-smoke/rgctl-commands-config.sh",
+      "upstream_sha256": "417708aad264b223ec3cd5916fbea13ec582c6be8b737a0cbc02e928149584b0",
+      "packaged_sha256": "417708aad264b223ec3cd5916fbea13ec582c6be8b737a0cbc02e928149584b0"
+    },
+    "rgctl/upstream/rgctl-tests/gql-verification-smoke/extraction-gql-common.sh": {
+      "source": "rgctl-tests/gql-verification-smoke/extraction-gql-common.sh",
+      "upstream_sha256": "2212d94f8a5033155c0e0a544acc6c5c90faaa12189cc30dd302b69e9e81e767",
+      "packaged_sha256": "2212d94f8a5033155c0e0a544acc6c5c90faaa12189cc30dd302b69e9e81e767"
+    },
+    "rgctl/upstream/rgctl-tests/gql-verification-smoke/rgctl-commands-common.sh": {
+      "source": "rgctl-tests/gql-verification-smoke/rgctl-commands-common.sh",
+      "upstream_sha256": "2b0c3f65171a46548a43ac7b4170313b2475849f8505dbb68030b248425c9f0d",
+      "packaged_sha256": "2b0c3f65171a46548a43ac7b4170313b2475849f8505dbb68030b248425c9f0d"
+    },
+    "rgctl/upstream/rgctl-tests/gql-verification-smoke/README.md": {
+      "source": "rgctl-tests/gql-verification-smoke/README.md",
+      "upstream_sha256": "1fe45d0d2a59169858119dfe1f0cafaf33565f2d11d62e4a861e560a446f2a87",
+      "packaged_sha256": "1fe45d0d2a59169858119dfe1f0cafaf33565f2d11d62e4a861e560a446f2a87"
+    },
+    "rgctl/upstream/rgctl-tests/gql-verification-smoke/verify-extraction-gql-c.sh": {
+      "source": "rgctl-tests/gql-verification-smoke/verify-extraction-gql-c.sh",
+      "upstream_sha256": "e398bb4d8f7005b14e84077bf8d60fde23d0b671cdbd31f0fc641cc3e6b4e973",
+      "packaged_sha256": "e398bb4d8f7005b14e84077bf8d60fde23d0b671cdbd31f0fc641cc3e6b4e973"
+    },
+    "rgctl/upstream/rgctl-tests/gql-verification-smoke/verify-extraction-gql-cpp.sh": {
+      "source": "rgctl-tests/gql-verification-smoke/verify-extraction-gql-cpp.sh",
+      "upstream_sha256": "fd56a635a25ff4cdb52ce549cd4dbaf562799ebcd36dc622903955a2fd8c6b86",
+      "packaged_sha256": "fd56a635a25ff4cdb52ce549cd4dbaf562799ebcd36dc622903955a2fd8c6b86"
+    },
+    "rgctl/upstream/rgctl-tests/gql-verification-smoke/verify-extraction-gql-csharp.sh": {
+      "source": "rgctl-tests/gql-verification-smoke/verify-extraction-gql-csharp.sh",
+      "upstream_sha256": "f04cfc292713be8858938e187eea90540723747b9ec2180cc9954d46d31c5a8e",
+      "packaged_sha256": "f04cfc292713be8858938e187eea90540723747b9ec2180cc9954d46d31c5a8e"
+    },
+    "rgctl/upstream/rgctl-tests/gql-verification-smoke/verify-extraction-gql-go.sh": {
+      "source": "rgctl-tests/gql-verification-smoke/verify-extraction-gql-go.sh",
+      "upstream_sha256": "9ca1d67b6f5e0b559d09919f3b6f699be115aef3c83c195f509fb0dac532f814",
+      "packaged_sha256": "9ca1d67b6f5e0b559d09919f3b6f699be115aef3c83c195f509fb0dac532f814"
+    },
+    "rgctl/upstream/rgctl-tests/gql-verification-smoke/verify-extraction-gql-java.sh": {
+      "source": "rgctl-tests/gql-verification-smoke/verify-extraction-gql-java.sh",
+      "upstream_sha256": "fe9b3e15c36fd544eb66eca15af255b4837f9c81ebb70f02a0300f5dc8d5992c",
+      "packaged_sha256": "fe9b3e15c36fd544eb66eca15af255b4837f9c81ebb70f02a0300f5dc8d5992c"
+    },
+    "rgctl/upstream/rgctl-tests/gql-verification-smoke/verify-extraction-gql-javascript.sh": {
+      "source": "rgctl-tests/gql-verification-smoke/verify-extraction-gql-javascript.sh",
+      "upstream_sha256": "27c83caf8a0a57c0eb9a8d4304f5adef042b24c4e717670f3114d820e29f7479",
+      "packaged_sha256": "27c83caf8a0a57c0eb9a8d4304f5adef042b24c4e717670f3114d820e29f7479"
+    },
+    "rgctl/upstream/rgctl-tests/gql-verification-smoke/verify-extraction-gql-php.sh": {
+      "source": "rgctl-tests/gql-verification-smoke/verify-extraction-gql-php.sh",
+      "upstream_sha256": "b651b2a6b281478eb7e0f12b5f1c678abc4fddba8b70b453247cb2a2b04a47ae",
+      "packaged_sha256": "b651b2a6b281478eb7e0f12b5f1c678abc4fddba8b70b453247cb2a2b04a47ae"
+    },
+    "rgctl/upstream/rgctl-tests/gql-verification-smoke/verify-extraction-gql-python.sh": {
+      "source": "rgctl-tests/gql-verification-smoke/verify-extraction-gql-python.sh",
+      "upstream_sha256": "191f66f598b1dc42dcd273cad774bd182ba605de6e0845156a5d2d91fbf2da52",
+      "packaged_sha256": "191f66f598b1dc42dcd273cad774bd182ba605de6e0845156a5d2d91fbf2da52"
+    },
+    "rgctl/upstream/rgctl-tests/gql-verification-smoke/verify-extraction-gql-rust.sh": {
+      "source": "rgctl-tests/gql-verification-smoke/verify-extraction-gql-rust.sh",
+      "upstream_sha256": "0ac5ffc31005e87e6d811347921a85c656619777e65465c80b168a4181398474",
+      "packaged_sha256": "0ac5ffc31005e87e6d811347921a85c656619777e65465c80b168a4181398474"
+    },
+    "rgctl/upstream/rgctl-tests/gql-verification-smoke/verify-extraction-gql-ruby.sh": {
+      "source": "rgctl-tests/gql-verification-smoke/verify-extraction-gql-ruby.sh",
+      "upstream_sha256": "396c06548413f8e05f817c6968baa7ccc75cc662c04f36a30ea6a05332a623f0",
+      "packaged_sha256": "396c06548413f8e05f817c6968baa7ccc75cc662c04f36a30ea6a05332a623f0"
+    },
+    "rgctl/upstream/rgctl-tests/gql-verification-smoke/verify-extraction-gql-typescript.sh": {
+      "source": "rgctl-tests/gql-verification-smoke/verify-extraction-gql-typescript.sh",
+      "upstream_sha256": "09803554906736070dc467ef657fae33f027a08b93703e516f91b8963a2d671d",
+      "packaged_sha256": "09803554906736070dc467ef657fae33f027a08b93703e516f91b8963a2d671d"
+    },
+    "rgctl/upstream/docs/design/taint-analysis-design.md": {
+      "source": "docs/design/taint-analysis-design.md",
+      "upstream_sha256": "dca7ff854954112928984bca0fb190eed61cec1b7e133f5507a5420c59ad8320",
+      "packaged_sha256": "c6d8ad129a14e64132da1525747b2ec4ed177f407c031b6d1a6d136bd396c6cd"
+    },
+    "rgctl/upstream/docs/design/graph-metrics-design.md": {
+      "source": "docs/design/graph-metrics-design.md",
+      "upstream_sha256": "e4a07e4a9a8ef4260bc08df69768d9e5fcb8a42562f47a63b66b560d0493fa83",
+      "packaged_sha256": "a505990f38a9b951823e2c238462a830a95768a8422554f2e8375f2a9fa1b5c8"
+    },
+    "rgctl/upstream/docs/design/cfg-design.md": {
+      "source": "docs/design/cfg-design.md",
+      "upstream_sha256": "cf71445751b5d3945496dd82b5c7e95a804640ba543250cb14f57813f090b773",
+      "packaged_sha256": "f0c5a0ccc2300e7475e22c7e4ff39cb26b6bebad4ae911b35b9651b48cd9e3ab"
+    },
+    "rgctl/upstream/docs/design/pdg-design.md": {
+      "source": "docs/design/pdg-design.md",
+      "upstream_sha256": "bffb9a3841e06042f1daecddacf424b92a121cb07be5870dcefd9dd963423541",
+      "packaged_sha256": "ba03b594624813168e336d1c4749ebf9108e1dcaaed16884ddcb47b6ef6de222"
+    },
+    "rgctl/upstream/docs/design/program-slicing-design.md": {
+      "source": "docs/design/program-slicing-design.md",
+      "upstream_sha256": "ae8c01edddf4837fa9a9fa99637acb775a373de3f98e707dd56dd675acd1ffb1",
+      "packaged_sha256": "1095949fa4464ff96b52d76bb86cc719217fcb8e425b7e7460a681a065b59445"
+    },
+    "rgctl/upstream/docs/releases/v0.4.9.md": {
+      "source": "docs/releases/v0.4.9.md",
+      "upstream_sha256": "d1342b1585bd2752e668c09705f1dd000c2ea8531b72cfd4956c6aa5c582646a",
+      "packaged_sha256": "15d6aa3fe891cba0e845924395526ebb8bd68d87e8b5f625717a8ab3c94c4702"
+    },
+    "rgctl/upstream/docs/Code_structure.md": {
+      "source": "docs/Code_structure.md",
+      "upstream_sha256": "5e48d222d66f9823c11d9741dff6dde6d18a30921a28e11e901564160230f8ea",
+      "packaged_sha256": "260867afcec1cff38d6f4da87f72944d43ff49a3fb7d6cf00377d3744315133e"
+    },
+    "rgctl/upstream/docs/graph-storage-architecture.md": {
+      "source": "docs/graph-storage-architecture.md",
+      "upstream_sha256": "66713840eceebd6dce2039da9e1e35a1e32de4fc38105fcda9c356e2da839e0e",
+      "packaged_sha256": "90247776e416cf9079800e2c2f43859972316503a12dde3d40f5f72859e6a301"
+    },
+    "rgctl/upstream/docs/internal/integration-tests.md": {
+      "source": "docs/internal/integration-tests.md",
+      "upstream_sha256": "68c102117daa94ee943cead3d367048d84885ee8c771e8b54a0351fc189f39d3",
+      "packaged_sha256": "68c102117daa94ee943cead3d367048d84885ee8c771e8b54a0351fc189f39d3"
+    },
+    "rgctl/upstream/docs/design/migration-planner-design.md": {
+      "source": "docs/design/migration-planner-design.md",
+      "upstream_sha256": "e9fd9120fd1c4d12c813b20a7c985f505c56a0239b0505ab98e71b6356ad9b25",
+      "packaged_sha256": "e06913843ebf5c28661fb1788d7e28bbf4b386c4d122772167eac4216f250df9"
+    },
+    "rgctl/upstream/docs/LANGUAGE_GUIDE.md": {
+      "source": "docs/LANGUAGE_GUIDE.md",
+      "upstream_sha256": "405ea62c1fb42eb8d55296d4d0d8847f7b92f63c19fdc0abaac6b3ce3064bb00",
+      "packaged_sha256": "405ea62c1fb42eb8d55296d4d0d8847f7b92f63c19fdc0abaac6b3ce3064bb00"
+    },
+    "rgctl/upstream/Cargo.toml": {
+      "source": "Cargo.toml",
+      "upstream_sha256": "e5bea6651d00dbdaaec00b8ccd6e82ddd97530cb53dc7e969bfbe717203042cc",
+      "packaged_sha256": "e5bea6651d00dbdaaec00b8ccd6e82ddd97530cb53dc7e969bfbe717203042cc"
+    },
+    "rgctl/upstream/.github/ISSUE_TEMPLATE/language_request.md": {
+      "source": ".github/ISSUE_TEMPLATE/language_request.md",
+      "upstream_sha256": "85d798528747081f531273d4692c5c5ed51fcc482564f19e300c802384755cc8",
+      "packaged_sha256": "85d798528747081f531273d4692c5c5ed51fcc482564f19e300c802384755cc8"
+    },
+    "rgctl/upstream/.github/ISSUE_TEMPLATE/feature_request.md": {
+      "source": ".github/ISSUE_TEMPLATE/feature_request.md",
+      "upstream_sha256": "f322ef7a3d8cb2f2b9b093272e76201f76f3e8f43a4a99e1b1b60ee49b257e61",
+      "packaged_sha256": "f322ef7a3d8cb2f2b9b093272e76201f76f3e8f43a4a99e1b1b60ee49b257e61"
+    },
+    "rgctl/upstream/docs/design/go-language-coverage.md": {
+      "source": "docs/design/go-language-coverage.md",
+      "upstream_sha256": "657ed5862e9a83998b08ade56c50d0c016d9278d084780ab6b7b88df577b8436",
+      "packaged_sha256": "8b25491c096177f7ede6c8978dd577a3ffae337ab62d6ea15f1195c8ad2b258b"
+    },
+    "rgctl/upstream/.github/workflows/ci.yml": {
+      "source": ".github/workflows/ci.yml",
+      "upstream_sha256": "7ab7becd98cafdada72495a2309e2ef6f813d83b42a0e21ae6d818d6454be140",
+      "packaged_sha256": "7ab7becd98cafdada72495a2309e2ef6f813d83b42a0e21ae6d818d6454be140"
+    },
+    "rgctl/upstream/.github/PULL_REQUEST_TEMPLATE.md": {
+      "source": ".github/PULL_REQUEST_TEMPLATE.md",
+      "upstream_sha256": "b1ab9066ff3ecf86a4f1af39b77dafc70360fee752b8816061ded7a1ea59059e",
+      "packaged_sha256": "b1ab9066ff3ecf86a4f1af39b77dafc70360fee752b8816061ded7a1ea59059e"
+    },
+    "rgctl/upstream/docs/design/dominance-design.md": {
+      "source": "docs/design/dominance-design.md",
+      "upstream_sha256": "dc8d2e014f3cb26a631a0182572afab4601bcfb3f4b2f21bd7f7cd2054c66abd",
+      "packaged_sha256": "221e4c16f0e747d4d02d0a0ea5964c7a9a91f4b93891dff5c6447a50b136f5f6"
+    },
+    "rgctl/upstream/rgctl-tests/correctness/QE.md": {
+      "source": "rgctl-tests/correctness/QE.md",
+      "upstream_sha256": "2672ab8a9024ba959f6e5660fd601d9228260b112c0b18d11d740e04d1c012b1",
+      "packaged_sha256": "721dbafe691caea675d1de28c88a29cec13457d00f0a225780976f94ceea96d2"
+    },
+    "rgctl/upstream/rgctl-tests/scripts/install_rgctl_release.sh": {
+      "source": "rgctl-tests/scripts/install_rgctl_release.sh",
+      "upstream_sha256": "aed5145c6ee7f0071b59ff48e70fc1686aebaad9cf476a0fcf45513942e3f7e2",
+      "packaged_sha256": "aed5145c6ee7f0071b59ff48e70fc1686aebaad9cf476a0fcf45513942e3f7e2"
+    },
+    "rgctl/upstream/rgctl-tests/.github/workflows/rgctl-report.yml": {
+      "source": "rgctl-tests/.github/workflows/rgctl-report.yml",
+      "upstream_sha256": "f6deeffc0763fdacc22d673992ef05c9b4a2ad61c19d469d142b16e18bd9aa40",
+      "packaged_sha256": "f6deeffc0763fdacc22d673992ef05c9b4a2ad61c19d469d142b16e18bd9aa40"
+    },
+    "rgctl/upstream/rgctl-tests/ecommerce-java/README.md": {
+      "source": "rgctl-tests/ecommerce-java/README.md",
+      "upstream_sha256": "dc02dd924553766d25beaa07c920855617b11f1381deb8b5035493a7cefb33ad",
+      "packaged_sha256": "62536bf0d87d5b4e3fdc183f0e55716a2eb2fc5dd28e1cc312179ee61a4fc8bc"
+    }
+  },
+  "adaptations": [
+    "Supporting text references copied and links rebased; binary assets and unavailable links point to pinned upstream URLs.",
+    "Skills delivered through Harbor environment.skills_dir and the ACB skill installer.",
+    "ScarfBench instructions supply requirements and approvals, omit deployment and optional rgctl Kantra evaluation."
+  ],
+  "migiq": {
+    "version": "0.2.3",
+    "repository": "https://github.com/sshaaf/migIQ",
+    "commit": "88438083945aed14cca53ec082ec00185e68fae0"
+  }
+}

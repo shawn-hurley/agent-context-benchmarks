@@ -1,0 +1,456 @@
+[workspace]
+members = [
+    ".",
+    "rgctl-macros",
+    "crates/rgctl-plugin-api",
+    "crates/rgctl-plugin-helpers",
+    "crates/rgctl-config-formats",
+    "crates/rgctl-lang-runtime",
+    "crates/rgctl-registry",
+    "crates/rgctl-error",
+    "crates/rgctl-graph",
+    "crates/rgctl-extraction",
+    "crates/rgctl-pipeline",
+    "crates/rgctl-analysis",
+    "crates/rgctl-gql",
+    "crates/rgctl-export",
+    "crates/rgctl-dashboard",
+    "crates/rgctl-wasm",
+    "crates/rgctl-security",
+    "crates/rgctl-project-config",
+    "crates/rgctl-incremental",
+    "crates/rgctl-semantic",
+    "crates/rgctl-rules",
+    "crates/rgctl-kantra",
+    "crates/rgctl-core",
+    "crates/rgctl-service",
+    "crates/rgctl-lang-go",
+    "crates/rgctl-lang-java",
+    "crates/rgctl-lang-javascript",
+    "crates/rgctl-lang-python",
+    "crates/rgctl-lang-rust",
+    "crates/rgctl-lang-typescript",
+    "crates/rgctl-lang-csharp",
+    "crates/rgctl-lang-c",
+    "crates/rgctl-lang-cpp",
+    "crates/rgctl-lang-markdown",
+    "crates/rgctl-lang-php",
+    "crates/rgctl-lang-ruby",
+    "crates/rgctl-lang-puppet",
+    "crates/rgctl-lang-erb",
+    "crates/rgctl-lang-kotlin",
+    "crates/rgctl-lang-groovy",
+    "crates/rgctl-ast-coverage",
+    "crates/rgctl-languages",
+    "crates/rgctl-agent-pack-codegen",
+]
+resolver = "2"
+
+[workspace.package]
+edition = "2024"
+rust-version = "1.99"
+version = "0.4.18"
+
+[workspace.dependencies]
+rgctl-plugin-api = { path = "crates/rgctl-plugin-api", version = "0.4.18" }
+rgctl-plugin-helpers = { path = "crates/rgctl-plugin-helpers", version = "0.4.18" }
+rgctl-config-formats = { path = "crates/rgctl-config-formats", version = "0.4.18" }
+rgctl-lang-runtime = { path = "crates/rgctl-lang-runtime", version = "0.4.18" }
+rgctl-registry = { path = "crates/rgctl-registry", version = "0.4.18" }
+rgctl-error = { path = "crates/rgctl-error", version = "0.4.18" }
+rgctl-graph = { path = "crates/rgctl-graph", version = "0.4.18" }
+rgctl-extraction = { path = "crates/rgctl-extraction", version = "0.4.18" }
+rgctl-pipeline = { path = "crates/rgctl-pipeline", version = "0.4.18" }
+rgctl-analysis = { path = "crates/rgctl-analysis", version = "0.4.18", default-features = false }
+rgctl-gql = { path = "crates/rgctl-gql", version = "0.4.18" }
+rgctl-export = { path = "crates/rgctl-export", version = "0.4.18" }
+rgctl-dashboard = { path = "crates/rgctl-dashboard", version = "0.4.18" }
+rgctl-wasm = { path = "crates/rgctl-wasm", version = "0.4.18" }
+rgctl-security = { path = "crates/rgctl-security", version = "0.4.18" }
+rgctl-project-config = { path = "crates/rgctl-project-config", version = "0.4.18" }
+rgctl-incremental = { path = "crates/rgctl-incremental", version = "0.4.18" }
+rgctl-semantic = { path = "crates/rgctl-semantic", version = "0.4.18" }
+rgctl-rules = { path = "crates/rgctl-rules", version = "0.4.18" }
+rgctl-kantra = { path = "crates/rgctl-kantra", version = "0.4.18" }
+rgctl-core = { path = "crates/rgctl-core", version = "0.4.18" }
+rgctl-service = { path = "crates/rgctl-service", version = "0.4.18" }
+tempfile = "3"
+zstd = "0.13"
+rayon = "1.7"
+rgctl-lang-go = { path = "crates/rgctl-lang-go", version = "0.4.18" }
+rgctl-lang-java = { path = "crates/rgctl-lang-java", version = "0.4.18" }
+rgctl-lang-javascript = { path = "crates/rgctl-lang-javascript", version = "0.4.18" }
+rgctl-lang-python = { path = "crates/rgctl-lang-python", version = "0.4.18" }
+rgctl-lang-rust = { path = "crates/rgctl-lang-rust", version = "0.4.18" }
+rgctl-lang-typescript = { path = "crates/rgctl-lang-typescript", version = "0.4.18" }
+rgctl-lang-csharp = { path = "crates/rgctl-lang-csharp", version = "0.4.18" }
+rgctl-lang-c = { path = "crates/rgctl-lang-c", version = "0.4.18" }
+rgctl-lang-cpp = { path = "crates/rgctl-lang-cpp", version = "0.4.18" }
+rgctl-lang-markdown = { path = "crates/rgctl-lang-markdown", version = "0.4.18" }
+rgctl-lang-php = { path = "crates/rgctl-lang-php", version = "0.4.18" }
+rgctl-lang-ruby = { path = "crates/rgctl-lang-ruby", version = "0.4.18" }
+rgctl-lang-puppet = { path = "crates/rgctl-lang-puppet", version = "0.4.18" }
+rgctl-lang-erb = { path = "crates/rgctl-lang-erb", version = "0.4.18" }
+rgctl-lang-kotlin = { path = "crates/rgctl-lang-kotlin", version = "0.4.18" }
+rgctl-lang-groovy = { path = "crates/rgctl-lang-groovy", version = "0.4.18" }
+rgctl-ast-coverage = { path = "crates/rgctl-ast-coverage", version = "0.4.18" }
+rgctl-languages = { path = "crates/rgctl-languages", version = "0.4.18" }
+tree-sitter = "0.25"
+# OSV schema parse (no client); OpenVEX types for later VEX emission
+osv = { version = "0.3", default-features = false, features = ["schema"] }
+openvex = "0.1.1"
+walkdir = "2"
+zip = { version = "2", default-features = false, features = ["deflate"] }
+thiserror = "1"
+
+[workspace.lints.rust]
+unsafe_code = "warn"
+missing_docs = "warn"
+unexpected_cfgs = "warn"
+
+[workspace.lints.clippy]
+# Correctness lints (deny - these are likely bugs)
+correctness = { level = "deny", priority = -1 }
+
+# Suspicious patterns (warn - likely bugs)
+suspicious = { level = "warn", priority = -1 }
+
+# Style and complexity (warn - code quality)
+style = { level = "warn", priority = -1 }
+complexity = { level = "warn", priority = -1 }
+
+# Performance (warn - potential optimizations)
+perf = { level = "warn", priority = -1 }
+
+# Specific important lints
+missing_errors_doc = "warn"
+missing_panics_doc = "warn"
+missing_safety_doc = "warn"
+unwrap_used = "warn"
+expect_used = "warn"
+
+[package]
+name = "rgctl"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors = ["rgctl Contributors"]
+description = "A Code knowledge graph system"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/sshaaf/rgctl"
+readme = "README.md"
+keywords = ["code-analysis", "graph", "ai", "knowledge-graph"]
+categories = ["development-tools", "command-line-utilities"]
+
+[build-dependencies]
+rgctl-agent-pack-codegen = { path = "crates/rgctl-agent-pack-codegen" }
+walkdir = "2"
+zip = { version = "2", default-features = false, features = ["deflate"] }
+
+[dependencies]
+# Workspace crates
+rgctl-core = { workspace = true }
+rgctl-service = { workspace = true }
+rgctl-plugin-api = { workspace = true }
+rgctl-plugin-helpers = { workspace = true }
+rgctl-config-formats = { workspace = true }
+rgctl-lang-runtime = { workspace = true }
+rgctl-registry = { workspace = true }
+rgctl-error = { workspace = true }
+rgctl-graph = { workspace = true }
+rgctl-extraction = { workspace = true }
+rgctl-pipeline = { workspace = true }
+rgctl-analysis = { workspace = true }
+rgctl-gql = { workspace = true }
+rgctl-export = { workspace = true }
+rgctl-dashboard = { workspace = true }
+rgctl-security = { workspace = true }
+rgctl-project-config = { workspace = true }
+rgctl-incremental = { workspace = true }
+rgctl-semantic = { workspace = true }
+rgctl-rules = { workspace = true }
+rgctl-kantra = { workspace = true }
+rgctl-languages = { workspace = true }
+
+rgctl-macros = { path = "rgctl-macros", optional = true }
+
+dirs = "6"
+zip = { version = "2", default-features = false, features = ["deflate"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+serde_yaml = "0.9"
+toml = "0.8"
+quick-xml = "0.31"
+indradb-lib = "4.0"
+petgraph = "0.6"
+pathfinding = "4.0"
+rayon = "1.7"
+tokio = { version = "1", features = ["full"] }
+crossbeam = "0.8"
+regex = "1"
+aho-corasick = "1"
+fancy-regex = "0.11"
+unicode-normalization = "0.1"
+strsim = "0.11"
+clap = { version = "4", features = ["derive"] }
+comfy-table = "7"
+indicatif = "0.17"
+console = "0.15"
+handlebars = "4"
+blake3 = "1"
+xxhash-rust = "0.8"
+anyhow = "1"
+thiserror = "1"
+uuid = { version = "1", features = ["v4", "serde"] }
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+sysinfo = "0.30"
+pulldown-cmark = "0.9"
+bincode = "1.3"
+ignore = "0.4"
+include_dir = "0.7"
+axum = "0.8"
+tower-http = { version = "0.6", features = ["fs"] }
+tower = { version = "0.5", features = ["util"] }
+
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+proptest = "1"
+tempfile = "3"
+pretty_assertions = "1"
+insta = "1"
+reqwest = { version = "0.12", features = ["blocking", "json"] }
+rgctl-graph = { workspace = true }
+rgctl-dashboard = { workspace = true }
+rgctl-lang-go = { workspace = true }
+rgctl-lang-csharp = { workspace = true }
+rgctl-lang-c = { workspace = true }
+rgctl-lang-cpp = { workspace = true }
+rgctl-lang-javascript = { workspace = true }
+rgctl-lang-typescript = { workspace = true }
+rgctl-lang-rust = { workspace = true }
+
+[features]
+default = ["semantic-onnx"]
+proc-macros = ["rgctl-macros"]
+semantic-onnx = ["rgctl-analysis/semantic-onnx"]
+
+[profile.release]
+opt-level = 3
+lto = "fat"
+codegen-units = 1
+panic = "abort"
+strip = true
+
+[profile.bench]
+inherits = "release"
+debug = false
+strip = false
+
+[[bin]]
+name = "rgctl"
+path = "src/main.rs"
+
+[[test]]
+name = "cli_output"
+path = "tests/cli_output/main.rs"
+
+[[test]]
+name = "subprocess_golden_path"
+path = "tests/cli_output/subprocess_golden_path.rs"
+
+[[test]]
+name = "all_commands_sanity"
+path = "tests/cli_output/all_commands_sanity.rs"
+
+[[test]]
+name = "markdown_context_cli"
+path = "tests/markdown_context_cli.rs"
+
+[[test]]
+name = "install_skill"
+path = "tests/install_skill.rs"
+
+[[test]]
+name = "http_serve"
+path = "tests/http_serve.rs"
+
+[[test]]
+name = "discover_full_serve"
+path = "tests/discover_full_serve.rs"
+
+[[test]]
+name = "rgctl_no_daemon"
+path = "tests/rgctl_no_daemon.rs"
+
+[[test]]
+name = "dashboard_bundle"
+path = "tests/dashboard_bundle.rs"
+
+[[test]]
+name = "dashboard_gbuilder"
+path = "tests/dashboard_gbuilder.rs"
+
+[[test]]
+name = "graph_correctness"
+path = "tests/graph_correctness.rs"
+
+[[test]]
+name = "map_collision_qe"
+path = "tests/map_collision_qe.rs"
+
+[[test]]
+name = "semantic_search_qe"
+path = "tests/semantic_search_qe.rs"
+
+[[test]]
+name = "semantic_query_timing"
+path = "tests/semantic_query_timing.rs"
+
+[[test]]
+name = "cross_feature_qe"
+path = "tests/cross_feature_qe.rs"
+
+[[test]]
+name = "with_harmonic_cli"
+path = "tests/with_harmonic_cli.rs"
+
+[[test]]
+name = "with_dashboard_cli"
+path = "tests/with_dashboard_cli.rs"
+
+[[test]]
+name = "with_cfg_cli"
+path = "tests/with_cfg_cli.rs"
+
+[[test]]
+name = "dashboard_ecommerce_go"
+path = "tests/dashboard_ecommerce_go.rs"
+
+[[test]]
+name = "dashboard_ecommerce_csharp"
+path = "tests/dashboard_ecommerce_csharp.rs"
+
+[[test]]
+name = "dashboard_ecommerce_c"
+path = "tests/dashboard_ecommerce_c.rs"
+
+[[test]]
+name = "c_cfg_analysis"
+path = "tests/c_cfg_analysis.rs"
+
+[[test]]
+name = "c_taint"
+path = "tests/c_taint.rs"
+
+[[test]]
+name = "dashboard_ecommerce_cpp"
+path = "tests/dashboard_ecommerce_cpp.rs"
+
+[[test]]
+name = "cpp_langfeatures"
+path = "tests/cpp_langfeatures.rs"
+
+[[test]]
+name = "dashboard_ecommerce_python"
+path = "tests/dashboard_ecommerce_python.rs"
+
+[[test]]
+name = "dashboard_ecommerce_rust"
+path = "tests/dashboard_ecommerce_rust.rs"
+
+[[test]]
+name = "dashboard_ecommerce_javascript"
+path = "tests/dashboard_ecommerce_javascript.rs"
+
+[[test]]
+name = "dashboard_ecommerce_typescript"
+path = "tests/dashboard_ecommerce_typescript.rs"
+
+[[test]]
+name = "php_cfg_analysis"
+path = "tests/php_cfg_analysis.rs"
+
+[[test]]
+name = "php_taint"
+path = "tests/php_taint.rs"
+
+[[test]]
+name = "dashboard_ecommerce_php"
+path = "tests/dashboard_ecommerce_php.rs"
+
+[[test]]
+name = "js_taint"
+path = "tests/js_taint.rs"
+
+[[test]]
+name = "rust_taint"
+path = "tests/rust_taint.rs"
+
+[[test]]
+name = "javascript_cfg_analysis"
+path = "tests/javascript_cfg_analysis.rs"
+
+[[test]]
+name = "cpp_cfg_analysis"
+path = "tests/cpp_cfg_analysis.rs"
+
+[[test]]
+name = "cpp_taint"
+path = "tests/cpp_taint.rs"
+
+[[test]]
+name = "go_cfg_analysis"
+path = "tests/go_cfg_analysis.rs"
+
+[[test]]
+name = "go_langfeatures"
+path = "tests/go_langfeatures.rs"
+
+[[test]]
+name = "java_langfeatures"
+path = "tests/java_langfeatures.rs"
+
+[[test]]
+name = "user_guide_scenarios"
+path = "tests/user_guide_scenarios.rs"
+
+[[test]]
+name = "dashboard_metasfresh"
+path = "tests/dashboard_metasfresh.rs"
+
+[[test]]
+name = "discover_perf_baselines"
+path = "tests/discover_perf_baselines.rs"
+
+[[test]]
+name = "cold_profile_gates"
+path = "tests/cold_profile_gates.rs"
+
+[[bench]]
+name = "parsing"
+harness = false
+
+[[bench]]
+name = "graph"
+harness = false
+
+[[bench]]
+name = "graph_benchmarks"
+harness = false
+
+[[bench]]
+name = "analysis_benchmarks"
+harness = false
+
+[[bench]]
+name = "centrality_benchmarks"
+harness = false
+
+[[bench]]
+name = "community_benchmarks"
+harness = false
+
+[[bench]]
+name = "blast_radius_benchmarks"
+harness = false

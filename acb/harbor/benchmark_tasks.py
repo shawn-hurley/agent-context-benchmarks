@@ -77,11 +77,17 @@ def export_tasks(plan):
             runtime = '[metadata.acb_runtime]\n' + (f'conda_env = {json.dumps(conda)}\n' if conda else '')
             if workflow:
                 export_workflow(root, workflow, workdir)
+            if plan["benchmark"] == "scarfbench":
+                from acb.maven_cache import cached_recipe
+                recipe_path = root / "environment/Dockerfile"
+                recipe_path.write_text(cached_recipe(recipe_path.read_text(), config))
             task_toml = (
                 'version = "1.0"\n' +
                 ('multi_step_reward_strategy = "final"\n' if workflow else '') + runtime +
                 '\n[environment]\nbuild_timeout_sec = 3600\n' +
                 f'workdir = {json.dumps(workdir)}\n' +
+                (f'skills_dir = {json.dumps(workflow["environment"]["skills_dir"])}\n'
+                 if workflow and workflow.get("environment", {}).get("skills_dir") else '') +
                 '\n[agent]\ntimeout_sec = 1800\n' +
                 f'\n[verifier]\ntimeout_sec = {int(config.get("validate_timeout_minutes", 60)) * 60}\n')
             if workflow:

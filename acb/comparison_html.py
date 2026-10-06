@@ -18,6 +18,23 @@ def percent(item):
     return 'unavailable' if item is None else value(item) + '%'
 
 
+def setting_label(setting):
+    labels = {
+        'conditions.timeout': 'Agent timeout (seconds)',
+        'conditions.attempts': 'Attempts',
+        'conditions.cache_policy': 'Cache policy',
+        'conditions.environment': 'Container backend',
+        'conditions.backend': 'Execution backend',
+        'conditions.dataset_revision': 'Dataset revision',
+        'task.sha256': 'Experiment bundle',
+        'task.runtime.container.image_id': 'Container image',
+        'task.runtime.container.image_architecture': 'Container architecture',
+        'task.runtime.container.resources.cpu_limit': 'CPU limit',
+        'task.runtime.container.resources.memory_limit_bytes': 'Memory limit',
+    }
+    return labels.get(setting, setting.replace('conditions.', '').replace('task.runtime.', '').replace('_', ' '))
+
+
 def filename(identity):
     return hashlib.sha256(json.dumps(identity).encode()).hexdigest()[:24] + '.html'
 
@@ -34,6 +51,11 @@ def comparison_section(payload, links=None, baseline_info=None, candidate_info=N
                  '</h3>' + run_facts(baseline_info) + '</div><div><h3>Candidate · ' +
                  esc(run_title(candidate_info)) + '</h3>' + run_facts(candidate_info) + '</div></div>')
         body += run_differences(baseline_info, candidate_info)
+    differences = {setting_label(item['setting']) for row in payload['rows']
+                   for item in row.get('setup_differences', [])
+                   if not item['setting'].startswith('task.benchmark_contract')}
+    if differences:
+        body += '<p class="muted">Experiment setup differences are included in this comparison: ' + esc(', '.join(sorted(differences))) + '. Details are recorded with each benchmark.</p>'
     body += stat_cards([
         ('Quality', verdict.capitalize()),
         ('Graded benchmarks', f'{coverage["graded"]} / {coverage["total"]}'),
@@ -72,10 +94,15 @@ def comparison_section(payload, links=None, baseline_info=None, candidate_info=N
             item = row[side]
             return links.get((side, (item['dataset'], item['benchmark'], item['harness']))) if item else None
         notices = list(row['reasons']) + row['telemetry_notes']
+        for difference in row.get('setup_differences', []):
+            if difference['setting'] == 'task.benchmark_contract' or difference['setting'].startswith('task.benchmark_contract.'):
+                continue
+            notices.append('Experiment setup differs: ' + setting_label(difference['setting']) + ': ' +
+                           str(difference['baseline']) + ' → ' + str(difference['candidate']))
         if left and right and left['model'] != right['model']:
             notices.append('Models differ; token counts may use different tokenizers and are not a price comparison')
         if not row['measurement_comparable']:
-            notices.append('Token comparison unavailable: unmatched conditions or incomplete measurements')
+            notices.append('Token comparison unavailable: different benchmark inputs/grading or incomplete measurements')
         if row['quality'] == 'unknown':
             notices.append('Grade missing or evaluation failed')
         quality = row['quality']

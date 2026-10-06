@@ -21,7 +21,7 @@ acb = "acb.cli:main"
 include = ["acb*"]
 
 [tool.setuptools.package-data]
-"acb" = ["goose-container-config.yaml", "goosehints-templates/*.md", "report_assets/*.js", "report_assets/*.md", "catalog/*.yaml", "catalog/caveman/*", "scarfbench/Containerfile", "scarfbench/prompts/*.md", "workflows/*/*.yaml", "workflows/*/*.kantra", "workflows/*/*.sh", "workflows/*/*.py", "workflows/*/steps/*.md", "workflows/*/skills/*/*.md", "assets/praxis/Containerfile", "assets/praxis/praxis-vertex-anthropic/Cargo.*", "assets/praxis/praxis-vertex-anthropic/src/*.rs"]
+"acb" = ["goose-container-config.yaml", "goosehints-templates/*.md", "report_assets/*.js", "report_assets/*.md", "catalog/*.yaml", "catalog/caveman/*", "scarfbench/Containerfile", "scarfbench/prompts/*.md", "workflows/*/*.yaml", "workflows/*/*.kantra", "workflows/*/*.sh", "workflows/*/*.py", "workflows/*/steps/*.md", "workflows/*/skills/**/*", "workflows/*/skills/**/.github/*", "workflows/*/skills/**/.github/**/*", "workflows/*/*.json", "workflows/*/Cargo.lock", "assets/praxis/Containerfile", "assets/praxis/praxis-vertex-anthropic/Cargo.*", "assets/praxis/praxis-vertex-anthropic/src/*.rs"]
 "acb.integrations" = ["assets/rtk/*.mjs", "assets/rtk/*.ts", "assets/rtk/*.py", "assets/caveman/*.py", "assets/caveman/*.ts", "assets/caveman/Containerfile"]
 "acb.harnesses" = ["assets/*.json"]
 

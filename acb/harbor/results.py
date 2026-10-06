@@ -100,6 +100,9 @@ def evaluation(result: dict, metric: str | None, success_value=None) -> dict:
 
 def import_results(plan: dict, output: Path, results: list[dict], *, control=None):
     config = plan["benchmark_config"]
+    from acb.benchmark_contract import benchmark_contract
+    contracts = {task["id"]: benchmark_contract(Path(task["path"]))
+                 for task in plan["manifest"].get("tasks", []) if task.get("path")}
     if control:
         config = {**config, "reward_metric": "reward", "success_value": 1 if control == "oracle" else 0}
     harnesses = [control] if control else list(plan["harnesses"])
@@ -179,8 +182,9 @@ def import_results(plan: dict, output: Path, results: list[dict], *, control=Non
                 "missing_steps": missing_steps,
             }, indent=2))
         (destination / "harbor-result.json").write_text(json.dumps(result, indent=2))
-        prediction_path = trial_dir / "verifier/native/prediction.json"
-        if prediction_path.is_file():
+        from acb.harbor.submission import prediction_path as find_prediction, snapshot_pair
+        prediction_path = find_prediction(trial_dir, result)
+        if prediction_path is not None:
             try:
                 prediction = json.loads(prediction_path.read_text())
                 prediction["benchmark_instance_id"] = prediction["instance_id"]
@@ -194,12 +198,11 @@ def import_results(plan: dict, output: Path, results: list[dict], *, control=Non
             else:
                 if prediction.get("model_patch") is None and isinstance(prediction.get("output"), str):
                     try:
-                        native_root = (trial_dir / "verifier/native").resolve()
-                        candidate_run = Path(prediction["output"]).resolve()
-                        if candidate_run.is_relative_to(native_root) and (candidate_run / "input").is_dir() and (candidate_run / "output").is_dir():
+                        snapshots = snapshot_pair(prediction, prediction_path)
+                        if snapshots is not None:
                             from acb.tree_diff import source_tree_diff
                             (destination / "source-changes.diff").write_text(
-                                source_tree_diff(candidate_run / "input", candidate_run / "output"))
+                                source_tree_diff(*snapshots))
                     except OSError as error:
                         (destination / "source-diff-error.json").write_text(json.dumps({
                             "error_type": type(error).__name__, "message": str(error),
@@ -280,6 +283,7 @@ def import_results(plan: dict, output: Path, results: list[dict], *, control=Non
                            "native_grader": {key: value for key, value in (plan.get("benchmark_grader") or {}).items() if key != "binary"},
                            "metrics": comparison_definitions(plan["manifest"])},
             "tasks": {task["id"]: {"sha256": task["sha256"],
+                      "benchmark_contract": contracts.get(task["id"]),
                       "runtime": plan.get("runtime_contracts", {}).get(task["id"])
                           or plan.get("task_plans", {}).get(task["id"], {}).get("runtime")}
                       for task in plan["manifest"].get("tasks", [])},

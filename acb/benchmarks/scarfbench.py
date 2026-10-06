@@ -491,6 +491,13 @@ class ScarfBench(Benchmark):
 
         scarf_eval_dir = self._scarf_eval_dir(output_dir)
         benchmark_cache_dir = self._benchmark_cache_dir()
+        from acb.maven_cache import cache_volume
+        if cache_volume(self.config):
+            # Cache instrumentation belongs to the run, never the benchmark checkout.
+            validation_copy = output_dir / "maven-cache-validations"
+            shutil.copytree(benchmark_cache_dir, validation_copy, dirs_exist_ok=True,
+                            ignore=shutil.ignore_patterns('.git', 'target', 'node_modules', '__pycache__'))
+            benchmark_cache_dir = validation_copy
 
         # ScarfBench v0.1.2's published benchmark tree contains test.sh but
         # omits the Makefile and smoke-test metadata expected by `scarf
@@ -506,6 +513,11 @@ class ScarfBench(Benchmark):
                     app=run_metadata["app"],
                     framework=run_metadata["target_framework"],
                 )
+                from acb.maven_cache import cached_recipe
+                validator_recipe = (benchmark_cache_dir / run_metadata["layer"] /
+                                    run_metadata["app"] / run_metadata["target_framework"] / "Dockerfile")
+                if validator_recipe.exists():
+                    validator_recipe.write_text(cached_recipe(validator_recipe.read_text(), self.config))
                 # `scarf validate` copies Makefile/Dockerfile/metadata.json
                 # itself, but not test.sh.  Stage the target framework's
                 # script explicitly; otherwise a source-framework script can
@@ -530,6 +542,8 @@ class ScarfBench(Benchmark):
 
         # Route docker CLI calls through the Podman shim
         env = container_env(self.config)
+        from acb.maven_cache import validation_env
+        env = validation_env(self.config, env, output_dir)
         
         # Prevent TTY detection to avoid Docker/Podman progress bars and status messages
         # from bypassing stdout/stderr redirection and appearing on the terminal.

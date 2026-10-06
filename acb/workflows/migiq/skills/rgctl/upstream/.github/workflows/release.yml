@@ -1,0 +1,241 @@
+# Build release binaries for Linux, macOS (Apple Silicon + Intel), and Windows,
+# then publish a GitHub Release with downloadable archives.
+#
+# Triggers:
+#   - push tag v*     — primary release path (e.g. git tag v0.1.0 && git push origin v0.1.0)
+#   - workflow_dispatch — rebuild and (re)publish for an existing tag or draft from a ref
+name: Release
+
+on:
+  push:
+    tags:
+      - v*
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag (e.g. v0.1.0). Used for asset names; defaults to the pushed tag or Cargo.toml version.
+        required: false
+        type: string
+      ref:
+        description: Git ref to build when not triggered by a tag push
+        required: false
+        default: main
+        type: string
+      draft:
+        description: Publish as draft release
+        required: false
+        default: false
+        type: boolean
+
+permissions:
+  contents: write
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  build:
+    name: ${{ matrix.target }}
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 180
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+            archive: tar.gz
+            bin: rgctl
+            # Default features include semantic-onnx (code-daemon embedder).
+            cargo_args: --features semantic-onnx
+          - os: macos-latest
+            target: aarch64-apple-darwin
+            archive: tar.gz
+            bin: rgctl
+            cargo_args: --features semantic-onnx
+          - os: macos-latest
+            target: x86_64-apple-darwin
+            archive: tar.gz
+            bin: rgctl
+            # ort 2.x has no prebuilt ONNX Runtime for Intel Mac; hash embedder only.
+            cargo_args: --no-default-features
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            archive: zip
+            bin: rgctl.exe
+            cargo_args: --features semantic-onnx
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          lfs: true
+          ref: ${{ github.event_name == 'push' && github.ref || (inputs.tag != '' && inputs.tag || inputs.ref) }}
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Add Rust target
+        run: rustup target add ${{ matrix.target }}
+
+      - name: Cache cargo
+        uses: swatinem/rust-cache@v2
+        with:
+          shared-key: release-${{ matrix.target }}
+
+      - name: Build release binary
+        run: cargo build --release ${{ matrix.cargo_args }} --target ${{ matrix.target }} --bin rgctl
+
+      - name: Package archive (Unix)
+        if: matrix.archive == 'tar.gz'
+        shell: bash
+        run: |
+          set -euo pipefail
+          VERSION="${{ github.event_name == 'push' && github.ref_name || inputs.tag }}"
+          VERSION="${VERSION#v}"
+          if [[ -z "$VERSION" ]]; then
+            VERSION="$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')"
+          fi
+          STAGING="package"
+          mkdir -p "$STAGING"
+          cp "target/${{ matrix.target }}/release/${{ matrix.bin }}" "$STAGING/rgctl"
+          chmod +x "$STAGING/rgctl"
+          ARCHIVE="rgctl-${VERSION}-${{ matrix.target }}.tar.gz"
+          tar -czf "$ARCHIVE" -C "$STAGING" rgctl
+          echo "ARCHIVE=$ARCHIVE" >> "$GITHUB_ENV"
+
+      - name: Package archive (Windows)
+        if: matrix.archive == 'zip'
+        shell: pwsh
+        run: |
+          $version = "${{ github.event_name == 'push' && github.ref_name || inputs.tag }}"
+          $version = $version -replace '^v',''
+          if ([string]::IsNullOrWhiteSpace($version)) {
+            $version = (Select-String -Path Cargo.toml -Pattern '^version' | Select-Object -First 1).Line -replace '.*"(.*)".*','$1'
+          }
+          New-Item -ItemType Directory -Force -Path package | Out-Null
+          Copy-Item "target/${{ matrix.target }}/release/${{ matrix.bin }}" "package/rgctl.exe"
+          $archive = "rgctl-${version}-${{ matrix.target }}.zip"
+          Compress-Archive -Path package/rgctl.exe -DestinationPath $archive -Force
+          echo "ARCHIVE=$archive" >> $env:GITHUB_ENV
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target }}
+          path: ${{ env.ARCHIVE }}
+          if-no-files-found: error
+
+  release:
+    name: Publish GitHub Release
+    needs: build
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          lfs: true
+          ref: ${{ github.event_name == 'push' && github.ref || (inputs.tag != '' && inputs.tag || inputs.ref) }}
+
+      - name: Download all platform archives
+        uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: Write checksums
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd dist
+          # Artifacts may land flat (merge-multiple) or under per-target dirs.
+          mapfile -t archives < <(
+            find . -type f \( -name 'rgctl-*.tar.gz' -o -name 'rgctl-*.zip' \) | sort
+          )
+          if [[ ${#archives[@]} -eq 0 ]]; then
+            echo "error: no rgctl archives under dist/; refusing empty SHA256SUMS.txt" >&2
+            find . -type f | head -50 >&2
+            exit 1
+          fi
+          # Flatten into dist/ so softprops uploads a single flat file set.
+          for f in "${archives[@]}"; do
+            base="$(basename "$f")"
+            if [[ "$f" != "./$base" ]]; then
+              mv -f "$f" "./$base"
+            fi
+          done
+          : > SHA256SUMS.txt
+          for f in rgctl-*.tar.gz rgctl-*.zip; do
+            [[ -f "$f" ]] || continue
+            shasum -a 256 "$f" >> SHA256SUMS.txt
+          done
+          if [[ ! -s SHA256SUMS.txt ]]; then
+            echo "error: SHA256SUMS.txt is empty" >&2
+            exit 1
+          fi
+          echo "--- SHA256SUMS.txt ---"
+          cat SHA256SUMS.txt
+          echo "lines=$(wc -l < SHA256SUMS.txt)"
+
+      - name: Resolve release tag
+        id: meta
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [[ "${{ github.event_name }}" == "push" ]]; then
+            TAG="${GITHUB_REF_NAME}"
+          elif [[ -n "${{ inputs.tag }}" ]]; then
+            TAG="${{ inputs.tag }}"
+          else
+            VERSION="$(grep '^version' Cargo.toml | head -1 | sed 's/.*"\(.*\)".*/\1/')"
+            TAG="v${VERSION}"
+          fi
+          TAG="${TAG#v}"
+          TAG="v${TAG}"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          NOTES="docs/releases/${TAG}.md"
+          if [[ -f "$NOTES" ]]; then
+            cp "$NOTES" release-body.md
+            echo "Using curated notes from ${NOTES}"
+          else
+            : > release-body.md
+            echo "No docs/releases/${TAG}.md; GitHub will generate notes only"
+          fi
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.meta.outputs.tag }}
+          name: rgctl ${{ steps.meta.outputs.tag }}
+          draft: ${{ github.event_name == 'workflow_dispatch' && inputs.draft || false }}
+          prerelease: ${{ contains(steps.meta.outputs.tag, '-') }}
+          body_path: release-body.md
+          generate_release_notes: true
+          files: dist/*
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+      # secrets.* cannot appear in job/step `if:` — check token inside the step instead.
+      - name: Trigger rgctl-tests report
+        if: ${{ github.event_name != 'workflow_dispatch' || !inputs.draft }}
+        env:
+          DISPATCH_TOKEN: ${{ secrets.RGCTL_TESTS_DISPATCH_TOKEN }}
+          RELEASE_TAG: ${{ steps.meta.outputs.tag }}
+        run: |
+          set -euo pipefail
+          if [[ -z "${DISPATCH_TOKEN}" ]]; then
+            echo "RGCTL_TESTS_DISPATCH_TOKEN not set; skipping rgctl-tests report dispatch"
+            exit 0
+          fi
+          payload="$(jq -nc \
+            --arg tag "$RELEASE_TAG" \
+            --arg repo "${{ github.repository }}" \
+            --arg sha "${{ github.sha }}" \
+            '{event_type:"rgctl-released", client_payload:{tag:$tag, rgctl_repo:$repo, rgctl_sha:$sha}}')"
+          curl -fsSL -X POST \
+            -H "Accept: application/vnd.github+json" \
+            -H "Authorization: Bearer ${DISPATCH_TOKEN}" \
+            "https://api.github.com/repos/sshaaf/rgctl-tests/dispatches" \
+            -d "$payload"
+          echo "Dispatched rgctl-released for ${RELEASE_TAG}"

@@ -1,0 +1,6 @@
+/no_think
+
+Plan the ScarfBench migration in /work to Quarkus platform 3.30.5. Read the installed kantra and rgctl skills under /root/.agents/skills.
+Run `bash /opt/acb/kantra-plan.sh`, then `bash /opt/acb/rgctl-plan.sh structural` and wait for both. Read the Kantra findings and bounded graph evidence in .konveyor/rgctl. Inspect the actual POMs, affected Java files, resources, and test.sh to establish the application's behavior.
+Use rgctl structured find, callers, callees and relations queries when you need structural facts. Save useful query output in .konveyor/rgctl. Kantra supplies migration findings; do not enable rgctl's --with-kantra or --kantra-target.
+Write PLAN.md in at most 500 words: ordered file-specific changes, findings and symbol references behind them, endpoints and state/data behavior to preserve, dependencies and build/check commands. Address the actual application's features, including persistence, messaging, transactions, UI or SOAP when present. Keep the current build structure where possible. Finish after saving the plan; do not edit application source in this stage.

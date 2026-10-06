@@ -79,12 +79,16 @@ def job_config(plan: dict, output: Path, *, install_only=False, control=None):
             "image": plan["caveman_image"], "network_mode": "service:main",
             "depends_on": ["main"], "healthcheck": {"disable": True},
         }
+    if plan.get("benchmark") == "scarfbench":
+        from acb.maven_cache import compose_cache
+        cache_config = plan["benchmark_config"]
+        compose_cache(overlay_data, cache_config)
     if overlay_data:
         for service, record in plan.get("provider_images", {}).items():
             if service in overlay_data.get("services", {}):
                 overlay_data["services"][service].update(image=record["image_id"], pull_policy="never")
         from acb.harbor.contracts import validate_service_names
-        validate_service_names(plan["manifest"]["tasks"], overlay_data.get("services", {}))
+        validate_service_names(plan["manifest"]["tasks"], set(overlay_data.get("services", {})) - {"main"})
         overlay = output / "services-compose.yaml"
         overlay.write_text(yaml.safe_dump(overlay_data))
         environment["extra_docker_compose"] = [str(overlay)]
@@ -115,6 +119,11 @@ async def execute(plan, output, install_only=False, control=None):
     if not install_only and not control and plan["model"].get("vertex_model"):
         from acb.auth import fetch_vertex_token
         os.environ["VERTEX_AUTH_TOKEN"] = fetch_vertex_token()
+    if plan.get("benchmark") == "scarfbench":
+        from acb.maven_cache import cache_volume, ensure_volume
+        if cache_volume(plan["benchmark_config"]):
+            os.environ["DOCKER_BUILDKIT"] = "1"
+        await asyncio.to_thread(ensure_volume, plan["environment"], plan["benchmark_config"])
     config = job_config(plan, output, install_only=install_only, control=control)
     job = await Job.create(config)
     if not install_only:
