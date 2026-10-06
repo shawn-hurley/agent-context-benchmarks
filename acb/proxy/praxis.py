@@ -108,7 +108,7 @@ def build_config(port: int, model_spec, harness_api: str, include_token_count: b
             # Inject the GCP Bearer token AFTER router selects the cluster.
             {"filter": "credential_injection", "clusters": [{
                 "name": "vertex_ai_global", "header": "Authorization",
-                "env_var": "GCP_ACCESS_TOKEN", "header_prefix": "Bearer ",
+                "env_var": "VERTEX_AUTH_TOKEN", "header_prefix": "Bearer ",
                 "strip_client_credential": True
             }]},
         ]

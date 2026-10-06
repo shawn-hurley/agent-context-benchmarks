@@ -107,3 +107,14 @@ def test_container_usage_excludes_discovery_and_token_probes(tmp_path):
     rows = list(read_records(backend.usage_path))
     assert [r.endpoint for r in rows] == endpoints[2:]
     assert [r.turn_index for r in rows] == [0, 1]
+
+
+def test_vertex_credential_reads_the_token_the_worker_exports():
+    # acb/harbor/worker.py exports VERTEX_AUTH_TOKEN and passes only that name
+    # into the Praxis sidecar, so credential_injection must read the same one.
+    spec = ModelSpec(name="vertex", api="anthropic", endpoint="aiplatform.googleapis.com:443",
+                     key_env="VERTEX_AUTH_TOKEN", vertex_model="claude-haiku-4-5@20251001")
+    config = build_container_config(18880, spec, "anthropic")
+    injection = next(f for chain in config["filter_chains"] for f in chain["filters"]
+                     if f["filter"] == "credential_injection")
+    assert injection["clusters"][0]["env_var"] == "VERTEX_AUTH_TOKEN"
