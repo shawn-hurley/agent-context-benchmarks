@@ -72,6 +72,8 @@ not require resetting existing configuration or initializing SWE-bench.
   native Cart behavior validation, and expansion to the full application set.
 - **SWE-bench / SWE-bench Lite:** Initialize the SWE-bench submodule and install
   the datasets extra. Follow [native grader setup](docs/harbor-benchmark-migration.md).
+  Under Podman, ACB supplies the native graders with a generated `docker` shim
+  on their `PATH`.
 - **Staged migration workflows:** Select `kantra-controller`, `kantra-rgctl`, or
   `migiq`. See [workflow configuration and bundled skills](docs/workflows.md).
 - **Other harnesses and treatments:** See the

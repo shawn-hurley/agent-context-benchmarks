@@ -48,6 +48,26 @@ async def run_grader(command, *, cwd, env, log):
             raise
 
 
+def grader_env(config, output):
+    """Container env for a native grader, with a `docker` shim under Podman.
+
+    Both native graders shell out to a literal `docker` binary, and installed
+    wheels do not have the checkout's bin/docker shim.
+    """
+    from acb.container import container_env
+    env = container_env(config)
+    if config.get("container_backend") == "podman":
+        binary = shutil.which("podman")
+        if not binary:
+            raise FileNotFoundError("Podman is required by the selected grading backend")
+        shim = output / "bin"
+        shim.mkdir(exist_ok=True)
+        (shim / "docker").write_text("#!/bin/sh\nexec " + shlex.quote(binary) + ' "$@"\n')
+        (shim / "docker").chmod(0o755)
+        env["PATH"] = str(shim) + os.pathsep + env.get("PATH", "")
+    return env
+
+
 class BenchmarkVerifier(BaseVerifier):
     def __init__(self, *args, benchmark_config, **kwargs):
         super().__init__(*args, **kwargs)
@@ -146,18 +166,7 @@ class BenchmarkVerifier(BaseVerifier):
             "output": str(run), "model_patch": None,
         }))
         (output / "request.json").write_text(json.dumps({**record, "config": config, "run": str(run)}))
-        from acb.container import container_env
-        env = container_env(config)
-        if config.get("container_backend") == "podman":
-            # Installed wheels do not have the checkout's bin/docker shim.
-            binary = shutil.which("podman")
-            if not binary:
-                raise FileNotFoundError("Podman is required by the selected grading backend")
-            shim = output / "bin"
-            shim.mkdir()
-            (shim / "docker").write_text("#!/bin/sh\nexec " + shlex.quote(binary) + ' "$@"\n')
-            (shim / "docker").chmod(0o755)
-            env["PATH"] = str(shim) + os.pathsep + env.get("PATH", "")
+        env = grader_env(config, output)
         # The child uses ACB's interpreter, including editable installations.
         command = [sys.executable, str(Path(__file__).with_name("benchmark_grade.py")), str(output / "request.json")]
         return command, env
@@ -196,8 +205,7 @@ class BenchmarkVerifier(BaseVerifier):
                    "task_repo": str(self.task.paths.tests_dir / "task_repo")}
         (output / "request.json").write_text(json.dumps(request))
         python = self.config.get("swebench_python") or str(_ensure_swebench_venv())
-        from acb.container import container_env
-        env = container_env(self.config)
+        env = grader_env(self.config, output)
         return [python, str(Path(__file__).with_name("swebench_grade.py")), str(output / "request.json")], env
 
 
