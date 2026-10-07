@@ -33,6 +33,42 @@ Resolve validates configuration without starting containers or calling a model.
 Preparation starts disposable environments and verifies prerequisites. Controls
 exercise grading without a measured harness/model run.
 
+### Container prerequisites and Compose
+
+Harbor uses Compose to manage each trial's task environment: build/start its
+containers, connect task-defined services and ACB sidecars, execute commands,
+copy evidence and remove trial containers/networks. Normal measured runs add
+the Praxis proxy; some treatments add Caveman, and tasks may define additional
+services such as databases. The single-container quickstart and oracle/nop
+controls use the same Compose lifecycle.
+
+At the start of `prepare`, ACB checks the selected Compose frontend's version,
+the engine's `info` command and, for `docker compose`/`podman compose`, a
+read-only `ls` to verify the provider can reach the engine. Normal `run` and
+controls perform the same check before downloads, cache creation or trial
+startup. A failure exits 1, names the failed command and gives setup guidance.
+These checks create no containers or model requests; task/image validation
+still happens during preparation.
+
+Docker uses its Compose plugin. Podman uses `podman-compose --in-pod=false`
+when installed; otherwise ACB requires a Compose V2 compatible provider behind
+`podman compose`. Verify the appropriate frontend:
+
+```sh
+docker compose version
+docker compose ls
+# Or, for Podman's selected frontend:
+podman-compose --in-pod=false --version
+podman info
+# If podman-compose is not installed:
+podman compose version
+podman compose ls
+```
+
+See the [Quick Start](quick-start.md#1-install-and-clone) for engine/plugin
+installation. `resolve`, `tasks` and interactive save-only setup do not perform
+these container checks.
+
 ### Choosing a command
 
 Run `acb` or `acb --help` for the workflow, and `acb COMMAND --help` for flags.
@@ -159,6 +195,10 @@ failures, orchestration errors and explicit cancellation remain nonzero.
 the same exit policy: inspect their recorded outcomes to determine whether the
 expected oracle/nop reward was obtained. Progress and `job.log` still show trial
 failures even when ACB execution completed.
+The control summary labels its expected grade: a nop **Passed** means the task
+received the expected zero reward. Progress summaries show unavailable token
+usage when it was not collected; use the saved report for measurement coverage.
+Text reports include recorded trial failure causes and point to saved evidence.
 
 Native result files are loaded independently. Damaged files stay in place,
 healthy results are imported, and unavailable scheduled slots remain explicit.

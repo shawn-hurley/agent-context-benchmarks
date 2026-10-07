@@ -67,6 +67,7 @@ def test_harbor_saves_exact_worker_input_and_requested_snapshot(tmp_path, monkey
     monkeypatch.setattr(backend, '_worker', worker)
     result = backend.run_plan(plan)
     terminal = capsys.readouterr().out
+    assert 'Layout(' not in terminal
     assert terminal.index('Inspecting task environments and verifier') < terminal.index('Starting global work queue')
     requested = json.loads((result / 'requested.json').read_text())
     saved = json.loads((result / 'resolved.json').read_text())

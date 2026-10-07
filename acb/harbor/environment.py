@@ -8,11 +8,54 @@ import subprocess
 import json
 from pathlib import Path
 import tempfile
+import shlex
 
 from harbor.environments.podman import PodmanEnvironment
 from harbor.environments.docker.docker import DockerEnvironment
 from harbor.environments.docker.runtime import ContainerRuntime
 from acb.harbor.processes import compose_command
+
+
+def check_compose(engine: str) -> None:
+    """Check the selected frontend and engine without creating trial resources."""
+    if engine == "docker":
+        provider = ACBDockerEnvironment
+        help_text = ("Install or enable the Docker Compose plugin; verify 'docker compose version' "
+                     "and 'docker compose ls'. Start the Docker engine if needed.")
+    elif engine == "podman":
+        provider = ACBPodmanEnvironment
+        help_text = ("Install podman-compose or configure a Compose V2 compatible provider for 'podman compose'. "
+                     "Verify 'podman info'; run 'podman machine start' on macOS/Windows or start the Podman socket "
+                     "on Linux if the provider cannot connect.")
+    else:
+        raise ValueError(f"unsupported container engine: {engine}")
+    help_text += " See docs/quick-start.md for setup."
+    if not shutil.which(engine):
+        raise RuntimeError(f"Container prerequisite check failed: {engine} is not installed or not on PATH. {help_text}")
+    try:
+        runtime = provider.runtime()
+    except (OSError, RuntimeError, subprocess.TimeoutExpired) as error:
+        raise RuntimeError(f"Container prerequisite check failed: {error}. {help_text}") from error
+
+    def probe(argv):
+        command = shlex.join(argv)
+        try:
+            result = subprocess.run(argv, capture_output=True, text=True, timeout=10)
+        except (OSError, subprocess.TimeoutExpired) as error:
+            raise RuntimeError(f"Container prerequisite check failed: '{command}': {error}. {help_text}") from error
+        if result.returncode:
+            detail = (result.stderr or result.stdout or "no diagnostic output").strip()
+            raise RuntimeError(f"Container prerequisite check failed: '{command}' exited {result.returncode}. "
+                               f"{help_text}\n{detail}")
+
+    # podman-compose uses a global --version flag; the Docker-compatible
+    # providers use the version subcommand. Probe exactly the selected argv.
+    probe([*runtime.compose, "--version" if runtime.compose[0] == "podman-compose" else "version"])
+    probe([*runtime.engine, "info"])
+    # Wrapper providers use the engine API socket. Engine info alone can work
+    # while that provider's connection fails. Listing creates no resources.
+    if runtime.compose[:2] in (("docker", "compose"), ("podman", "compose")):
+        probe([*runtime.compose, "ls"])
 
 
 def copy_log_mounts(mounts):

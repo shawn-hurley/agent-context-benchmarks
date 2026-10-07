@@ -49,6 +49,8 @@ limits, output/cache directories, harness versions, timeouts, treatments and
 configuration sources. Credential values are not read for the review. Use
 PageUp/PageDown to scroll through details while the save/run actions remain
 selectable. Task count remains pending until discovery or preparation.
+In very short terminals, Review keeps the actions visible and asks you to
+enlarge the terminal to read the effective settings.
 
 ## Keyboard controls
 

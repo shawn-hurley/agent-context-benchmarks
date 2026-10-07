@@ -20,6 +20,8 @@ class HarborProgress:
             model=plan["model"]["name"],
             benchmark=plan["benchmark"],
         )
+        if control:
+            self.tracker.verification_label = f"Control outcome ({control}; expected grade {1 if control == 'oracle' else 0})"
         self.output = Path(output)
         self._slots: dict[tuple[str, str], deque[str]] = defaultdict(deque)
         self._trials: dict[str, str] = {}

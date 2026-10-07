@@ -142,6 +142,10 @@ def prepare(plan: ResolvedPlan, *, probe=True, control=False, status=None) -> di
     if document["execution_backend"] != "harbor":
         raise ValueError("prepare requires execution_backend: harbor")
     python = runtime(document)
+    from acb.harbor.environment import check_compose
+    if status:
+        status("Checking container engine and Compose")
+    check_compose(document["environment"])
     cache = Path(document["cache_dir"])
     cache.mkdir(parents=True, exist_ok=True)
     identity = hashlib.sha256(plan.document.encode()).hexdigest()
@@ -240,12 +244,16 @@ def run_plan(plan: ResolvedPlan, *, verbose=False, control=None):
     )
     failure = None
     try:
-        display = LiveTrackerDisplay(progress.tracker)
-        with Live(display, refresh_per_second=2, console=progress.tracker.console,
-                  redirect_stderr=not verbose) as live:
+        if progress.tracker.console.is_terminal:
+            display = LiveTrackerDisplay(progress.tracker)
+            with Live(display, refresh_per_second=2, console=progress.tracker.console,
+                      redirect_stderr=not verbose) as live:
+                _worker(document["worker_python"], "control" if control else "run", resolved, output,
+                        control=control, on_event=progress.update)
+                live.refresh()
+        else:
             _worker(document["worker_python"], "control" if control else "run", resolved, output,
                     control=control, on_event=progress.update)
-            live.refresh()
     except BaseException as error:
         failure = error
         raise

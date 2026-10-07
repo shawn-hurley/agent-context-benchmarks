@@ -110,6 +110,15 @@ def report_lines(roots):
             for row in rows:
                 lines.append(f"  {row['benchmark']} | {value(row['grade'])} | "
                              f"{'complete' if row['measurement_complete'] else 'incomplete'} | {value(row['tokens'])}")
+            for trial in evaluations:
+                exception = trial.get("exception") or {}
+                message = exception.get("exception_message") or trial.get("verification_error")
+                if trial.get("status") != "completed" and message:
+                    lines.append(f"  Failure: {trial.get('task_id', 'unknown task')} "
+                                 f"({trial.get('error_phase') or 'unknown phase'}): {' '.join(message.split())}")
+            if errors:
+                evidence = root / "job.log" if (root / "job.log").is_file() else harness.directory
+                lines.append(f"  Failure evidence: {evidence}")
         if not source.harnesses:
             lines.append("  Harness details unavailable; use --json to inspect the saved overview.")
     lines.append("Grades and complete measurements determine results; process exit alone does not.")

@@ -46,3 +46,15 @@ def test_missing_grade_is_visible_as_error_instead_of_valid_failed_verification(
     record = progress.tracker.instances['pi-task-1']
     assert record.status == InstanceStatus.FAILED
     assert 'usable grade' in record.error_message
+
+
+def test_control_summary_labels_expected_outcome_and_unknown_usage(tmp_path):
+    progress = HarborProgress(plan(), tmp_path, control='nop')
+    progress.update(event('trial-started', harness='nop'))
+    progress.update(event('trial-ended', harness='nop', resolved=True))
+    summary = progress.tracker.summary()
+    assert 'Control outcome (nop; expected grade 0)' in summary
+    assert 'Passed: 1' in summary
+    assert 'Average tokens per instance: unavailable' in summary
+    progress.tracker.instances['nop-task-1'].tokens_used = 0
+    assert 'Average tokens per instance: 0 (coverage 1/1)' in progress.tracker.summary()

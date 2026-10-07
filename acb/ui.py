@@ -139,6 +139,7 @@ class ProgressTracker:
         self.run_id = run_id
         self.model = model
         self.benchmark = benchmark
+        self.verification_label = "Verification"
 
         self.instances: dict[str, InstanceProgress] = {}
         self.completion_order: list[str] = []  # For "Recent" display
@@ -702,7 +703,8 @@ class ProgressTracker:
                 if i.end_time is not None and i.start_time is not None
             ]
             avg_time = sum(i.elapsed for i in finished) / len(finished) if finished else 0
-            avg_tokens = sum(i.tokens_used or 0 for i in finished) / len(finished) if finished else 0
+            measured = [i for i in finished if i.tokens_used is not None]
+            avg_tokens = sum(i.tokens_used for i in measured) / len(measured) if measured else None
         
         summary_lines = [
             "",
@@ -718,7 +720,7 @@ class ProgressTracker:
             f"    🔄 Running: {running}",
             f"    ⏳ Queued: {queued}",
             "",
-            f"  Verification:",
+            f"  {self.verification_label}:",
             f"    ✅ Passed: {verified_pass}",
             f"    ❌ Failed: {verified_fail}",
             f"    🔍 In Progress: {verifying}",
@@ -726,7 +728,8 @@ class ProgressTracker:
             "",
             f"  Performance:",
             f"    Average time per instance: {avg_time:.1f}s",
-            f"    Average tokens per instance: {avg_tokens:.0f}",
+            f"    Average tokens per instance: {avg_tokens:.0f} (coverage {len(measured)}/{len(finished)})" if measured else
+            "    Average tokens per instance: unavailable; inspect the saved report for measurement coverage",
         ]
 
         # Show failed instances if any
@@ -739,7 +742,7 @@ class ProgressTracker:
                         error_short = (inst.error_message or "Unknown error")[:60]
                         summary_lines.append(f"    [red]💥 {inst.instance_id}: {error_short}[/]")
                     elif inst.status == InstanceStatus.VERIFIED_FAIL:
-                        summary_lines.append(f"    [red]❌ {inst.instance_id}: Verification failed[/]")
+                        summary_lines.append(f"    [red]❌ {inst.instance_id}: {self.verification_label} failed[/]")
 
         # Show pipeline errors that occurred during Live display
         if self.accumulated_errors:

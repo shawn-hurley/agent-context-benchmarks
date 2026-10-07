@@ -46,6 +46,12 @@ instead. Verify both plugin version commands before running ACB. The packaged
 proxy and Maven cache recipes require BuildKit features; the legacy Docker
 builder cannot assemble them. Docker Desktop includes these plugins.
 
+ACB checks the selected engine and Compose frontend before preparation or run
+startup. An unavailable frontend or provider connection fails with the command
+and setup guidance before downloads or trial creation. Compose is required even
+for the included single-container task because Harbor uses it for the trial
+lifecycle; see [container prerequisites](harbor-operations.md#container-prerequisites-and-compose).
+
 Then clone and install ACB:
 
 ```sh

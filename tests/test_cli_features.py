@@ -235,3 +235,58 @@ def test_packaged_setup_task_matches_documented_quickstart_fixture():
     for name, contents in files.items():
         if name.startswith("tasks/"):
             assert (source / name).read_bytes() == contents, name
+
+
+@pytest.mark.parametrize("height", [6, 7, 8, 9])
+def test_short_review_keeps_the_selected_action_visible(height):
+    window = MenuWindow([ord("j"), 10], height)
+    screen = _Screen(window, None)
+    assert screen.menu("Review", ["Save configuration", "Cancel"],
+                       details=["Effective setting"] * 30, scroll_details=True) == "Cancel"
+    assert "> Save configuration" in window.frames[0].values()
+    assert "> Cancel" in window.frames[1].values()
+
+
+def test_new_draft_expands_home_registry_path(starter):
+    import os
+    registry = "~/" + os.path.relpath(starter.parent / "config", Path.home())
+    draft = RunDraft.create(registry)
+    assert draft.config.model == "quickstart-model"
+    assert draft.config.benchmark == "smoke"
+    assert resolve(draft.config).to_dict()["environment"] == "docker"
+
+
+def test_correcting_model_clears_old_editor_error(starter, monkeypatch):
+    screen = _Screen(None, None)
+    screen.error = "No models configured"
+    monkeypatch.setattr(screen, "menu", lambda *a, **kw: "quickstart-model")
+    screen.edit(RunDraft.load(starter), "model")
+    assert screen.error == ""
+
+
+def test_loading_valid_yaml_clears_old_load_error(starter, monkeypatch):
+    screen = _Screen(None, None)
+    choices = iter(["Load YAML file", "Load YAML file", "Cancel"])
+    prompts = iter([str(starter.parent / "missing.yaml"), str(starter)])
+    def menu(title, options, **kwargs):
+        if title == "Configure run":
+            assert screen.error == ""
+        return next(choices)
+    monkeypatch.setattr(screen, "menu", menu)
+    monkeypatch.setattr(screen, "prompt", lambda *a, **kw: next(prompts))
+    assert screen.run() is None
+
+
+def test_report_text_explains_failed_trial_and_points_to_evidence(tmp_path, capsys):
+    failed = run(tmp_path / "failed", {"task": None}, complete=False)
+    path = failed / "report.json"
+    report = json.loads(path.read_text())
+    report["evaluations"][0].update(error_phase="environment_setup", exception={
+        "exception_message": "Compose build failed:\nunknown flag: --project-name"})
+    path.write_text(json.dumps(report))
+    (failed / "job.log").write_text("saved failure evidence")
+    main(["report", str(failed), "--text"])
+    output = capsys.readouterr().out
+    assert "task | unavailable | incomplete | unavailable" in output
+    assert "Failure: task (environment_setup): Compose build failed: unknown flag" in output
+    assert f"Failure evidence: {failed / 'job.log'}" in output

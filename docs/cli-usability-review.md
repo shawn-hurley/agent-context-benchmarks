@@ -86,7 +86,55 @@ or preparation cache. The source-distribution/wheel build and installed-package
 gate passed, including quickstart creation, task discovery and offline export
 outside the checkout.
 `git diff --check` passed. No container acceptance or paid model run was
-performed for this review.
+performed in that initial pass.
 Existing [Quick Start acceptance evidence](quick-start-validation.md) describes
-engine/harness coverage; this review does not expand it. Process success remains
+engine/harness coverage; the initial review did not expand it. Process success remains
 separate from valid grades and complete measurements.
+
+## Follow-up end-to-end walkthrough
+
+The follow-up used the `codex/cli-usability` worktree after its first commit was
+merged into local `main`. It followed the named quickstart documentation through
+initialization, resolution, local task discovery, interactive loading/selection,
+save-only, save-as/reload, later control execution, failed-result inspection,
+comparisons and HTML/ZIP exports. It exercised real 24-row and 8-row terminals.
+
+| Finding | Fix |
+| --- | --- |
+| Review details occupied every usable row in terminals shorter than 10 rows, hiding the selected action | Prioritize actions when details cannot fit; show an enlargement hint; regression coverage includes 6–9 rows |
+| Creating a draft with `--config-dir ~/...` loaded an empty registry before expanding the path | Expand the home directory before loading registries |
+| A successful YAML load or model/component correction retained an earlier error message | Clear errors after successful loading or field edits |
+| Piped execution printed empty Rich layouts containing internal `Layout(...)` labels | Start the live display only for terminal output; preserve events, summaries and saved evidence for scripts |
+| Progress treated unknown token usage as zero | Average only known usage, label its coverage, and show unavailable when none was collected |
+| A nop control with reward zero displayed verification **Passed** without explaining the expected outcome | Label the summary as a control outcome with its expected grade |
+| Text reports counted failed trials without showing the recorded cause | Include the trial's failure phase/message and point to saved failure evidence |
+
+Actual quickstart controls on the running Podman engine produced oracle reward
+**1** and nop reward **0**. The relocated saved YAML also executed successfully
+with nop. Controls made no model requests; their measurement coverage remains
+unavailable. The first Docker control failed because this host's Docker CLI
+lacked its Compose plugin. Its nonzero exit, saved error and unavailable grade
+were checked, then execution continued using the available Podman Compose
+frontend. No host plugin configuration was changed.
+
+The follow-up discussion requested an early Compose prerequisite check. This is
+now implemented at preparation entry, covering ordinary runs and controls. It
+checks the selected frontend version, engine response and wrapper-provider
+connection before cache/download/trial creation; failures name the command and
+setup guidance. Configuration/discovery/save-only commands remain engine-free.
+See [container prerequisites](harbor-operations.md#container-prerequisites-and-compose)
+for why the runner needs Compose. This pass adds no matrix, resume, automatic
+custom-workflow scanning or compatibility-label features.
+
+Follow-up verification passed: **689 tests passed, 4 skipped**, source/wheel
+build, installed-wheel imports/resources/offline export, report/comparison
+HTML/ZIP exports, piped JSON parsing and cleanup previews. The updated nop
+walkthrough confirmed the plain piped summary, explicit control outcome and
+unavailable token usage. `git diff --check` passed. No paid model run was
+performed.
+
+After adding the Compose prerequisite check, the full suite passed with
+**705 passed, 4 skipped**. A real Docker check caught this host's missing Compose
+plugin before cache/run output creation, and the selected Podman frontend passed
+the read-only availability checks. No model requests or trial containers were
+started during those checks.

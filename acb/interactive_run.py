@@ -45,7 +45,7 @@ class RunDraft:
 
     @classmethod
     def create(cls, config_dir: str | None = None) -> "RunDraft":
-        registry = Registries.load(Path(config_dir) if config_dir else None)
+        registry = Registries.load(Path(config_dir).expanduser() if config_dir else None)
         catalog = defaults()
         models = {**registry.proxy.get("models", {}), **registry.models}
         cfg = RunConfig(
@@ -269,10 +269,10 @@ class _Screen:
             if scroll_details:
                 wrapped = [part for line in details or [] for part in
                            (textwrap.wrap(line, width=max(1, width - 1), replace_whitespace=False) or [""])]
-                detail_capacity = max(1, capacity - min(2, len(options)) - 2)
+                detail_capacity = max(0, capacity - min(2, len(options)) - 2)
                 detail_offset = min(detail_offset, max(0, len(wrapped) - detail_capacity))
-                shown_details = [f"Details {detail_offset + 1}-{min(len(wrapped), detail_offset + detail_capacity)}/{len(wrapped)}",
-                                 *wrapped[detail_offset:detail_offset + detail_capacity]]
+                shown_details = ([f"Details {detail_offset + 1}-{min(len(wrapped), detail_offset + detail_capacity)}/{len(wrapped)}",
+                                  *wrapped[detail_offset:detail_offset + detail_capacity]] if detail_capacity else [])
             else:
                 shown_details = (details or [])[:max(0, capacity - min(3, len(options)) - 1)]
             prefix = [*shown_details, ""] if shown_details else []
@@ -283,7 +283,8 @@ class _Screen:
                     for index, option in enumerate(options)]
             footer = "↑↓ move  Space toggle  Enter select  Esc back" if multi else "↑↓ move  Enter select  Esc back"
             if scroll_details:
-                footer = "↑↓ actions  Enter select  Esc back  PgUp/PgDn details"
+                footer = ("↑↓ actions  Enter select  Esc back  PgUp/PgDn details" if detail_capacity else
+                          "↑↓ actions  Enter select  Esc back  Enlarge terminal for details")
             self.draw(title, [*prefix, *rows[start:start + visible]],
                       f"{footer}  {position + 1}/{len(options)}")
             key = self.window.getch()
@@ -415,10 +416,12 @@ class _Screen:
                         return
                     existing = {item.get("name"): item for item in current or [] if isinstance(item, dict)} if isinstance(current, list) else {}
                     draft.set(key, [existing.get(name, name) for name in result])
+                    self.error = ""
             else:
                 result = self.menu(f"Select {key}", options)
                 if result is not None:
                     draft.set(key, result)
+                    self.error = ""
             return
         result = self.prompt(f"Edit {key}", "" if current is None else
                              ", ".join(current) if key == "subset" else str(current))
@@ -451,6 +454,7 @@ class _Screen:
                     draft = RunDraft.load(path, self.config_dir)
                 else:
                     draft = RunDraft.create(self.config_dir)
+                self.error = ""
                 break
             except UI_ERRORS as error:
                 self.error = str(error)
