@@ -24,6 +24,10 @@ SWE-bench/*.egg-info/
 
 bin/
 *_PLAN.md
+# Bundled workflow documents are source assets required by workflow.yaml.
+!acb/workflows/migiq/skills/migiq/TEST_PLAN.md
+!acb/workflows/kantra-rgctl/skills/rgctl/upstream/AGENTS.md
+!acb/workflows/migiq/skills/rgctl/upstream/AGENTS.md
 target
 .rgctl/
 
