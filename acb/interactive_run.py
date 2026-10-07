@@ -9,6 +9,7 @@ import os
 from pathlib import Path
 import re
 import tempfile
+import textwrap
 
 import yaml
 
@@ -18,9 +19,15 @@ from acb.resolver import HARNESSES, ResolvedPlan, defaults, resolve
 
 FORM_KEYS = ("run_id", "benchmark", "harness", "model", "workflow", "subset", "limit",
              "skills", "extensions", "timeout", "max_workers")
-UI_ERRORS = (OSError, ValueError, KeyError, TypeError, yaml.YAMLError)
+UI_ERRORS = (OSError, ValueError, RuntimeError, KeyError, TypeError, yaml.YAMLError)
 NO_WORKFLOW = "No workflow"
 CUSTOM_WORKFLOW = "Enter workflow directory..."
+
+
+@dataclass(frozen=True)
+class SavedConfiguration:
+    """An editor result that saves a file without handing a plan to execution."""
+    path: Path
 
 
 def bundled_workflows() -> list[str]:
@@ -42,7 +49,7 @@ class RunDraft:
         catalog = defaults()
         models = {**registry.proxy.get("models", {}), **registry.models}
         cfg = RunConfig(
-            run_id="run", benchmark=next(iter({**catalog["benchmarks"], **registry.benchmarks})),
+            run_id="run", benchmark=next(iter(registry.benchmarks or catalog["benchmarks"])),
             harness="goose", model=next(iter(models), ""), skills=[], extensions=[],
             config_dir=str(Path(config_dir).expanduser().absolute()) if config_dir else None,
         )
@@ -216,20 +223,20 @@ def _save(draft: RunDraft, path: Path) -> None:
         temp_path.unlink(missing_ok=True)
 
 
-def finish(draft: RunDraft, choice: str, path: str | Path | None = None) -> ResolvedPlan | None:
+def finish(draft: RunDraft, choice: str, path: str | Path | None = None) -> ResolvedPlan | SavedConfiguration | None:
     """Validate screen values, then commit a save choice before returning a plan."""
     if choice == "cancel":
         return None
     if choice == "unsaved":
         return resolve(draft.candidate(unsaved=True))
-    if choice != "save" or path is None:
+    if choice not in {"save", "save_only"} or path is None:
         raise ValueError("save requires a YAML path")
     destination = Path(path).expanduser().absolute()
     if destination.suffix not in {".yaml", ".yml"}:
         raise ValueError("save path must end in .yaml or .yml")
     plan = resolve(draft.candidate(save_path=destination))
     _save(draft, destination)
-    return plan
+    return SavedConfiguration(destination) if choice == "save_only" else plan
 
 
 class _Screen:
@@ -241,9 +248,9 @@ class _Screen:
     def draw(self, title: str, rows: list[str], footer: str = "↑↓ move  Enter select  Esc back"):
         self.window.erase()
         height, width = self.window.getmaxyx()
-        for y, line in enumerate([title, "", *rows, "", self.error, footer]):
-            if y >= height:
-                break
+        lines = [(0, title), *enumerate(rows[:max(0, height - 5)], start=2),
+                 (max(0, height - 2), self.error), (max(0, height - 1), footer)]
+        for y, line in lines:
             try:
                 self.window.addnstr(y, 0, line, max(0, width - 1))
             except curses.error:
@@ -251,20 +258,40 @@ class _Screen:
         self.window.refresh()
 
     def menu(self, title: str, options: list[str], selected: set[str] | None = None,
-             details: list[str] | None = None):
+             details: list[str] | None = None, *, scroll_details=False):
         position = 0
+        detail_offset = 0
         multi = selected is not None
         selected = set(selected or ())
         while True:
+            height, width = self.window.getmaxyx()
+            capacity = max(1, height - 5)
+            if scroll_details:
+                wrapped = [part for line in details or [] for part in
+                           (textwrap.wrap(line, width=max(1, width - 1), replace_whitespace=False) or [""])]
+                detail_capacity = max(1, capacity - min(2, len(options)) - 2)
+                detail_offset = min(detail_offset, max(0, len(wrapped) - detail_capacity))
+                shown_details = [f"Details {detail_offset + 1}-{min(len(wrapped), detail_offset + detail_capacity)}/{len(wrapped)}",
+                                 *wrapped[detail_offset:detail_offset + detail_capacity]]
+            else:
+                shown_details = (details or [])[:max(0, capacity - min(3, len(options)) - 1)]
+            prefix = [*shown_details, ""] if shown_details else []
+            visible = max(1, capacity - len(prefix))
+            start = max(0, min(position - visible + 1, len(options) - visible))
             rows = [("> " if index == position else "  ") +
                     (("[x] " if option in selected else "[ ] ") if multi and option != "Done" else "") + option
                     for index, option in enumerate(options)]
-            self.draw(title, [*(details or []), *( [""] if details else []), *rows],
-                      "↑↓ move  Space toggle  Enter select  Esc back" if multi else "↑↓ move  Enter select  Esc back")
+            footer = "↑↓ move  Space toggle  Enter select  Esc back" if multi else "↑↓ move  Enter select  Esc back"
+            if scroll_details:
+                footer = "↑↓ actions  Enter select  Esc back  PgUp/PgDn details"
+            self.draw(title, [*prefix, *rows[start:start + visible]],
+                      f"{footer}  {position + 1}/{len(options)}")
             key = self.window.getch()
             if key in (27,):
                 return None
-            if key in (curses.KEY_UP, ord("k")):
+            if scroll_details and key in (curses.KEY_NPAGE, curses.KEY_PPAGE):
+                detail_offset = max(0, detail_offset + (detail_capacity if key == curses.KEY_NPAGE else -detail_capacity))
+            elif key in (curses.KEY_UP, ord("k")):
                 position = (position - 1) % len(options)
             elif key in (curses.KEY_DOWN, ord("j")):
                 position = (position + 1) % len(options)
@@ -324,6 +351,31 @@ class _Screen:
 
     def edit(self, draft: RunDraft, key: str):
         current = draft.value(key)
+        if key == "subset":
+            choice = self.menu("Select tasks", ["Enter task IDs...", "Browse local/cached tasks", "Download task listing", "Back"],
+                               details=["Browsing uses local/cached IDs; downloading may fetch dataset metadata/data.",
+                                        "Neither option starts containers or makes model calls."])
+            if choice in (None, "Back"):
+                return
+            if choice != "Enter task IDs...":
+                try:
+                    from acb.task_discovery import discover_tasks
+                    listing = discover_tasks(resolve(draft.candidate()).to_dict(),
+                                             allow_download=choice == "Download task listing")
+                    options = list(dict.fromkeys([*[item["id"] for item in listing["tasks"]], *(current or [])]))
+                    if not options:
+                        self.error = ("No eligible tasks; check benchmark paths and exclusions" if listing["complete"] else
+                                      "No cached tasks; choose Download task listing or enter IDs manually")
+                        return
+                    selected = self.menu("Select task IDs", [*options, "Done"], set(current or []),
+                                         details=["No checked IDs means all eligible tasks; Task limit still applies.",
+                                                  *listing["notes"]])
+                    if selected is not None:
+                        draft.set(key, selected or None)
+                        self.error = ""
+                except UI_ERRORS as error:
+                    self.error = str(error)
+                return
         if key == "workflow":
             bundled = bundled_workflows()
             options = [NO_WORKFLOW, *bundled]
@@ -350,7 +402,8 @@ class _Screen:
         if key in {"benchmark", "harness", "model", "skills", "extensions"}:
             options = self.choices(draft, key)
             if not options:
-                self.error = f"No configured {key} available"
+                self.error = (f"No models configured: add an alias to {draft.config.registry_dir() / 'models.yaml'}"
+                              if key == "model" else f"No configured {key} available")
                 return
             if key in {"harness", "skills", "extensions"}:
                 names = {item if isinstance(item, str) else item.get("name") for item in
@@ -404,7 +457,7 @@ class _Screen:
         labels = {"run_id": "Run ID", "benchmark": "Benchmark", "harness": "Harnesses",
                   "model": "Model", "workflow": "Workflow", "subset": "Task IDs", "limit": "Task limit",
                   "skills": "Skills", "extensions": "Extensions", "timeout": "Timeout (seconds)",
-                  "max_workers": "Workers"}
+                  "max_workers": "Concurrent trials (global)"}
         while True:
             rows = [f"{labels[key]}: {draft.value(key) if draft.value(key) is not None else '—'}" for key in FORM_KEYS]
             action = self.menu("Configure run", [*rows, "Review", "Cancel"])
@@ -413,35 +466,39 @@ class _Screen:
             if action != "Review":
                 self.edit(draft, FORM_KEYS[rows.index(action)])
                 continue
+            destination = None
+            pending_save = None
+            self.error = ""
             while True:
+                summary = None
                 try:
-                    plan = resolve(draft.candidate())
+                    plan = resolve(draft.candidate(save_path=destination))
                     summary = plan.to_dict()
-                    self.error = ""
                     title = f"Review: {summary['run_id']} · {summary['benchmark']} · {summary['model_alias']}"
-                    choices = ["Save and run", "Run without saving", "Back", "Cancel"]
+                    saving = ["Save configuration", "Save and run"]
+                    if pending_save == "Save and run":
+                        saving.reverse()
+                    choices = [*saving,
+                               *([] if destination else ["Run without saving"]), "Back", "Cancel"]
                 except UI_ERRORS as error:
                     custom = draft.value("workflow")
-                    needs_save_origin = (isinstance(error, FileNotFoundError) and draft.source is None
+                    needs_save_origin = (isinstance(error, FileNotFoundError) and draft.source is None and destination is None
                                          and isinstance(custom, str) and not Path(custom).is_absolute()
                                          and custom not in bundled_workflows())
                     if needs_save_origin:
                         self.error = "Workflow path will be checked relative to the save file"
                         title = "Review: choose a save path"
-                        choices = ["Save and run", "Back", "Cancel"]
+                        choices = ["Save configuration", "Save and run", "Back", "Cancel"]
                     else:
                         self.error = str(error)
                         title = "Review: fix validation error"
                         choices = ["Back", "Cancel"]
-                details = [
-                    f"Harnesses: {', '.join(draft.config.harnesses)}",
-                    f"Workflow: {draft.value('workflow') or 'none'}",
-                    f"Tasks: {', '.join(draft.config.subset) if draft.config.subset else 'all'}  Limit: {draft.config.limit or 'none'}",
-                    f"Skills: {draft.config.skills or 'none'}  Extensions: {draft.config.extensions or 'none'}",
-                    f"Timeout: {draft.value('timeout') or 'default'}  Workers: {draft.value('max_workers')}",
-                    f"Save source: {draft.source or 'new file'}",
-                ]
-                action = self.menu(title, choices, details=details)
+                from acb.cli_output import plan_lines
+                details = ["Save configuration makes no model calls. Run actions may incur charges.",
+                           f"Save destination: {destination or draft.source or 'choose a new file'}",
+                           *([f"Error: {self.error}"] if self.error else []),
+                           *(plan_lines(summary) if summary else [f"Workflow: {draft.value('workflow') or 'none'}"])]
+                action = self.menu(title, choices, details=details, scroll_details=True)
                 if action in (None, "Back"):
                     break
                 if action == "Cancel":
@@ -449,15 +506,25 @@ class _Screen:
                 try:
                     if action == "Run without saving":
                         return finish(draft, "unsaved")
-                    default = str(draft.source or Path(f"run.{draft.config.run_id}.yaml"))
-                    path = self.prompt("Save YAML path", default)
-                    if path is None:
+                    if destination is None:
+                        default = str(draft.source or Path(f"run.{draft.config.run_id}.yaml"))
+                        path = self.prompt("Save YAML path", default)
+                        if path is None:
+                            continue
+                        destination = Path(path or default).expanduser().absolute()
+                        pending_save = action
+                        if destination.suffix not in {".yaml", ".yml"}:
+                            destination = None
+                            raise ValueError("save path must end in .yaml or .yml")
+                        self.error = ""
+                        # Resolve and show the actual destination's effective
+                        # settings before committing files or starting a run.
                         continue
-                    return finish(draft, "save", path or default)
+                    return finish(draft, "save_only" if action == "Save configuration" else "save", destination)
                 except UI_ERRORS as error:
                     self.error = str(error)
 
 
-def configure(config_dir: str | None = None) -> ResolvedPlan | None:
+def configure(config_dir: str | None = None) -> ResolvedPlan | SavedConfiguration | None:
     """Return a validated plan after curses has restored the terminal."""
     return curses.wrapper(lambda window: _Screen(window, config_dir).run())

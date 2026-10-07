@@ -8,6 +8,7 @@ import json
 from pathlib import Path
 import re
 import subprocess
+import sys
 import tempfile
 import tarfile
 
@@ -46,7 +47,7 @@ def _freeze_image_references(plan, references):
         if inspected.returncode:
             if plan["offline"]:
                 raise FileNotFoundError(f"offline: missing provider image {reference}")
-            subprocess.run([plan["environment"], "pull", reference], check=True, timeout=120)
+            subprocess.run([plan["environment"], "pull", reference], check=True, timeout=120, stdout=sys.stderr)
             inspected = subprocess.run(command, capture_output=True, text=True, check=True, timeout=30)
         image = json.loads(inspected.stdout)[0]
         identity = image.get("Id", "").removeprefix("sha256:")
@@ -140,10 +141,10 @@ def ensure_rtk(cache: Path, engine: str, arch: str, offline: bool) -> tuple[str,
                 recipe = staging / "Dockerfile"
                 recipe.write_text(RTK_RECIPE)
                 image = "acb-rtk-build:" + key[:16]
-                subprocess.run([engine, "build", "--platform", "linux/" + arch, "-t", image, str(staging)], check=True)
+                subprocess.run([engine, "build", "--platform", "linux/" + arch, "-t", image, str(staging)], check=True, stdout=sys.stderr)
                 container = subprocess.check_output([engine, "create", image, "/bin/true"], text=True).strip()
                 try:
-                    subprocess.run([engine, "cp", container + ":/rtk", str(artifact / "rtk")], check=True)
+                    subprocess.run([engine, "cp", container + ":/rtk", str(artifact / "rtk")], check=True, stdout=sys.stderr)
                 finally:
                     subprocess.run([engine, "rm", "-f", container], check=True, capture_output=True)
             if not (artifact / "rtk").stat().st_mode & 0o111:

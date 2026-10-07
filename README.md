@@ -80,9 +80,19 @@ not require resetting existing configuration or initializing SWE-bench.
   [feature configuration matrix](config.example/feature-tests/README.md),
   [RTK guide](RTK.md), and [execution operations](docs/harbor-operations.md).
 
-For interactive configuration, run `uv run acb run` in a terminal. For scripts,
-use `--config`. `acb init` creates an editable RH SWE-bench/local-server starter;
-the Quick Start above supplies the self-contained setup task instead.
+For [interactive configuration](docs/interactive-run.md), run `uv run acb run`
+in a terminal. The editor can save configuration without running, browse task
+IDs, and review effective settings. For scripts, use `--config`.
+`acb init experiment --template quickstart` creates the included setup task;
+`--template rh-swe-bench` creates a remote benchmark/local-server starter.
+See [starter templates](docs/starter-templates.md) for the generated layout and
+engine selection. Plain `acb init` retains the RH starter for existing scripts.
+See the [CLI command guide](docs/harbor-operations.md#choosing-a-command) for
+task selection, treatment configuration, comparisons, exports and cleanup.
+`acb tasks --config YOUR_RUN.yaml` lists local/cached task IDs; add `--download`
+to permit fetching remote metadata/data. See [task discovery](docs/task-discovery.md).
+`resolve`, `prepare`, `tasks`, `report` and `compare` show summaries in a terminal
+and JSON when piped; `--text` and `--json` override that choice.
 
 ```sh
 uv run acb compare BASELINE_RUN CANDIDATE_RUN --html \

@@ -84,7 +84,7 @@ class RunConfig:
 
     @classmethod
     def from_file(cls, path: str | Path) -> "RunConfig":
-        path = Path(path)
+        path = Path(path).expanduser()
         if not path.exists():
             # _load_yaml() silently returns {} for a missing file (that's the
             # right behavior for optional registry files in Registries.load()

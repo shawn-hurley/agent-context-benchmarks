@@ -17,7 +17,7 @@ dependency. The worker remains a separate process but uses the same Python
 environment that launched ACB. The former `benchmark.python` override is removed.
 
 ```sh
-acb init experiment
+acb init experiment --template quickstart
 acb list harnesses --config-dir experiment/config
 acb resolve --config experiment/run.yaml --config-dir experiment/config
 acb prepare --config experiment/run.yaml --config-dir experiment/config
@@ -32,6 +32,90 @@ An explicit run-level `execution.environment` overrides the machine setting.
 Resolve validates configuration without starting containers or calling a model.
 Preparation starts disposable environments and verifies prerequisites. Controls
 exercise grading without a measured harness/model run.
+
+### Choosing a command
+
+Run `acb` or `acb --help` for the workflow, and `acb COMMAND --help` for flags.
+From a source checkout, prefix these commands with `uv run`.
+
+| What you want to do | Command / configuration |
+| --- | --- |
+| Check container setup with an included task | `acb init experiment --template quickstart`; see [starter templates](starter-templates.md) |
+| Create editable configuration | Choose `--template quickstart` or `--template rh-swe-bench`, then edit the generated model and machine settings |
+| Find available identities | `acb list harnesses`, `acb list benchmarks`, or `acb list models --config-dir experiment/config` |
+| Check configuration before downloads or execution | `acb resolve --config experiment/run.yaml`; use `--json` for the complete plan |
+| Find task IDs | `acb tasks --config experiment/run.yaml`; `--download` permits remote metadata/data downloads |
+| Save an experiment without execution | `acb run` → Review → Save configuration |
+| Download/build and inspect prerequisites | `acb prepare --config experiment/run.yaml`; no model requests, but containers and downloads may be needed |
+| Configure interactively and run | `acb run` in a terminal; follow the [interactive setup guide](interactive-run.md) to select components, review and save/run |
+| Run reproducibly from a script | `acb run --config experiment/run.yaml` |
+| Check grading without model calls | Add `--control oracle` or `--control nop` to the configured run |
+| Inspect a result | `acb report ACTUAL_RUN` for a terminal summary; add `--json` for saved JSON or `--html` for a browser report |
+| Compare baseline and treatment | `acb compare BASELINE_RUN CANDIDATE_RUN --html`; first input is the baseline |
+| Compare different harnesses | Pass individual harness directories, e.g. `acb compare runs/base/goose runs/treatment/pi --html` |
+| Share results offline | `acb report ACTUAL_RUN --bundle report.zip`, then unzip and open `index.html` |
+| Preview removal of output | `acb clean --config experiment/run.yaml --dry-run`; use `--yes` only when ready to delete |
+
+Use YAML for multiple harnesses, task IDs (`subset`), bundled/custom workflows,
+skills, extensions, timeout, environment and output directory. For example, edit
+the relevant fields in an existing run file:
+
+```yaml
+harness: [goose, pi]
+skills: [caveman]
+extensions: [rtk]
+limit: 1
+execution:
+  max_workers: 1
+  timeout: 300
+  environment: docker
+```
+
+`max_workers` limits concurrent trials across the entire run; `limit` limits
+selected tasks per harness. All selected treatments must support each selected
+harness. Use `resolve` to validate configuration, then `prepare` to check runtime
+requirements. See [workflows](workflows.md) for workflow-specific restrictions.
+`list` shows catalog definitions; it does not establish runtime compatibility.
+
+Choose either `--config` or explicit selection flags. Combining `--config` with
+`--benchmark`, `--harness`, `--model`, `--run-id`, `--proxy`, `--limit` or
+`--max-workers` is rejected; edit those values in the YAML. `--config-dir`,
+`--control` and `--verbose` can accompany `--config`. A small direct run needs
+all four identity flags:
+
+```sh
+acb run --benchmark swebench-lite --harness goose --model local-model \
+  --run-id smoke --limit 1 --max-workers 1 --config-dir experiment/config
+```
+
+`--model` is a configured alias, whose provider ID and endpoint are defined in
+`models.yaml`. Ordinary runs contact that provider and may incur charges.
+Use the actual result directory printed by the run: existing run IDs receive
+suffixes rather than overwriting earlier results.
+
+CLI input paths are relative to the current directory and support `~`.
+YAML asset paths and YAML `config_dir` are relative to their declaring file;
+`output_dir` is relative to the invocation directory. Explicit `--config-dir`
+overrides registry discovery. `resolve` validates selections but does not
+enumerate the task manifest; `tasks` discovers eligible IDs without exporting
+tasks, and `prepare` emits the selected manifest.
+
+`resolve`, `prepare`, `tasks`, `report` and `compare` show readable summaries in
+a terminal. When stdout is redirected or piped, they retain JSON output for
+existing scripts. Use `--text` or `--json` to choose explicitly. Export paths,
+download notices and preparation progress go to stderr, so `--json` remains
+parseable even with `--html` or `--bundle`.
+
+Configuration/report errors exit 1 with a message on stderr; malformed command
+arguments exit 2. Interrupted commands exit 130. Run exit 0 means execution
+completed, so inspect grades and measurement coverage separately. `run --verbose`
+adds ACB console debug logging and error tracebacks; Harbor worker output remains
+in `.harbor/worker.log`. `clean` deletes all output items except `.cache` and
+`.gitkeep`, including exported reports and bundles stored there. In a script it
+requires `--yes`; `--dry-run` never requires confirmation.
+
+The [CLI usability review](cli-usability-review.md) records the walkthrough,
+fixes and remaining improvements.
 
 ## Offline semantics
 

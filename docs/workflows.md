@@ -21,6 +21,14 @@ name, such as `kantra-controller`. Workflows currently apply to ACB-exported
 ScarfBench, SWE-bench, and SWE-bench Lite tasks. Runs without `workflow` keep the
 existing single-step behavior.
 
+To select a workflow interactively, run `acb run`, open **Workflow**, and choose
+a bundled name or **Enter workflow directory…**. Enter the custom directory
+containing `workflow.yaml`, such as `./workflows/my-migration`. Custom project
+workflows are not automatically scanned; loading a run YAML with a custom
+workflow retains that selection. See the
+[interactive setup guide](interactive-run.md#select-your-own-workflow) for
+controls, path rules and save/run behavior.
+
 Create `workflows/my-migration/workflow.yaml` and the instruction files it names:
 
 ```yaml

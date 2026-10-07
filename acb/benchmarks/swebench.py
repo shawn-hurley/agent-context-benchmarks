@@ -78,15 +78,13 @@ class SWEBench(Benchmark):
         self.patch_exclude_patterns = self.config.get("patch_exclude_patterns", [])
 
     def load_instances(self, subset=None, limit=None) -> list[Instance]:
-        from datasets import load_dataset
-
         dataset = self.config.get("dataset", DEFAULT_DATASET)
         split = self.config.get("split", "test")
         if Path(dataset).is_file() and Path(dataset).suffix in (".json", ".jsonl"):
             text = Path(dataset).read_text()
             ds = json.loads(text) if Path(dataset).suffix == ".json" else [json.loads(line) for line in text.splitlines() if line.strip()]
         else:
-            from datasets import DownloadConfig
+            from datasets import DownloadConfig, load_dataset
             ds = load_dataset(dataset, split=split, revision=self.config.get("revision"),
                               download_config=DownloadConfig(local_files_only=self.config.get("offline", False)))
         instances: list[Instance] = []

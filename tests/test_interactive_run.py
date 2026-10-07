@@ -113,7 +113,7 @@ steps:
     draft.set("workflow", "my-workflow")
     monkeypatch.setattr(RunDraft, "create", classmethod(lambda cls, config_dir=None: draft))
     screen = _Screen(None, None)
-    actions = iter(["Create new run", "Review", "Save and run"])
+    actions = iter(["Create new run", "Review", "Save and run", "Save and run"])
 
     def choose(title, options, **kwargs):
         action = next(actions)

@@ -76,7 +76,7 @@ def test_cli_bundle_without_html_option(tmp_path, capsys):
     root = run(tmp_path / 'run', {'task': 1})
     archive = tmp_path / 'single.zip'
     main(['report', str(root), '--bundle', str(archive)])
-    assert 'report bundle:' in capsys.readouterr().out
+    assert 'report bundle:' in capsys.readouterr().err
     with ZipFile(archive) as bundle:
         assert 'index.html' in bundle.namelist()
         assert 'index.comparison.json' not in bundle.namelist()

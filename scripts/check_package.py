@@ -15,7 +15,7 @@ import sys
 
 installed = Path(sys.argv[1]).resolve()
 sys.path.insert(0, str(installed))
-for name in ("acb.cli", "acb.auth", "acb.proxy.metrics", "acb.harbor.worker",
+for name in ("acb.cli", "acb.cli_output", "acb.starters", "acb.task_discovery", "acb.auth", "acb.proxy.metrics", "acb.harbor.worker",
              "acb.harbor.benchmark_verifier", "acb.report_bundle", "acb.maven_cache"):
     module = importlib.import_module(name)
     assert Path(module.__file__).resolve().is_relative_to(installed), name
@@ -30,7 +30,11 @@ for pattern in ("catalog/*.yaml", "scarfbench/Containerfile", "scarfbench/prompt
                 "integrations/assets/rtk/*.mjs", "integrations/assets/caveman/*.py",
                 "integrations/assets/caveman/*.ts", "integrations/assets/caveman/Containerfile",
                 "harnesses/assets/*.json", "catalog/caveman/*.md",
-                "report_assets/*.js", "report_assets/*.md"):
+                "report_assets/*.js", "report_assets/*.md",
+                "assets/starters/quickstart/tasks/smoke/task.toml",
+                "assets/starters/quickstart/tasks/smoke/environment/Dockerfile",
+                "assets/starters/quickstart/tasks/smoke/solution/solve.sh",
+                "assets/starters/quickstart/tasks/smoke/tests/test.sh"):
     assert list(root.glob(pattern)), pattern
 from acb.workflows import load_workflow
 from acb.harbor.skills import task_skills
@@ -46,6 +50,18 @@ assert "cdn.jsdelivr.net" not in page
 assert "Chart" in page
 from acb.harbor.dataset import prepare_dataset, verify_manifest
 work = Path.cwd()
+from acb.cli import main
+from acb.config import RunConfig
+from acb.resolver import resolve
+from acb.task_discovery import discover_tasks
+starter = work / "starter"
+main(["init", str(starter), "--template", "quickstart", "--environment", "docker"])
+starter_plan = resolve(RunConfig.from_file(starter / "run.yaml")).to_dict()
+assert starter_plan["environment"] == "docker"
+assert discover_tasks(starter_plan)["tasks"] == [{"id": "smoke", "selected": True}]
+setup_manifest = prepare_dataset(starter_plan)
+verify_manifest(setup_manifest)
+assert setup_manifest["tasks"][0]["oracle"]
 bundle = work / "bundle"
 for framework in ("jakarta", "quarkus"):
     app = bundle / "business_domain/cart" / framework
