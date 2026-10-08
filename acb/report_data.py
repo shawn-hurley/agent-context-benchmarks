@@ -61,24 +61,8 @@ class HarnessReport:
         name = normalize_instance_id_for_path(trial_id)
         if name in ('', '.', '..'):
             return None
-        return self.directory / name
-
-    @cached_property
-    def benchmark_contracts(self):
-        """Recover identities for older reports without rewriting their artifacts."""
-        from acb.benchmark_contract import benchmark_contract
-        plan = read_object(self.directory / 'resolved.json')
-        if not plan:
-            plan = read_object(self.directory.parent / 'resolved.json')
-        if plan.get('run_id') != self.report.get('run_id'):
-            return {}
-        result = {}
-        for task in (plan.get('manifest') or {}).get('tasks', []):
-            if task.get('path'):
-                contract = benchmark_contract(Path(task['path']))
-                if contract is not None:
-                    result[task['id']] = contract
-        return result
+        from acb.harbor.paths import trial_directory
+        return trial_directory(self.directory.parent, self.directory.name, name)
 
     def submission_path(self, trial_id):
         directory = self.trial_directory(trial_id)
@@ -226,7 +210,7 @@ class ReportSource:
         skill_delivery_recorded = False
         for harness in self.harnesses.values():
             for evaluation in harness.report.get('evaluations', []):
-                trial_id = evaluation.get('trial_id')
+                trial_id = evaluation.get('artifact_id') or evaluation.get('trial_id')
                 if not trial_id:
                     continue
                 directory = harness.trial_directory(str(trial_id))

@@ -3,4 +3,3 @@ local-qwen:
   api: openai
   endpoint: host.containers.internal:8000
   tls: false
-  reports_cache: true

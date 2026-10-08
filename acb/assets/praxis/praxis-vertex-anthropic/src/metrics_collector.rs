@@ -151,7 +151,7 @@ impl MetricsData {
 
 /// Benchmark metrics collection filter.
 pub struct BenchmarkMetricsFilter {
-    #[allow(dead_code)] // retained for YAML config compatibility
+    #[allow(dead_code)] // accepted/stored only; does not limit collected bodies
     max_body_bytes: usize,
 }
 

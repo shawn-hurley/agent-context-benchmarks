@@ -46,26 +46,18 @@ settings, task inputs, harness profiles and cache policy between arms. See
 Copy the [Goose](../config.example/rtk-native/goose.rtk.yaml), [Pi](../config.example/rtk-native/pi.rtk.yaml), [OpenCode](../config.example/rtk-native/opencode.rtk.yaml), or [Claude Code](../config.example/rtk-native/claude-code.rtk.yaml) template, along with its corresponding baseline configuration, into `config/`. Set `binary_path` to a Linux RTK executable matching the benchmark container's architecture, and `sha256` to its SHA-256. A macOS RTK binary cannot run inside the container.
 
 ```yaml
-overrides:
-  harness:
-    version: "0.84.3"
-    execution_integrations:
-      - name: rtk
-        version: "0.48.0"
-        mode: native
-        experimental: true
-        binary_path: /absolute/path/to/linux/rtk
-        sha256: "<binary-SHA256>"
+extensions:
+  - name: rtk
+    options:
+      binary_path: /absolute/path/to/linux/rtk
+      sha256: "<binary-SHA256>"
 ```
 
-These low-level templates retain the versions/model/task of the original pilot;
-named feature examples use current packaged defaults. Run each arm with
+The templates use reviewed catalog version pairs and named selections. Configure
+your model endpoint in `models.yaml`. Run each arm with
 `uv run --extra datasets acb run --config <config-file>`. Harbor's worker uses the
-same Python environment as ACB, not a second evaluator environment. The templates
-select a local Qwen model and `psf__requests-1142`; configure your endpoint first.
-All advanced entries require `experimental: true`. Use one harness per template,
-or [per-harness overrides](configuration.md#precedence-and-component-selections)
-for adapter-specific settings. Do not also select named extensions.
+same Python environment as ACB. For harness-specific assets, use named selections
+under `overrides.harnesses.NAME.extensions`.
 
 Pi loads a reviewed local extension through explicit `-e`. OpenCode adds a reviewed local plugin to its final provider/MCP configuration. Adapters preserve other tool arguments and native permissions. They do not add RTK instructions to the model prompt or compress native read/edit/search tools.
 
@@ -73,14 +65,13 @@ OpenCode `1.18.22` normally waits for an npm dependency bootstrap when loading a
 
 ## Claude Code launch profile
 
-Use `launch_profile: isolated-hooks` in **both** Claude configurations. This is
-the packaged default; an explicit `bare` override cannot be used with RTK. The
-pinned release skips explicitly configured hooks under `--bare`, so historical
-bare runs require a new matched baseline. The profile uses explicit settings, an
-isolated `CLAUDE_CONFIG_DIR`, empty settings sources, disabled project instructions
-and auto-memory, and explicit Bash/Edit/Read exposure. Slash commands and discovered
-MCP servers are disabled. Configured system prompts, explicit skill-reading hints
-and explicitly selected MCP servers are preserved.
+Claude always uses the isolated-hooks profile for baseline and treatment. It uses
+explicit settings, an isolated `CLAUDE_CONFIG_DIR`, empty settings sources,
+disabled project instructions and auto-memory, and explicit Bash/Edit/Read tools.
+Slash commands and discovered MCP servers are disabled. Configured additive
+instructions, explicit skill hints and selected MCP servers are preserved.
+Historical bare runs require a new matched baseline. `launch_profile` is recorded
+in resolved provenance and is no longer a public selection.
 
 The RTK settings file registers SessionStart loading verification, a Bash PreToolUse hook, and result hooks. Its repository-owned Python shim returns the full tool input with only `command` changed and leaves Claude's native permission checks intact. This follows Claude's [hook JSON protocol](https://code.claude.com/docs/en/hooks) and [explicit CLI configuration](https://code.claude.com/docs/en/cli-reference). No permission bypass or global host initialization is used.
 
@@ -176,3 +167,17 @@ The fixture image was built from scratch with the new recipe. Each host ran
 cache. The Linux host reused that fixture image's completed build layers.
 The wheel built from the candidate checkout contains Goose configuration,
 all native RTK hooks, and the locked OpenCode runtime metadata.
+
+## Deterministic live compatibility check
+
+`ACB_RTK_LIVE=1 ACB_RTK_BINARY=/path/to/linux/rtk uv run pytest tests/test_rtk_native_live.py -v`
+uses a locally available image named by `ACB_RTK_IMAGE` (default
+`localhost/acb-rtk-smoke:0.48.0`). The image needs Linux, bash, setsid and the
+`/opt/miniconda3` testbed environment. Podman and its supported Compose frontend
+must be available. Setup may need downloads for pinned harness/skill assets;
+model responses come from the deterministic loopback fixture, with no paid
+provider calls. Both arms run in separate Harbor-managed environments with
+no-network policy. The check retains routing, isolation, rewritten/passthrough
+commands, failure handling, recovery and model-context assertions, then checks
+that each fixture's owned containers were removed. Artifacts are saved under
+`runs/rtk-native-smoke`. This opt-in check is skipped by the ordinary suite.

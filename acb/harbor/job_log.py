@@ -4,7 +4,6 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from acb.utils import normalize_instance_id_for_path
 from acb.harbor.paths import job_dir
 
 
@@ -65,12 +64,11 @@ def write_job_log(plan: dict, output: Path, *, error: BaseException | None = Non
             if item.get("verification_error"):
                 lines.append(f"  Verification: {item['verification_error']}")
             trial = job_dir(output) / label if item.get("trial_name") else None
-            trial_id = item.get("trial_id")
+            trial_id = item.get("artifact_id") or item.get("trial_id")
             evidence = None
             if trial_id:
-                evidence = output / harness / normalize_instance_id_for_path(str(trial_id))
-                if not evidence.is_dir():
-                    evidence = output / harness / "instances" / normalize_instance_id_for_path(str(trial_id))
+                from acb.harbor.paths import trial_directory
+                evidence = trial_directory(output, harness, str(trial_id))
                 if evidence.is_dir():
                     lines.append(f"  ACB trial evidence: {evidence}")
             for title, name in (("Traceback", "exception.txt"),
@@ -95,7 +93,7 @@ def write_job_log(plan: dict, output: Path, *, error: BaseException | None = Non
     lines += [f"HTML report: {output / 'report.html'}",
               f"Harbor's native job log: {job_dir(output) / 'job.log'}",
               f"Harbor's job config and lock are in {job_dir(output).name}/; each trial also has its own config and lock.",
-              "Each harness trial is under <harness>/<trial-id>/; instances/<trial-id> is a report-compatibility link."]
+              "Each harness trial is under <harness>/<trial-id>/."]
     path = output / "job.log"
     path.write_text("\n".join(lines) + "\n")
     return path

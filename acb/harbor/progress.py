@@ -40,7 +40,7 @@ class HarborProgress:
                 return
             key = slots.popleft()
             self._trials[trial_id] = key
-            self.tracker.start_instance(key, pod_name=event.get("trial_name"))
+            self.tracker.start_instance(key, trial_name=event.get("trial_name"))
             self.tracker.update_activity(key, "starting environment")
             return
         key = self._trials.get(trial_id)

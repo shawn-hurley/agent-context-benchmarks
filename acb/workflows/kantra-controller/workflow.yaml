@@ -3,18 +3,15 @@ name: kantra-controller
 benchmarks: [scarfbench]
 harnesses: [goose]
 reward_strategy: final
-agent_adapter: local-qwen-no-think
 environment:
   dockerfile: Containerfile.kantra
   assets:
     - kantra-plan.sh
     - kantra-summary.py
-    - no-think-proxy.py
     - skills/kantra/SKILL.md
   dockerfile_append: |
     COPY kantra-plan.sh /opt/acb/kantra-plan.sh
     COPY kantra-summary.py /opt/acb/kantra-summary.py
-    COPY no-think-proxy.py /opt/acb/no-think-proxy.py
     COPY skills/kantra/SKILL.md /root/.agents/skills/kantra/SKILL.md
     RUN chmod +x /opt/acb/kantra-plan.sh
 steps:

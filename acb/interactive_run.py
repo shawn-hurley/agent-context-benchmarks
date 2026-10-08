@@ -47,7 +47,7 @@ class RunDraft:
     def create(cls, config_dir: str | None = None) -> "RunDraft":
         registry = Registries.load(Path(config_dir).expanduser() if config_dir else None)
         catalog = defaults()
-        models = {**registry.proxy.get("models", {}), **registry.models}
+        models = registry.models
         cfg = RunConfig(
             run_id="run", benchmark=next(iter(registry.benchmarks or catalog["benchmarks"])),
             harness="goose", model=next(iter(models), ""), skills=[], extensions=[],
@@ -70,7 +70,7 @@ class RunDraft:
         if key == "timeout":
             return self.config.execution.get("timeout")
         if key == "max_workers":
-            return self.config.execution.get("max_workers", self.config.max_workers)
+            return self.config.execution.get("max_workers", 4)
         return getattr(self.config, key)
 
     def set(self, key: str, value) -> None:
@@ -82,7 +82,7 @@ class RunDraft:
                 self.config.execution.pop("timeout", None)
             else:
                 self.config.execution["timeout"] = value
-        elif key == "max_workers" and "max_workers" in self.config.execution:
+        elif key == "max_workers":
             self.config.execution = {**self.config.execution, "max_workers": value}
         else:
             setattr(self.config, key, value)
@@ -126,9 +126,7 @@ def _patched_yaml(text: str, changes: dict[str, object]) -> str:
     changes = dict(changes)
     execution = entries.get("execution")
     if execution and isinstance(execution[1], yaml.MappingNode) and execution[1].flow_style:
-        existing = {key.value for key, _ in execution[1].value}
-        nested = {key for key in ("timeout", "max_workers") if key in changes and
-                  (key == "timeout" or key in existing)}
+        nested = {key for key in ("timeout", "max_workers") if key in changes}
         if nested:
             value_map = yaml.safe_load(text)["execution"]
             for key in nested:
@@ -140,38 +138,32 @@ def _patched_yaml(text: str, changes: dict[str, object]) -> str:
             edits.append((execution[0].start_mark.line, _last_line(execution[1]) + 1,
                           _dump_field("execution", value_map)))
     for key, value in changes.items():
-        if key == "timeout":
+        if key in ("timeout", "max_workers"):
             execution = entries.get("execution")
             if execution is None:
                 if value is not None:
-                    appended.extend(_dump_field("execution", {"timeout": value}))
+                    execution_values = {k: v for k, v in changes.items() if k in ("timeout", "max_workers") and v is not None}
+                    if not any(line.startswith("execution:") for line in appended):
+                        appended.extend(_dump_field("execution", execution_values))
                 continue
             parent_key, parent = execution
             if not isinstance(parent, yaml.MappingNode):
-                raise ValueError("execution must be a mapping to edit timeout")
-            child = next(((k, v) for k, v in parent.value if k.value == "timeout"), None)
+                raise ValueError(f"execution must be a mapping to edit {key}")
+            child = next(((k, v) for k, v in parent.value if k.value == key), None)
             if child:
                 start = child[0].start_mark.line
                 end = _last_line(child[1]) + 1
-                replacement = [] if value is None else [_scalar_line(child[0].start_mark.column, "timeout", value)]
+                replacement = [] if value is None else [_scalar_line(child[0].start_mark.column, key, value)]
                 edits.append((start, end, replacement))
             elif value is not None:
                 if parent.value:
                     indent = parent.value[0][0].start_mark.column
                     edits.append((_last_line(parent) + 1, _last_line(parent) + 1,
-                                  [_scalar_line(indent, "timeout", value)]))
+                                  [_scalar_line(indent, key, value)]))
                 else:
                     edits.append((parent_key.start_mark.line, _last_line(parent) + 1,
-                                  _dump_field("execution", {"timeout": value})))
+                                  _dump_field("execution", {key: value})))
             continue
-        if key == "max_workers" and "execution" in entries:
-            parent = entries["execution"][1]
-            if isinstance(parent, yaml.MappingNode):
-                child = next(((k, v) for k, v in parent.value if k.value == "max_workers"), None)
-                if child:
-                    edits.append((child[0].start_mark.line, _last_line(child[1]) + 1,
-                                  [_scalar_line(child[0].start_mark.column, "max_workers", value)]))
-                    continue
         replacement = [] if value is None else _dump_field(key, value)
         if key in entries:
             key_node, value_node = entries[key]
@@ -344,7 +336,7 @@ class _Screen:
         if key == "harness":
             return list(HARNESSES)
         if key == "model":
-            return list(dict.fromkeys([*registry.models, *registry.proxy.get("models", {})]))
+            return list(registry.models)
         selected = draft.value(key) or []
         current = [item if isinstance(item, str) else item.get("name") for item in selected]
         return list(dict.fromkeys([*catalog[key], *getattr(registry, key),

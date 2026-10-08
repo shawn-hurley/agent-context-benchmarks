@@ -1,5 +1,4 @@
 smoke:
-  execution_backend: harbor
   path: tasks
   reward_metric: reward
   success_value: 1

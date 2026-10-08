@@ -18,14 +18,14 @@ def starter_files(template, environment):
     elif template == "rh-swe-bench":
         run.update(run_id="rh-swe-bench-smoke", benchmark="rh-swe-bench",
                    harness=["goose", "pi", "opencode", "claude-code"], model="local-model",
-                   subset=["task-0000"], max_workers=1)
+                   subset=["task-0000"], execution={"max_workers": 1})
         models = {"local-model": {"model": "YOUR_MODEL_ID", "api": "openai",
                                   "endpoint": "host.containers.internal:8000", "tls": False}}
     else:
         raise ValueError(f"unknown starter template: {template}")
     documents = {"run.yaml": run, "config/models.yaml": models, "config/machine.yaml": machine}
     if template == "quickstart":
-        documents["config/benchmarks.yaml"] = {"smoke": {"execution_backend": "harbor", "path": "../tasks",
+        documents["config/benchmarks.yaml"] = {"smoke": {"path": "../tasks",
                                                         "reward_metric": "reward", "success_value": 1, "attempts": 1}}
     result = {path: yaml.safe_dump(document, sort_keys=False).encode() for path, document in documents.items()}
     if template == "quickstart":

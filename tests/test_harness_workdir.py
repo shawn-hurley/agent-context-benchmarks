@@ -1,3 +1,4 @@
+from conftest import TransportDouble
 """Container launchers must support Java benchmarks without SWE-bench conda."""
 import importlib
 
@@ -21,11 +22,11 @@ def test_container_launch_environment(monkeypatch, tmp_path, module_name, class_
     commands = []
     monkeypatch.setattr(module, "execute", lambda command, **kwargs: commands.append(command))
     env = adapter.build_container_env("http://praxis:8080", "fixture-key")
-    adapter.run_container("Migrate the application", "fixture-container", "fixture-model",
+    adapter.run_container("Migrate the application", TransportDouble(), "fixture-model",
                           env, tmp_path, "cart")
     command = commands[0]
-    assert command[command.index("--workdir") + 1] == workdir
-    assert ("conda activate testbed" in command[-1]) is conda
+    assert command.workdir == workdir
+    assert ("conda activate testbed" in command.argv[-1]) is conda
     if not conda:
-        assert "miniconda" not in command[-1]
-    assert "exec " in command[-1]
+        assert "miniconda" not in command.argv[-1]
+    assert "exec " in command.argv[-1]

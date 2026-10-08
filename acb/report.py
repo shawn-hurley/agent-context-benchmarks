@@ -18,25 +18,16 @@ from pathlib import Path
 
 from acb.usage import InstanceMetrics, read_records
 from acb.utils import normalize_instance_id_for_path
+from acb.harbor.paths import trial_directory
 
 
-def aggregate_per_instance_files(harness_out_dir: Path) -> None:
-    """Aggregate per-instance usage files into combined usage.jsonl for backwards compatibility.
-    
-    Also aggregates benchmark_metrics.jsonl (per-request Praxis metrics with content classification).
-    
-    Note: predictions are stored in instances/*/prediction.json (source of truth)
-    Note: HTML report reads directly from instance directories, no predictions.jsonl aggregation needed
-    Note: metrics.jsonl is written by build_report() after updating with resolved status
-    """
-    instances_dir = harness_out_dir / "instances"
-    if not instances_dir.exists():
-        return
-    
+def aggregate_per_instance_files(harness_out_dir: Path, trial_ids: list[str]) -> None:
+    """Aggregate only the scheduled/imported direct trial directories."""
+    trial_dirs = [trial_directory(harness_out_dir.parent, harness_out_dir.name, normalize_instance_id_for_path(iid)) for iid in trial_ids]
     # Aggregate usage
     usage_path = harness_out_dir / "usage.jsonl"
     with usage_path.open("w") as f:
-        for instance_dir in sorted(instances_dir.iterdir()):
+        for instance_dir in sorted(trial_dirs):
             if instance_dir.is_dir():
                 instance_usage = instance_dir / "usage.jsonl"
                 if instance_usage.exists():
@@ -46,7 +37,7 @@ def aggregate_per_instance_files(harness_out_dir: Path) -> None:
     # Add instance_id to each record since benchmark_metrics are stored per-instance
     benchmark_metrics_path = harness_out_dir / "benchmark_metrics.jsonl"
     with benchmark_metrics_path.open("w") as f:
-        for instance_dir in sorted(instances_dir.iterdir()):
+        for instance_dir in sorted(trial_dirs):
             if instance_dir.is_dir():
                 instance_id = instance_dir.name
                 instance_usage = instance_dir / "usage.jsonl"
@@ -89,10 +80,10 @@ def build_report(usage_path: Path, resolved: dict[str, bool], out_dir: Path, cfg
             f.write(json.dumps(asdict(m), separators=(",", ":")) + "\n")
     
     # Also update per-instance metrics files with resolved status
-    instances_dir = Path(out_dir) / "instances"
+    instances_dir = Path(out_dir)
     if instances_dir.exists():
         for m in metrics:
-            instance_metrics_path = instances_dir / normalize_instance_id_for_path(m.instance_id) / "metrics.json"
+            instance_metrics_path = trial_directory(instances_dir.parent, instances_dir.name, normalize_instance_id_for_path(m.instance_id)) / "metrics.json"
             if instance_metrics_path.exists():
                 instance_metrics_path.write_text(json.dumps(asdict(m), indent=2))
 
@@ -107,7 +98,7 @@ def build_report(usage_path: Path, resolved: dict[str, bool], out_dir: Path, cfg
         "benchmark": cfg.benchmark,
         "harness": harness_value,
         "model": cfg.model,
-        "proxy": cfg.proxy,
+        "proxy": "praxis",
         "instances": len(metrics),
         "resolved": resolved_n,
         "resolve_rate": resolved_n / n,
@@ -122,9 +113,9 @@ def build_report(usage_path: Path, resolved: dict[str, bool], out_dir: Path, cfg
         ),
     }
     integration_manifests = {}
-    for manifest_path in sorted((Path(out_dir) / "instances").glob("*/integrations/*/manifest.json")):
-        instance_id = manifest_path.parents[2].name
-        integration_manifests.setdefault(instance_id, []).append(json.loads(manifest_path.read_text()))
+    for iid in resolved:
+        for manifest_path in sorted((trial_directory(Path(out_dir).parent, Path(out_dir).name, normalize_instance_id_for_path(iid)) / "integrations").glob("*/manifest.json")):
+            integration_manifests.setdefault(iid, []).append(json.loads(manifest_path.read_text()))
     if integration_manifests:
         rollup["integrations"] = integration_manifests
     report_path = Path(out_dir) / "report.json"
@@ -162,7 +153,7 @@ def build_suite_report(out_dir: Path, cfg) -> Path:
         "suite_id": cfg.run_id,
         "benchmark": cfg.benchmark,
         "model": cfg.model,
-        "proxy": cfg.proxy,
+        "proxy": "praxis",
         "instances": next(iter(harness_reports.values())).get("instances", 0),
         "harnesses": harness_reports,
     }

@@ -26,8 +26,7 @@ bin/
 *_PLAN.md
 # Bundled workflow documents are source assets required by workflow.yaml.
 !acb/workflows/migiq/skills/migiq/TEST_PLAN.md
-!acb/workflows/kantra-rgctl/skills/rgctl/upstream/AGENTS.md
-!acb/workflows/migiq/skills/rgctl/upstream/AGENTS.md
+!acb/workflows/_shared/rgctl/v0.4.18/skill/upstream/AGENTS.md
 target
 .rgctl/
 

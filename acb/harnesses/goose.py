@@ -1,6 +1,6 @@
 """Goose harness adapter.
 
-Runs Goose headless (`goose run -t <prompt> --no-session`) via `podman exec`
+Runs Goose headless (`goose run -t <prompt> --no-session`) through Harbor
 inside the SWE-bench eval container, pointed at the (also containerized)
 proxy. The only harness with a container-mode port today -- see
 `ensure_linux_binary()` below for how a Linux build gets into the image.
@@ -38,6 +38,8 @@ shared plumbing in acb/harnesses/_streaming.py, also used by claude-code):
 """
 
 from __future__ import annotations
+
+from acb.transport import EnvironmentTransport
 
 import json
 import logging
@@ -177,7 +179,7 @@ class Goose(HarnessAdapter):
         """
         return model_api
 
-    def setup_container(self, container: str, arch: str, cache_dir: Path) -> None:
+    def setup_container(self, container: EnvironmentTransport, arch: str, cache_dir: Path) -> None:
         """Download (once, cached) this arch's goose Linux binary and copy it
         into `container` at /usr/local/bin/goose, before run_container()
         execs it. Previously done inline in SWEBench.prepare_container() --
@@ -208,16 +210,12 @@ class Goose(HarnessAdapter):
         if skills:
             self._inject_goosehints(container, skills)
 
-    def run_container(self, prompt: str, container: str, model: str, env: dict[str, str],
+    def run_container(self, prompt: str, container: EnvironmentTransport, model: str, env: dict[str, str],
                        out_dir: Path, instance_id: str,
                        binary: str = "/usr/local/bin/goose") -> HarnessResult:
-        """Exec the harness inside a running container via `podman exec`.
+        """Execute the harness through its Harbor environment transport.
 
-        `podman exec` doesn't take a Python env dict for the exec'd process
-        (only for the `podman` CLI invocation itself); env vars are passed as
-        repeated `-e KEY=VALUE` flags instead.
-        
-        Injects goose configuration to disable internet search before execution.
+        Commands carry explicit environment variables and working directories.
         """
         # Inject goose config to disable fetch extension (internet search)
         self._inject_goose_config(
@@ -246,7 +244,7 @@ class Goose(HarnessAdapter):
         #
         # `conda_env`: name of the conda env to activate before running goose.
         # SWE-bench images use a `testbed` conda env for the right Python
-        # version + deps (verified: `podman exec` doesn't source ~/.bashrc
+        # version + deps (verified: noninteractive execution does not source ~/.bashrc
         # automatically, so the base conda Python would be used without this).
         # ScarfBench images use plain JDK+Maven with no conda -- set to None
         # or "" via `overrides.harness.conda_env: null` to skip activation.
@@ -263,12 +261,11 @@ class Goose(HarnessAdapter):
         exec_cmd = environment_command(
             container, ["bash", "-c", f"{preamble}exec {inner}"], env, workdir,
         )
-        # out_dir is now the per-instance directory (instances/{test_id}/)
+        # out_dir is the trial artifact directory
         transcript_path = Path(out_dir) / "transcript.jsonl"
-        label = f"[goose:{instance_id}]"
         timeout = self.config.get("timeout", 1800)
-        return execute(exec_cmd, env=None, cwd=None, transcript_path=transcript_path,
-                       label=label, timeout=timeout, describe_event=_describe_event,
+        return execute(exec_cmd, transcript_path=transcript_path,
+                       timeout=timeout, describe_event=_describe_event,
                        tracker=getattr(self, '_tracker', None),
                        tracker_key=getattr(self, '_tracker_key', None))
 
@@ -296,7 +293,7 @@ class Goose(HarnessAdapter):
 
     def _inject_goose_config(
         self,
-        container: str,
+        container: EnvironmentTransport,
         tracker: ProgressTracker | None = None,
         tracker_key: str | None = None,
     ) -> None:
@@ -331,7 +328,7 @@ class Goose(HarnessAdapter):
         finally:
             path.unlink(missing_ok=True)
 
-    def _inject_goosehints(self, container: str, skills: list[dict]) -> None:
+    def _inject_goosehints(self, container: EnvironmentTransport, skills: list[dict]) -> None:
         """Inject .goosehints file into container to instruct Goose to load skills.
         
         .goosehints is loaded by Goose at session startup and provides hints about
@@ -339,7 +336,7 @@ class Goose(HarnessAdapter):
         based on configured skills and injects it into /testbed/.goosehints.
         
         Args:
-            container: Podman container ID
+            container: Harbor environment transport
             skills: List of skill configurations from harness config
         """
         try:
@@ -391,7 +388,7 @@ class Goose(HarnessAdapter):
         
         return "".join(hints)
 
-    def _write_mcp_config(self, container: str, servers: list[dict]) -> None:
+    def _write_mcp_config(self, container: EnvironmentTransport, servers: list[dict]) -> None:
         """Compose selected MCP servers with Goose's required base configuration."""
         if servers:
             self._inject_goose_config(container)

@@ -20,7 +20,8 @@ for name in ("acb.cli", "acb.cli_output", "acb.starters", "acb.task_discovery", 
     module = importlib.import_module(name)
     assert Path(module.__file__).resolve().is_relative_to(installed), name
 for name in ("acb.runner", "acb.integrations.legacy", "acb.integrations.runtime",
-             "acb.proxy.recording"):
+             "acb.proxy.recording", "acb.proxy.record_server", "acb.harnesses.stubs",
+             "acb.integrations.tamp", "acb.benchmarks.stubs"):
     assert importlib.util.find_spec(name) is None, name
 root = installed / "acb"
 for pattern in ("catalog/*.yaml", "scarfbench/Containerfile", "scarfbench/prompts/*.md",
@@ -38,12 +39,21 @@ for pattern in ("catalog/*.yaml", "scarfbench/Containerfile", "scarfbench/prompt
     assert list(root.glob(pattern)), pattern
 from acb.workflows import load_workflow
 from acb.harbor.skills import task_skills
-for name in ("kantra-rgctl", "migiq"):
+import shutil
+for name in ("kantra-controller", "kantra-rgctl", "migiq"):
     workflow = load_workflow(name, Path.cwd(), "scarfbench", ["goose"])
-    skill_root = Path(workflow["source_dir"]) / "skills"
-    skills, records = task_skills(skill_root)
-    assert "rgctl" in {item["name"] for item in skills}
-    assert (Path(workflow["source_dir"]) / "Cargo.lock").is_file()
+    context = Path.cwd() / name
+    context.mkdir()
+    for destination, source in workflow["asset_sources"].items():
+        target = context / destination
+        target.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copy2(source, target)
+    skills, records = task_skills(context / "skills")
+    if name != "kantra-controller":
+        assert "rgctl" in {item["name"] for item in skills}
+        assert (context / "Cargo.lock").is_file()
+    assert "agent_adapter" not in workflow
+    assert not (context / "no-think-proxy.py").exists()
 from acb.html_components import render_page, Section
 page = render_page("Offline report", [Section("<canvas id=\"chart\"></canvas>", {"chart": {"type": "bar", "data": {"labels": [], "datasets": []}}})])
 assert "cdn.jsdelivr.net" not in page
@@ -85,7 +95,9 @@ def main():
     wheel = args.wheel.resolve(strict=True)
     with zipfile.ZipFile(wheel) as archive:
         retired = {"acb/runner.py", "acb/integrations/legacy.py",
-                   "acb/integrations/runtime.py", "acb/proxy/recording.py"}
+                   "acb/integrations/runtime.py", "acb/proxy/recording.py",
+                   "acb/proxy/record_server.py", "acb/harnesses/stubs.py",
+                   "acb/integrations/tamp.py", "acb/benchmarks/stubs.py"}
         assert not retired.intersection(archive.namelist()), "wheel contains retired modules"
     with tempfile.TemporaryDirectory(prefix="acb-package-check-") as temporary:
         root = Path(temporary)

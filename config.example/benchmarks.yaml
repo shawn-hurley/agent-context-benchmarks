@@ -1,104 +1,31 @@
-# Benchmark registry. SWE-bench and ScarfBench default to Harbor.
-# See docs/harbor-benchmark-migration.md for grading dependencies and controls.
-
 swebench:
-  # NOTE: SWE-bench/SWE-bench_Verified, not princeton-nlp/SWE-bench_Verified.
-  # The vendored harness (v5.0.2, task-repo architecture) requires each
-  # instance to carry `image`/`eval_script`/`log_parser`/`eval_type` fields
-  # (swebench/harness/utils.py make_test_spec(), no fallback -- KeyError
-  # without them). princeton-nlp's dataset predates this schema and lacks
-  # those columns entirely; SWE-bench/SWE-bench_Verified has them. Confirmed
-  # via the HF datasets-server schema for both.
   dataset: SWE-bench/SWE-bench_Verified
   split: test
-  max_workers: 4
-  # Deprecated setting. Harbor uses execution.environment for
-  # both task execution and grading (podman by default, or docker).
-  container_backend: auto        # auto | podman | docker
-  # docker_host: unix:///path/to.sock   # explicit override if needed
-  # namespace: ""                # set "" to build images locally (e.g. arm64
-  #                              # Macs where prebuilt x86_64 images are absent)
-
-  # --- Patch exclusion patterns ---
-  # Glob patterns for untracked files to exclude from model_patch. These are
-  # files created by agent skills/tools during execution that should NOT be
-  # included in the final solution patch sent for evaluation.
-  # 
-  # Supports fnmatch-style glob patterns: *, ?, [seq], [!seq]
-  # For recursive directory matching, use /** (e.g., .rgctl/**)
-  #
-  # Leave empty or omit to include all untracked files (default behavior).
   patch_exclude_patterns:
-    - .goosehints              # Goose skill instructions
-    - .rgctl                   # rgctl cache/index directory
-    - .rgctl/**                # All files within .rgctl/
-    - .aider*                  # Aider tool artifacts
-    - .cursor*                 # Cursor IDE artifacts
-    - "*.swp"                  # Vim swap files
-    - "*.swo"                  # Vim backup files
-    - .DS_Store                # macOS metadata
-
-  # --- Harbor task environment ----
-  # The harness runs *inside* the same SWE-bench eval image evaluation will
-  # grade the patch in (built on demand from the task repo -- see
-  # acb/benchmarks/image_builder.py), so its dev environment matches
-  # evaluation exactly. Supports Podman or Docker. All four harnesses (goose, claude-code,
-  # opencode, pi) support container mode today (HarnessAdapter.run_container()).
-  image_arch: auto                 # auto | amd64 | arm64 (auto = host arch)
-  task_repo: SWE-bench/swe-bench-tasks   # source of per-instance Dockerfiles
-  # Installed-wheel users can supply an official SWE-bench interpreter:
-  # swebench_python: /path/to/swebench-venv/bin/python
-  # The praxis-ai image (acb-praxis-ai:latest) is built automatically from
-  # the Containerfile at the repo root when the image is absent.  That
-  # Containerfile is self-contained: it clones praxis-proxy/ai at a pinned
-  # commit and compiles the praxis-vertex-anthropic filter in -- no external
-  # checkout required.
-  #
-  # praxis_ai_repo is an optional override for development: point it at a
-  # local checkout of https://github.com/praxis-proxy/ai (must have its own
-  # Containerfile) to build from a modified upstream tree instead.
-  #
-  # praxis_ai_repo: /path/to/praxis-proxy/ai
-
-swebench-lite:
-  # SWE-bench Lite: 534 curated instances for faster iteration.
-  # Uses the same SWEBench adapter as `swebench` above, just with a different dataset.
-  dataset: SWE-bench/SWE-bench_Lite
-  split: test
-  max_workers: 4
-  container_backend: auto
+  - .goosehints
+  - .rgctl
+  - .rgctl/**
+  - .aider*
+  - .cursor*
+  - '*.swp'
+  - '*.swo'
+  - .DS_Store
   image_arch: auto
   task_repo: SWE-bench/swe-bench-tasks
-
-  # Patch exclusion patterns - same as swebench (see above for details).
+swebench-lite:
+  dataset: SWE-bench/SWE-bench_Lite
+  split: test
+  image_arch: auto
+  task_repo: SWE-bench/swe-bench-tasks
   patch_exclude_patterns:
-    - .goosehints
-    - .rgctl
-    - .rgctl/**
-    - .aider*
-    - .cursor*
-    - "*.swp"
-    - "*.swo"
-    - .DS_Store
-
-livecodebench:
-  # Stub - benchmark adapter not yet implemented (see acb/benchmarks/stubs.py)
-  {}
-
+  - .goosehints
+  - .rgctl
+  - .rgctl/**
+  - .aider*
+  - .cursor*
+  - '*.swp'
+  - '*.swo'
+  - .DS_Store
 scarfbench:
-  # Implemented - requires `scarf` CLI and `scarf bench pull` setup.
-  # See acb/benchmarks/scarfbench.py for configuration details.
-  # Discover all apps for this directed migration pair. The run's limit selects
-  # the first N apps. Run configs can override the pair under
-  # overrides.benchmark, e.g. source: spring and target: jakarta.
-  # Pair-specific example prompts are bundled in acb/scarfbench/prompts/.
   source: jakarta
   target: quarkus
-  # benchmark_cache_dir: /path/to/scarf-bench-output
-  # scarf_binary: scarf  # or full path
-  # An explicit instances list takes precedence over source/target:
-  #   instances:
-  #     - layer: business_domain
-  #       app: cart
-  #       source: jakarta
-  #       target: quarkus

@@ -95,3 +95,41 @@ def test_publication_failure_restores_prior_incomplete_entry(tmp_path, monkeypat
     assert (root / 'previous').read_text() == 'preserve'
     assert not (root / '.acb-cache.json').exists()
     assert not list(tmp_path.glob('harness-*'))
+
+
+def test_old_entry_without_manifest_repopulates_atomically_once(harness):
+    name, ensure, calls, module = harness
+    path = ensure()
+    root = path.parent
+    (root / '.acb-cache.json').unlink()
+    calls.clear()
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        assert all(result == path for result in pool.map(lambda _: ensure(), range(2)))
+    assert len(calls) == 1
+    assert (root / '.acb-cache.json').is_file()
+
+
+def test_old_entry_is_not_usable_offline(harness, monkeypatch):
+    from acb.downloads import download_file
+    name, ensure, calls, module = harness
+    path = ensure()
+    root = path.parent
+    (root / '.acb-cache.json').unlink()
+    calls.clear()
+    monkeypatch.setattr(module, 'download_file', download_file)
+    with download_policy(offline=True), pytest.raises(FileNotFoundError, match='offline'):
+        ensure()
+    assert not calls
+    assert path.exists()
+    assert not (root / '.acb-cache.json').exists()
+
+
+def test_corrupt_existing_manifest_is_an_error_without_download(harness):
+    name, ensure, calls, module = harness
+    path = ensure()
+    root = path.parent
+    (root / '.acb-cache.json').write_text('{')
+    calls.clear()
+    with pytest.raises(ValueError, match='invalid harness cache manifest'):
+        ensure()
+    assert not calls

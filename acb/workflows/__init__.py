@@ -16,7 +16,18 @@ def _relative(value: str, label: str) -> str:
 
 
 def _asset(root: Path, value: str) -> Path:
-    path = root / _relative(value, "asset")
+    relative = _relative(value, "asset")
+    canonical = Path(__file__).parent.resolve()
+    if root.resolve().parent == canonical and root.name in {"kantra-controller", "kantra-rgctl", "migiq"}:
+        if relative in {"kantra-plan.sh", "kantra-summary.py", "rgctl-plan.sh"}:
+            return _asset(canonical / "_shared", relative)
+        if root.name in {"kantra-rgctl", "migiq"}:
+            bundle = canonical / "_shared" / "rgctl" / "v0.4.18"
+            if relative == "Cargo.lock":
+                return _asset(bundle, relative)
+            if relative.startswith("skills/rgctl/"):
+                return _asset(bundle, "skill/" + relative.removeprefix("skills/rgctl/"))
+    path = root / relative
     if not path.is_file() or path.is_symlink() or not path.resolve().is_relative_to(root.resolve()):
         raise ValueError(f"workflow asset is missing or unsafe: {value}")
     return path
@@ -36,7 +47,7 @@ def load_workflow(selection: str, origin: Path, benchmark: str, harnesses: list[
     if not isinstance(data, dict):
         raise ValueError("workflow.yaml must contain a mapping")
     allowed = {"version", "name", "benchmarks", "harnesses", "environment", "steps",
-               "reward_strategy", "exclude_from_grading", "agent_adapter"}
+               "reward_strategy", "exclude_from_grading"}
     if set(data) - allowed:
         raise ValueError(f"workflow.yaml has unknown fields: {sorted(set(data) - allowed)}")
     if data.get("version") != 1 or not isinstance(data.get("name"), str):
@@ -110,15 +121,14 @@ def load_workflow(selection: str, origin: Path, benchmark: str, harnesses: list[
         raise ValueError("workflow exclude_from_grading must be a list")
     for item in exclusions:
         _relative(item, "exclude_from_grading")
-    if data.get("agent_adapter") not in (None, "local-qwen-no-think"):
-        raise ValueError("workflow agent_adapter is unsupported")
-    inventory = sorted([definition, *(_asset(root, value) for value in assets),
-                        *(_asset(root, step["instruction"]) for step in steps),
-                        *([_asset(root, environment["dockerfile"])] if "dockerfile" in environment else [])])
+    names = sorted(set(["workflow.yaml", *assets,
+                        *(step["instruction"] for step in steps),
+                        *([environment["dockerfile"]] if "dockerfile" in environment else [])]))
     digest = sha256()
-    for path in inventory:
-        digest.update(path.relative_to(root).as_posix().encode() + b"\0" + path.read_bytes())
-    return {**data, "source_dir": str(root), "sha256": digest.hexdigest()}
+    for name in names:
+        digest.update(name.encode() + b"\0" + _asset(root, name).read_bytes())
+    return {**data, "source_dir": str(root), "sha256": digest.hexdigest(),
+            "asset_sources": {name: str(_asset(root, name)) for name in assets}}
 
 
 def validate_workflow_snapshot(workflow: dict) -> None:

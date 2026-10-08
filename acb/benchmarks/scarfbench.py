@@ -12,15 +12,11 @@ import re
 import shutil
 import subprocess
 from pathlib import Path
-from typing import TYPE_CHECKING
 from urllib.parse import urlsplit
 
-if TYPE_CHECKING:
-    from acb.ui import ProgressTracker
-
-from acb.benchmarks.base import Benchmark, Instance, Prediction
+from acb.benchmarks.base import Benchmark, Instance
 from acb.logging_config import log_debug
-from acb.container import container_env
+from acb.container import grader_env
 from acb.utils import normalize_instance_id_for_path
 
 # Files from the benchmark's source framework directory that belong to the
@@ -288,7 +284,7 @@ class ScarfBench(Benchmark):
         return f"{self._AGENT_SLUG}__{layer}__{app}__{source}__{target}"
 
     def _run_dir_for_instance(self, output_dir: Path, instance_id: str) -> Path:
-        """Locate the conversion tree written by collect_prediction_container()."""
+        """Locate the native conversion tree staged by the Harbor verifier."""
         layer, app, conversion = instance_id.split("/", 2)
         source, target = conversion.split("-to-", 1)
         return self._scarf_eval_dir(output_dir) / self._agent_key(
@@ -398,89 +394,12 @@ class ScarfBench(Benchmark):
         return instances
 
 
-    def evaluate(
-        self,
-        predictions: list[Prediction] | None,
-        run_id: str,
-        output_dir,
-        tracker: ProgressTracker | None = None,
-        instance_id: str | None = None,
-        tracker_key: str | None = None,
-    ) -> dict[str, bool]:
-        """Grade predictions by invoking `scarf validate`.
-
-        scarf validate:
-          1. Reads each run_N/metadata.json for (layer, app, target_framework).
-          2. Copies the target framework's Dockerfile and test harness into
-             run_N/output/.
-          3. Runs `make test` (Docker build → run app → target test.sh for
-             v0.1.2's compatibility Makefile).
-          4. Parses run.log and writes compile_ok/deploy_ok/tests_passed back
-             to metadata.json.
-
-        We then read metadata.json to determine pass/fail:
-          resolved = True  iff tests_passed > 0 and tests_passed == num_smoke_tests
-          (both fields set by scarf validate; num_smoke_tests comes from the
-           benchmark's own smoke test metadata).
-        
-        Args:
-            predictions: Legacy parameter (ignored, reads from disk)
-            run_id: Unique identifier for this run
-            output_dir: Harness output directory containing instances/
-            tracker: Optional tracker for status updates
-            instance_id: If set, only evaluate this instance
-            tracker_key: Composite key {harness}-{instance_id} for tracker updates
-        
-        Returns:
-            Dictionary mapping instance_id to resolved status
-        """
-        output_dir = Path(output_dir)
-        
-        # Collect predictions to evaluate
-        preds_to_eval = []
-        
-        if instance_id:
-            # Per-instance mode: evaluate only this instance
-            pred_file = output_dir / "instances" / normalize_instance_id_for_path(instance_id) / "prediction.json"
-            if pred_file.exists():
-                pred_data = json.loads(pred_file.read_text())
-                preds_to_eval.append(Prediction(
-                    instance_id=pred_data["instance_id"],
-                    model_name_or_path=pred_data["model_name_or_path"],
-                    model_patch=pred_data.get("model_patch"),
-                    output=str(self._run_dir_for_instance(output_dir, instance_id)),
-                    error=None,
-                ))
-        else:
-            # Batch mode: aggregate all predictions from instances/
-            instances_dir = output_dir / "instances"
-            if instances_dir.exists():
-                for inst_dir in sorted(instances_dir.iterdir()):
-                    if inst_dir.is_dir():
-                        pred_file = inst_dir / "prediction.json"
-                        if pred_file.exists():
-                            pred_data = json.loads(pred_file.read_text())
-                            preds_to_eval.append(Prediction(
-                                instance_id=pred_data["instance_id"],
-                                model_name_or_path=pred_data["model_name_or_path"],
-                                model_patch=pred_data.get("model_patch"),
-                                output=str(self._run_dir_for_instance(output_dir, pred_data["instance_id"])),
-                                error=None,
-                            ))
-            elif predictions:
-                # Fallback: use provided predictions
-                preds_to_eval = predictions
-        
-        if not preds_to_eval:
-            return {instance_id: False} if instance_id else {}
-        
-        # Note: predictions are stored in instances/*/prediction.json (source of truth)
-        # HTML report reads directly from instance directories, no separate predictions.jsonl needed
-        
-        # Update tracker: mark verification starting
-        if tracker and tracker_key:
-            tracker.start_verification(tracker_key)
-        
+    def grade_run(self, instance_id: str, run_dir: Path, artifact_dir: Path) -> bool:
+        """Grade one explicit native conversion with the benchmark's validator."""
+        run_dir, artifact_dir = Path(run_dir), Path(artifact_dir)
+        if run_dir != self._run_dir_for_instance(artifact_dir, instance_id):
+            raise ValueError("ScarfBench conversion is outside the native grading layout")
+        artifact_dir.mkdir(parents=True, exist_ok=True)
         scarf_binary = shutil.which(self.config.get("scarf_binary", "scarf"))
         if not scarf_binary:
             raise RuntimeError(
@@ -489,12 +408,12 @@ class ScarfBench(Benchmark):
                 "it is on PATH (or set scarfbench.scarf_binary in benchmarks.yaml)."
             )
 
-        scarf_eval_dir = self._scarf_eval_dir(output_dir)
+        scarf_eval_dir = self._scarf_eval_dir(artifact_dir)
         benchmark_cache_dir = self._benchmark_cache_dir()
         from acb.maven_cache import cache_volume
         if cache_volume(self.config):
             # Cache instrumentation belongs to the run, never the benchmark checkout.
-            validation_copy = output_dir / "maven-cache-validations"
+            validation_copy = artifact_dir / "maven-cache-validations"
             shutil.copytree(benchmark_cache_dir, validation_copy, dirs_exist_ok=True,
                             ignore=shutil.ignore_patterns('.git', 'target', 'node_modules', '__pycache__'))
             benchmark_cache_dir = validation_copy
@@ -503,34 +422,33 @@ class ScarfBench(Benchmark):
         # omits the Makefile and smoke-test metadata expected by `scarf
         # validate`. Materialize compatibility files before validation;
         # official Makefiles take precedence.
-        for pred in preds_to_eval:
-            run_meta = Path(pred.output) / "metadata.json" if pred.output else None
-            if run_meta and run_meta.exists():
-                run_metadata = json.loads(run_meta.read_text())
-                _ensure_validation_harness(
-                    benchmark_cache_dir,
-                    layer=run_metadata["layer"],
-                    app=run_metadata["app"],
-                    framework=run_metadata["target_framework"],
-                )
-                from acb.maven_cache import cached_recipe
-                validator_recipe = (benchmark_cache_dir / run_metadata["layer"] /
-                                    run_metadata["app"] / run_metadata["target_framework"] / "Dockerfile")
-                if validator_recipe.exists():
-                    validator_recipe.write_text(cached_recipe(validator_recipe.read_text(), self.config))
-                # `scarf validate` copies Makefile/Dockerfile/metadata.json
-                # itself, but not test.sh.  Stage the target framework's
-                # script explicitly; otherwise a source-framework script can
-                # probe the wrong port (e.g. Jakarta 9080 vs Quarkus 8080).
-                target_test = (
-                    benchmark_cache_dir / run_metadata["layer"] /
-                    run_metadata["app"] / run_metadata["target_framework"] /
-                    "test.sh"
-                )
-                if target_test.exists():
-                    output_tree = run_meta.parent / "output"
-                    output_tree.mkdir(parents=True, exist_ok=True)
-                    shutil.copy2(target_test, output_tree / "test.sh")
+        run_meta = run_dir / "metadata.json"
+        if run_meta and run_meta.exists():
+            run_metadata = json.loads(run_meta.read_text())
+            _ensure_validation_harness(
+                benchmark_cache_dir,
+                layer=run_metadata["layer"],
+                app=run_metadata["app"],
+                framework=run_metadata["target_framework"],
+            )
+            from acb.maven_cache import cached_recipe
+            validator_recipe = (benchmark_cache_dir / run_metadata["layer"] /
+                                run_metadata["app"] / run_metadata["target_framework"] / "Dockerfile")
+            if validator_recipe.exists():
+                validator_recipe.write_text(cached_recipe(validator_recipe.read_text(), self.config))
+            # `scarf validate` copies Makefile/Dockerfile/metadata.json
+            # itself, but not test.sh.  Stage the target framework's
+            # script explicitly; otherwise a source-framework script can
+            # probe the wrong port (e.g. Jakarta 9080 vs Quarkus 8080).
+            target_test = (
+                benchmark_cache_dir / run_metadata["layer"] /
+                run_metadata["app"] / run_metadata["target_framework"] /
+                "test.sh"
+            )
+            if target_test.exists():
+                output_tree = run_meta.parent / "output"
+                output_tree.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(target_test, output_tree / "test.sh")
 
         cmd = [
             scarf_binary, "validate",
@@ -541,9 +459,9 @@ class ScarfBench(Benchmark):
             cmd += ["--timeout", str(int(timeout_min))]
 
         # Route docker CLI calls through the Podman shim
-        env = container_env(self.config)
+        env = grader_env(self.config, artifact_dir)
         from acb.maven_cache import validation_env
-        env = validation_env(self.config, env, output_dir)
+        env = validation_env(self.config, env, artifact_dir)
         
         # Prevent TTY detection to avoid Docker/Podman progress bars and status messages
         # from bypassing stdout/stderr redirection and appearing on the terminal.
@@ -552,106 +470,59 @@ class ScarfBench(Benchmark):
         env["TERM"] = "dumb"
         env.setdefault("DOCKER_BUILDKIT", "0")
 
+        eval_log_path = artifact_dir / f"scarfbench_eval_{normalize_instance_id_for_path(instance_id)}.log"
+        with eval_log_path.open("w") as eval_log:
+            subprocess.run(cmd, env=env, stdin=subprocess.DEVNULL,
+                           stdout=eval_log, stderr=subprocess.STDOUT)
+        meta_path = run_dir / "metadata.json"
+        if not meta_path.exists():
+            if os.environ.get("ACB_DEBUG_UI"):
+                log_debug(
+                    f"warning: metadata.json not found at {meta_path}"
+                )
+            return False
+
+        try:
+            meta = json.loads(meta_path.read_text())
+        except (json.JSONDecodeError, OSError) as e:
+            if os.environ.get("ACB_DEBUG_UI"):
+                log_debug(
+                    f"warning: failed to read {meta_path}: {e}"
+                )
+            return False
+
+        tests_passed = meta.get("tests_passed")
+        num_smoke_tests = meta.get("num_smoke_tests")
+        compile_ok = meta.get("compile_ok", "UNK")
+        deploy_ok = meta.get("deploy_ok", "UNK")
+
+        # scarf validate can count a success marker echoed in a Makefile
+        # command even when make test ultimately fails. The run log records
+        # make's nonzero result, which must take precedence over metadata.
+        run_log = run_dir / "validation" / "run.log"
+        make_failed = run_log.exists() and re.search(
+            r"(?m)^make(?:\[\d+\])?: \*\*\*", run_log.read_text(errors="replace")
+        ) is not None
+
+        # Resolved = compiled, deployed, and all smoke tests passed.
+        if (
+            not make_failed
+            and compile_ok == "TRUE"
+            and deploy_ok == "TRUE"
+            and tests_passed is not None
+            and tests_passed > 0
+            and (num_smoke_tests is None or tests_passed >= num_smoke_tests)
+        ):
+            resolved = True
+        else:
+            resolved = False
+
         if os.environ.get("ACB_DEBUG_UI"):
             log_debug(
-                f"running scarf validate for {len(preds_to_eval)} "
-                f"prediction(s) ..."
+                f"{instance_id}: "
+                f"compile={compile_ok} deploy={deploy_ok} "
+                f"tests={tests_passed}/{num_smoke_tests} "
+                f"=> {'PASS' if resolved else 'FAIL'}"
             )
-        
-        # Redirect evaluation subprocess output to log file to prevent terminal interference
-        # This prevents scarf validate's output from bypassing Rich's Live display
-        eval_log_id = normalize_instance_id_for_path(instance_id) if instance_id else "batch"
-        eval_log_path = output_dir / f"scarfbench_eval_{eval_log_id}.log"
-        try:
-            with eval_log_path.open("w") as eval_log:
-                proc = subprocess.run(
-                    cmd,
-                    env=env,
-                    stdin=subprocess.DEVNULL,
-                    stdout=eval_log,
-                    stderr=subprocess.STDOUT
-                )
-            if os.environ.get("ACB_DEBUG_UI"):
-                log_debug(
-                    f"scarf validate exited with code {proc.returncode}"
-                )
-        except Exception as e:
-            error_msg = f"scarf validate failed: {str(e)}"
-            if tracker and tracker_key:
-                tracker.complete_verification(tracker_key, False, error=error_msg)
-            raise
 
-        # Read back grading results from each metadata.json
-        resolved: dict[str, bool] = {}
-        for pred in preds_to_eval:
-            if pred.error:
-                resolved[pred.instance_id] = False
-                continue
-            
-            run_dir = Path(pred.output) if pred.output else None
-            if run_dir is None:
-                resolved[pred.instance_id] = False
-                continue
-            
-            meta_path = run_dir / "metadata.json"
-            if not meta_path.exists():
-                if os.environ.get("ACB_DEBUG_UI"):
-                    log_debug(
-                        f"warning: metadata.json not found at {meta_path}"
-                    )
-                resolved[pred.instance_id] = False
-                continue
-
-            try:
-                meta = json.loads(meta_path.read_text())
-            except (json.JSONDecodeError, OSError) as e:
-                if os.environ.get("ACB_DEBUG_UI"):
-                    log_debug(
-                        f"warning: failed to read {meta_path}: {e}"
-                    )
-                resolved[pred.instance_id] = False
-                continue
-
-            tests_passed = meta.get("tests_passed")
-            num_smoke_tests = meta.get("num_smoke_tests")
-            compile_ok = meta.get("compile_ok", "UNK")
-            deploy_ok = meta.get("deploy_ok", "UNK")
-
-            # scarf validate can count a success marker echoed in a Makefile
-            # command even when make test ultimately fails. The run log records
-            # make's nonzero result, which must take precedence over metadata.
-            run_log = run_dir / "validation" / "run.log"
-            make_failed = run_log.exists() and re.search(
-                r"(?m)^make(?:\[\d+\])?: \*\*\*", run_log.read_text(errors="replace")
-            ) is not None
-
-            # Resolved = compiled, deployed, and all smoke tests passed.
-            if (
-                not make_failed
-                and compile_ok == "TRUE"
-                and deploy_ok == "TRUE"
-                and tests_passed is not None
-                and tests_passed > 0
-                and (num_smoke_tests is None or tests_passed >= num_smoke_tests)
-            ):
-                resolved[pred.instance_id] = True
-            else:
-                resolved[pred.instance_id] = False
-
-            if os.environ.get("ACB_DEBUG_UI"):
-                log_debug(
-                    f"{pred.instance_id}: "
-                    f"compile={compile_ok} deploy={deploy_ok} "
-                    f"tests={tests_passed}/{num_smoke_tests} "
-                    f"=> {'PASS' if resolved[pred.instance_id] else 'FAIL'}"
-                )
-
-        # Ensure every prediction has an entry
-        for pred in preds_to_eval:
-            resolved.setdefault(pred.instance_id, False)
-        
-        # Update tracker with results
-        if tracker and tracker_key and instance_id and instance_id in resolved:
-            tracker.complete_verification(tracker_key, resolved[instance_id])
-        
         return resolved

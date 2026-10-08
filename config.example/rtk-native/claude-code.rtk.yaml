@@ -1,24 +1,20 @@
 schema_version: 2
 config_dir: ..
-# Single-instance paired RTK pilot. Fill in binary_path and sha256 for the target Linux build.
 run_id: claude-code-rtk-psf-requests-1142
 benchmark: swebench
 harness: claude-code
 model: mlx-community/Qwen3-Coder-30B-A3B-Instruct-4bit-dwq-v2
-proxy: praxis
 subset:
-  - psf__requests-1142
+- psf__requests-1142
 limit: 1
-max_workers: 1
 output_dir: ../../runs
 overrides:
   harness:
-    version: "2.1.241"
-    launch_profile: isolated-hooks
-    execution_integrations:
-      - name: rtk
-        version: "0.48.0"
-        mode: native
-        experimental: true
+    version: 2.1.241
+    extensions:
+    - name: rtk
+      options:
         binary_path: /absolute/path/to/rtk-0.48.0-linux-arm64
-        sha256: "<SHA256-of-the-Linux-binary>"
+        sha256: <SHA256-of-the-Linux-binary>
+execution:
+  max_workers: 1

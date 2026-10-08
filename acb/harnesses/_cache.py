@@ -45,6 +45,8 @@ def _inventory(root: Path):
 def harness_cache_ready(directory: Path, executable: str) -> bool:
     import json
     marker = directory / '.acb-cache.json'
+    if not marker.exists():
+        return False
     if marker.exists():
         try:
             record = json.loads(marker.read_text())
@@ -61,8 +63,6 @@ def harness_cache_ready(directory: Path, executable: str) -> bool:
         return False
     if binary.stat().st_size == 0 or not binary.stat().st_mode & 0o111:
         raise ValueError(f'harness cache executable is empty or not executable: {binary}')
-    # Retain existing caches; Harbor additionally verifies installed versions.
-    # Only newly published caches have a complete file inventory.
     return True
 
 

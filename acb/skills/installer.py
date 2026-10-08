@@ -8,6 +8,8 @@ files (scripts, references, assets).
 
 from __future__ import annotations
 
+from acb.transport import EnvironmentTransport
+
 import json
 import logging
 import os
@@ -71,7 +73,7 @@ class SkillInstaller:
     def install_skill(
         self,
         skill_config: dict,
-        container: str,
+        container: EnvironmentTransport,
         arch: str,
         harness_name: str,
         tracker: ProgressTracker | None = None,
@@ -359,7 +361,7 @@ class SkillInstaller:
 
     def _install_binary_to_path(
         self,
-        container: str,
+        container: EnvironmentTransport,
         skill_dir: Path,
         binary_install_path: str,
         binary_name: str | None = None,
@@ -463,7 +465,7 @@ class SkillInstaller:
         logger.info(f"Binary installed to {container_path}")
 
     def _run_post_install_hook(
-        self, container: str, skill_name: str, hook: dict, logs: list[str]
+        self, container: EnvironmentTransport, skill_name: str, hook: dict, logs: list[str]
     ) -> dict:
         """Execute a post-install hook in the container.
 

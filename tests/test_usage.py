@@ -3,7 +3,6 @@ from types import SimpleNamespace
 
 from acb.usage import InstanceMetrics, UsageRecord, normalize_benchmark_metric, read_records
 from acb.report_metrics import aggregate_benchmark_metrics, metric_total_tokens
-from acb.proxy.record_server import _parse_openai_usage
 from acb.proxy.metrics import PraxisMetricsReader
 
 
@@ -59,21 +58,6 @@ def test_anthropic_cache_buckets_remain_exclusive():
     assert aggregate["total_input"] == 100
     assert aggregate["context_tokens"] == 160
     assert aggregate["total_tokens"] == 130
-
-
-def test_openai_recording_handles_cached_usage_in_stream_and_json():
-    response = {"usage": {
-        "prompt_tokens": 100, "completion_tokens": 20,
-        "prompt_tokens_details": {"cached_tokens": 90},
-    }}
-    for streamed in (False, True):
-        text = json.dumps(response)
-        if streamed:
-            text = "data: " + text + "\n\ndata: [DONE]\n"
-        usage = _parse_openai_usage(text.encode(), streamed)
-        assert usage["input_tokens"] == 10
-        assert usage["cache_read_tokens"] == 90
-        assert usage["output_tokens"] == 20
 
 
 def test_praxis_metrics_file_normalizes_before_writing_usage(tmp_path):

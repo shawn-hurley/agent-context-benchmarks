@@ -8,13 +8,13 @@ from acb.resolver import resolve
 
 def test_legacy_execution_is_rejected_during_resolution(tmp_path):
     cfg = RunConfig("retired", {"name": "swebench", "execution_backend": "legacy"}, "goose", "model")
-    with pytest.raises(ValueError, match="legacy runner has been retired"):
+    with pytest.raises(ValueError, match="Harbor is the sole execution backend"):
         resolve(cfg, Registries({}, {}, {}))
     assert not list(tmp_path.iterdir())
 
 
 def test_retired_modules_are_absent():
-    for module in ("acb.runner", "acb.integrations.legacy", "acb.integrations.runtime", "acb.proxy.recording"):
+    for module in ("acb.runner", "acb.integrations.legacy", "acb.integrations.runtime", "acb.proxy.recording", "acb.proxy.record_server", "acb.harnesses.stubs", "acb.integrations.tamp", "acb.benchmarks.stubs"):
         assert importlib.util.find_spec(module) is None
 
 

@@ -5,11 +5,9 @@ benchmarks:
 harnesses:
 - goose
 reward_strategy: final
-agent_adapter: local-qwen-no-think
 environment:
   dockerfile: Containerfile.kantra
   assets:
-  - no-think-proxy.py
   - provenance.json
   - rgctl-plan.sh
   - skills/mig-containerize/SKILL.md
@@ -136,7 +134,6 @@ environment:
   skills_dir: /opt/acb/skills
   dockerfile_append: 'COPY skills/ /opt/acb/skills/
 
-    COPY no-think-proxy.py /opt/acb/no-think-proxy.py
 
     COPY provenance.json /opt/acb/provenance.json
 

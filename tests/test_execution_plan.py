@@ -23,15 +23,13 @@ def settings(tmp_path, **changes):
                        'execution': {'max_workers': 2, 'timeout': 250},
                        'overrides': {'harnesses': {'pi': {'system_prompt': 'per harness'}}},
                        **changes})
-    registry = Registries({}, {'fixture': {'execution_backend': 'harbor'}}, {},
-                          models={'alias': {'model': 'wire/model', 'api': 'openai', 'endpoint': 'localhost:8000'}},
-                          machine={'cache_dir': str(tmp_path / 'cache')})
+    registry = Registries({}, {'fixture': {}}, models={'alias': {'model': 'wire/model', 'api': 'openai', 'endpoint': 'localhost:8000'}}, machine={'cache_dir': str(tmp_path / 'cache')})
     return cfg, registry
 
 
 def test_backend_dispatch_uses_resolver_precedence_once(tmp_path, monkeypatch):
-    cfg, registry = settings(tmp_path, benchmark={'name': 'fixture', 'execution_backend': 'legacy'},
-                             overrides={'benchmark': {'execution_backend': 'harbor'}})
+    cfg, registry = settings(tmp_path, benchmark={'name': 'fixture', 'attempts': 2},
+                             overrides={'benchmark': {'attempts': 3}})
     expected = resolve(cfg, registry)
     seen = []
     def run_plan(plan, **kwargs):
@@ -45,7 +43,7 @@ def test_backend_dispatch_uses_resolver_precedence_once(tmp_path, monkeypatch):
 @pytest.mark.parametrize('collision', [False, True])
 def test_harbor_saves_exact_worker_input_and_requested_snapshot(tmp_path, monkeypatch, capsys, collision):
     from acb.harbor import backend
-    cfg, registry = settings(tmp_path, benchmark={'name': 'fixture', 'execution_backend': 'harbor'})
+    cfg, registry = settings(tmp_path, benchmark={'name': 'fixture', })
     registry.models['alias']['key_env'] = 'TEST_MODEL_SECRET'
     monkeypatch.setenv('TEST_MODEL_SECRET', 'credential-must-not-be-saved')
     plan = resolve(cfg, registry)
@@ -101,7 +99,7 @@ def test_requested_metadata_redacts_inline_credentials_without_mutating_input():
 def test_saved_baseline_treatment_preserve_launch_settings(tmp_path):
     from acb.provenance import save_configuration
     cfg, registry = settings(tmp_path, harness=['goose', 'pi', 'opencode', 'claude-code'],
-                             benchmark={'name': 'fixture', 'execution_backend': 'harbor'}, extensions=[])
+                             benchmark={'name': 'fixture', }, extensions=[])
     baseline = resolve(cfg, registry).to_dict()
     cfg.extensions = ['rtk']
     treatment = resolve(cfg, registry).to_dict()

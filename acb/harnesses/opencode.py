@@ -1,6 +1,6 @@
 """OpenCode harness adapter.
 
-Runs OpenCode headless (`opencode run <prompt> --format json`) via `podman exec`
+Runs OpenCode headless (`opencode run <prompt> --format json`) through Harbor
 inside the SWE-bench eval container -- same container-mode shape as goose and
 claude-code (see `ensure_linux_binary()` for how the binary gets in, and
 acb/harnesses/_streaming.py for the shared stdout-tailing/heartbeat plumbing).
@@ -40,6 +40,8 @@ each run -- opencode's documented global-rules file (opencode.ai/docs/rules).
 """
 
 from __future__ import annotations
+
+from acb.transport import EnvironmentTransport
 
 import json
 import logging
@@ -174,7 +176,7 @@ class OpenCode(HarnessAdapter):
         """OpenCode supports both anthropic and openai providers natively."""
         return model_api
 
-    def setup_container(self, container: str, arch: str, cache_dir: Path) -> None:
+    def setup_container(self, container: EnvironmentTransport, arch: str, cache_dir: Path) -> None:
         """Download (once, cached) this arch's opencode Linux binary and copy
         it into `container` at /usr/local/bin/opencode.
         
@@ -280,10 +282,10 @@ Skills provide optimized workflows tested specifically for this benchmark. The s
             key_var: api_key,
         }
 
-    def run_container(self, prompt: str, container: str, model: str, env: dict[str, str],
+    def run_container(self, prompt: str, container: EnvironmentTransport, model: str, env: dict[str, str],
                        out_dir: Path, instance_id: str,
                        binary: str = "/usr/local/bin/opencode") -> HarnessResult:
-        """Exec opencode inside a running container via `podman exec`.
+        """Exec opencode inside a running container through Harbor.
 
         Builds OPENCODE_CONFIG_CONTENT here (not in build_container_env) so
         the model name can be registered in the provider config alongside the
@@ -418,16 +420,15 @@ Skills provide optimized workflows tested specifically for this benchmark. The s
         exec_cmd = environment_command(
             container, ["bash", "-c", f"{preamble}exec {wrapped}"], env, workdir,
         )
-        # out_dir is now the per-instance directory (instances/{test_id}/)
+        # out_dir is the trial artifact directory
         transcript_path = Path(out_dir) / "transcript.jsonl"
-        label = f"[opencode:{instance_id}]"
         timeout = self.config.get("timeout", 1800)
-        return execute(exec_cmd, env=None, cwd=None, transcript_path=transcript_path,
-                       label=label, timeout=timeout, describe_event=_describe_event,
+        return execute(exec_cmd, transcript_path=transcript_path,
+                       timeout=timeout, describe_event=_describe_event,
                        tracker=getattr(self, '_tracker', None),
                        tracker_key=getattr(self, '_tracker_key', None))
 
-    def _write_mcp_config(self, container: str, servers: list[dict]) -> None:
+    def _write_mcp_config(self, container: EnvironmentTransport, servers: list[dict]) -> None:
         """Write MCP server configuration for OpenCode.
 
         OpenCode MCP servers are configured in OPENCODE_CONFIG_CONTENT JSON
@@ -438,7 +439,7 @@ Skills provide optimized workflows tested specifically for this benchmark. The s
         is built and merged. This method validates the configuration.
 
         Args:
-            container: Podman container ID
+            container: Harbor environment transport
             servers: List of MCP server configurations from harnesses.yaml
         """
         if not servers:

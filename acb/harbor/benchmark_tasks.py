@@ -154,7 +154,7 @@ def export_workflow(root, workflow, workdir):
     for asset in environment.get("assets", []):
         target = destination / asset
         target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(source / asset, target)
+        shutil.copy2(Path(workflow["asset_sources"][asset]), target)
     for step in workflow["steps"]:
         instruction = root / "steps" / step["name"] / "instruction.md"
         instruction.parent.mkdir(parents=True, exist_ok=True)

@@ -216,7 +216,6 @@ def test_real_scarf_validator_preserves_grade_independent_of_exit(tmp_path, case
     assert json.loads(trial.reward_json_path.read_text()) == result.rewards
     # Feed the same fixed candidate to the retained adapter directly. Compare
     # detailed native evidence as well as the binary reward.
-    from acb.benchmarks.base import Prediction
     from acb.benchmarks.scarfbench import ScarfBench, _write_metadata_json
     baseline = tmp_path / "baseline"
     bench = ScarfBench(plan["benchmark_config"])
@@ -230,7 +229,7 @@ def test_real_scarf_validator_preserves_grade_independent_of_exit(tmp_path, case
     (run / "validation/agent.err").touch()
     _write_metadata_json(run / "metadata.json", agent="acb", app="cart", layer="business_domain",
                          source_framework="jakarta", target_framework="quarkus", model="harbor")
-    direct = bench.evaluate([Prediction(iid, "harbor", output=str(run))], "parity", baseline)
+    direct = {iid: bench.grade_run(iid, run, baseline)}
     assert direct[iid] == passed
     native = bench._run_dir_for_instance(trial.verifier_dir / "native", iid)
     before, after = (json.loads((path / "metadata.json").read_text()) for path in (run, native))
@@ -303,7 +302,7 @@ def test_prepared_swebench_images_must_be_visible_to_native_sdk(monkeypatch):
 def test_worker_uses_native_verifier_for_benchmarks_only(tmp_path):
     from acb.harbor.worker import job_config
     plan = scarf_plan(tmp_path)
-    plan.update(protocol_version=1, environment="podman", attempts=1, max_workers=1,
+    plan.update(protocol_version=2, environment="podman", attempts=1, max_workers=1,
                 model={"name": "fixture"}, harnesses={"goose": {"timeout": 30}},
                 benchmark_grader={"binary": "/prepared/scarf"})
     plan["manifest"] = prepare_dataset(plan)

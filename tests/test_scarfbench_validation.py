@@ -188,7 +188,7 @@ elif args[0] == 'exec':
 def test_make_failure_overrides_success_metadata(tmp_path):
     instance_id = "business_domain/cart/jakarta-to-quarkus"
     output_dir = tmp_path / "goose"
-    instance_dir = output_dir / "instances" / "business_domain__cart__jakarta-to-quarkus"
+    instance_dir = output_dir / "business_domain__cart__jakarta-to-quarkus"
     instance_dir.mkdir(parents=True)
     (instance_dir / "prediction.json").write_text(json.dumps({
         "instance_id": instance_id,
@@ -222,8 +222,6 @@ def test_make_failure_overrides_success_metadata(tmp_path):
     (target_dir / "test.sh").write_text("#!/bin/sh\nexit 0\n")
     bench = ScarfBench({"benchmark_cache_dir": str(benchmark_dir)})
     with patch("acb.benchmarks.scarfbench.shutil.which", return_value="/mock/scarf"), \
-         patch("acb.benchmarks.scarfbench.container_env", return_value={}), \
+         patch("acb.benchmarks.scarfbench.grader_env", return_value={}), \
          patch("acb.benchmarks.scarfbench.subprocess.run", return_value=SimpleNamespace(returncode=0)):
-        assert bench.evaluate(None, "test-run", output_dir, instance_id=instance_id) == {
-            instance_id: False
-        }
+        assert bench.grade_run(instance_id, run_dir, output_dir) is False

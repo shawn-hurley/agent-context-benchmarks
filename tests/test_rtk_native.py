@@ -1,3 +1,4 @@
+from conftest import TransportDouble
 """Native protocol tests plus final harness configuration composition."""
 import hashlib
 import json
@@ -54,19 +55,19 @@ def test_harness_preserves_routing_and_composes_native_activation(monkeypatch, t
     captured = []
     monkeypatch.setattr(module, "container_exec_capture", lambda *args: "")
     monkeypatch.setattr(module, "container_cp_in", lambda container, source, target: copied.update({target: Path(source).read_text()}))
-    monkeypatch.setattr(module, "execute", lambda command, **kwargs: captured.extend(command))
+    monkeypatch.setattr(module, "execute", lambda command, **kwargs: captured.append(command))
     if harness == "opencode":
         adapter._mcp_config = {"mcp": {"fixture": {"type": "local", "command": ["fixture"], "enabled": False}}}
     env = adapter.build_container_env("http://praxis:8080", "fixture-key")
-    adapter.run_container("Fix this", "container", "fixture-model", env, tmp_path, "example")
-    assert "Keep this instruction" in (captured[-1] if harness == "pi" else copied["/root/.config/opencode/AGENTS.md"])
+    adapter.run_container("Fix this", TransportDouble(), "fixture-model", env, tmp_path, "example")
+    assert "Keep this instruction" in (captured[-1].argv[-1] if harness == "pi" else copied["/root/.config/opencode/AGENTS.md"])
     if harness == "pi":
-        assert "-e /opt/acb/rtk/native/pi.ts" in captured[-1]
-        assert captured[-1].index("-e /opt") < captured[-1].index("-- '" if "-- '" in captured[-1] else "-- Fix")
+        assert "-e /opt/acb/rtk/native/pi.ts" in captured[-1].argv[-1]
+        assert captured[-1].argv[-1].index("-e /opt") < captured[-1].argv[-1].index("-- '" if "-- '" in captured[-1].argv[-1] else "-- Fix")
         config = json.loads(copied["/tmp/pi-agent/models.json"])
         assert config["providers"]["openai"]["baseUrl"] == "http://praxis:8080/v1"
     else:
-        inline = next(arg for arg in captured if arg.startswith("OPENCODE_CONFIG_CONTENT="))
+        inline = "OPENCODE_CONFIG_CONTENT=" + captured[-1].env["OPENCODE_CONFIG_CONTENT"]
         config = json.loads(inline.split("=", 1)[1])
         assert config["provider"]["acb"]["options"]["baseURL"] == "http://praxis:8080/v1"
         assert config["plugin"] == ["file:///opt/acb/rtk/native/opencode.ts"]

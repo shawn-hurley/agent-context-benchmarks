@@ -16,6 +16,7 @@ def execution(tmp_path, monkeypatch):
     task = tmp_path / "task"
     task.mkdir()
     plan = {
+        "protocol_version": 2,
         "run_id": "test", "benchmark": "harbor", "proxy": "praxis",
         "benchmark_config": {"reward_metric": "reward", "success_value": 1},
         "harnesses": {"pi": {}}, "model": {"name": "model"}, "attempts": 1,

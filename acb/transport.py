@@ -22,10 +22,7 @@ class EnvironmentCommand:
     workdir: str | None
 
 
-def command(container, argv: list[str], env: dict[str, str], workdir: str):
-    if isinstance(container, EnvironmentTransport):
-        return EnvironmentCommand(container, tuple(argv), dict(env), workdir)
-    result = ["podman", "exec", "-i"]
-    for key, value in env.items():
-        result += ["-e", f"{key}={value}"]
-    return [*result, "--workdir", workdir, container, *argv]
+def command(container: EnvironmentTransport, argv: list[str], env: dict[str, str], workdir: str) -> EnvironmentCommand:
+    if not isinstance(container, EnvironmentTransport):
+        raise TypeError("harness commands require EnvironmentTransport")
+    return EnvironmentCommand(container, tuple(argv), dict(env), workdir)

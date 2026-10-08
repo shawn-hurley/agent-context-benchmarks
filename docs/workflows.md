@@ -71,7 +71,8 @@ environment:
 ```
 
 `environment.dockerfile` can replace the benchmark's default Dockerfile with
-a file in the workflow directory. ACB copies the named assets into the task's
+a file in the workflow directory (bundled workflows also use canonical shared
+sources). ACB copies the named assets into the task's
 build context. For ScarfBench, ACB then copies the application source into
 `/work`; SWE-bench workflows normally extend the benchmark's task image with
 `dockerfile_append`. Workflow assets, instructions, and configuration are
@@ -178,3 +179,13 @@ saved resolved plan without changing the run or rerunning validation. If those
 snapshots are unavailable and no contract was recorded, matching frozen task
 checksums or task revisions remain the fallback; task names alone are insufficient.
 Incomplete telemetry suppresses token deltas only for the affected tasks.
+
+## Bundled shared assets
+
+Bundled Kantra and MigIQ workflows resolve shared helpers and the pinned rgctl
+skill/lockfile from `acb/workflows/_shared`. Export retains every declared
+build-context destination, including skill references and provenance. Shared
+source bytes contribute to the workflow hash and are rechecked before export.
+User-authored workflows must keep assets within their own directory.
+All workflows use the standard Praxis route and configured integrations;
+`agent_adapter` and the Qwen pilot request adapter have been removed.

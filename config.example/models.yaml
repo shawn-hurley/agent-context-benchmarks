@@ -1,0 +1,48 @@
+# Model aliases, provider IDs and connection settings.
+claude-opus-4-8:
+  api: anthropic
+  endpoint: api.anthropic.com:443
+  tls: true
+  key_env: ANTHROPIC_API_KEY
+claude-sonnet-4-5:
+  api: anthropic
+  endpoint: api.anthropic.com:443
+  tls: true
+  key_env: ANTHROPIC_API_KEY
+gpt-4o:
+  api: openai
+  endpoint: api.openai.com:443
+  tls: true
+  key_env: OPENAI_API_KEY
+local-qwen:
+  api: openai
+  endpoint: 127.0.0.1:11434
+  tls: false
+  key_env: null
+mlx-community/Qwen3.8-27B-4bit:
+  api: openai
+  endpoint: 127.0.0.1:8000
+  tls: false
+  key_env: null
+mlx-community/Qwen3-Coder-30B-A3B-Instruct-4bit-dwq-v2:
+  api: openai
+  endpoint: 127.0.0.1:8000
+  tls: false
+  key_env: null
+Qwen3.6-35B-A3B-NVFP4:
+  api: openai
+  endpoint: 100.97.130.25:1919
+  tls: false
+  key_env: null
+google-vertex-anthropic/claude-haiku-4-5:
+  api: anthropic
+  endpoint: aiplatform.googleapis.com:443
+  tls: true
+  key_env: VERTEX_AUTH_TOKEN
+  vertex_model: claude-haiku-4-5@20251001
+google-vertex-anthropic/claude-sonnet-4-6@default:
+  api: anthropic
+  endpoint: aiplatform.googleapis.com:443
+  tls: true
+  key_env: VERTEX_AUTH_TOKEN
+  vertex_model: claude-sonnet-4-6

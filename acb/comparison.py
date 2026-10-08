@@ -58,7 +58,7 @@ def benchmark_records(harnesses):
                 value = record.get('resolved') if definition['metric'] == 'resolved' else (record.get('rewards') or {}).get(definition['metric'])
                 valid = record.get('status') == 'completed' and isinstance(value, (int, float)) and math.isfinite(value)
                 grades.append(float(value) if valid else None)
-                iid = str(record.get('trial_id') or '')
+                iid = str(record.get('artifact_id') or record.get('trial_id') or '')
                 requests = usage.get(iid, [])
                 complete = (complete and record.get('measurement_complete') is True
                             and (directory/'usage.jsonl').exists()
@@ -84,12 +84,6 @@ def benchmark_records(harnesses):
             buckets = {field: sum(u[field] for u in all_usage if type(u.get(field)) is int and u[field] >= 0) for field in TOKEN_FIELDS}
             provenance = report.get('comparison_provenance')
             task_provenance = (provenance or {}).get('tasks', {}).get(task_id)
-            if task_provenance is not None:
-                task_provenance = dict(task_provenance)
-                if not task_provenance.get('benchmark_contract'):
-                    contract = source.benchmark_contracts.get(task_id)
-                    if contract is not None:
-                        task_provenance['benchmark_contract'] = contract
             rows[key] = {'dataset': dataset, 'benchmark': task_id, 'harness': report['harness'],
                          'dataset_metrics': report.get('dataset_metrics'),
                          'model': report.get('model'), 'directory': str(directory.resolve()),

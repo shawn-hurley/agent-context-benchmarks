@@ -1,14 +1,13 @@
 # Harbor integration cleanup
 
-Updated October 7, 2026. **This is the authoritative task/status record.**
+Updated October 8, 2026. **This is the authoritative task/status record.**
 The migration phases are closed. Phase checklists, reviews and checkpoints record
 historical decisions and evidence; they do not define additional open gates.
 
 ## Current scope and status
 
-- **Complete:** C01–C10, C14 and C16.
-- **Open:** C11 (validated boundaries), C12 (additional charts), and the remaining
-  C15 maintenance work.
+- **Complete:** C01–C10, C14–C16 and the approved [runtime cleanup findings F01–F32](runtime-cleanup.md).
+- **Open:** C11 (broader typed boundaries) and C12 (additional charts).
 - **Deferred:** C13 (Harbor agent options schema). Effectiveness experiments are
   user-owned; full dependency locking and amd64 emulation repair remain deferred.
   Docker Quick Start checks now have [scoped evidence](validation/quick-start-validation.md);
@@ -19,10 +18,10 @@ historical decisions and evidence; they do not define additional open gates.
   boundaries. Current grade, measurement and execution semantics still apply.
   Historical artifacts may be retained as evidence without supporting their formats.
 
-Latest code regression (October 7): **705 passed, four opt-in skips**, with two
-existing multiprocessing/fork deprecation warnings. The subsequent documentation
-pass groups current guides, validation records and archived plans under the
-[documentation index](README.md). Historical C10/C16 verification is detailed below.
+Latest runtime cleanup verification (October 8) is recorded in
+[the runtime cleanup acceptance record](runtime-cleanup.md#verification-and-limits).
+The [documentation index](README.md) groups current guides, validation records
+and archived plans. Historical C10/C16 verification is detailed below.
 
 ## Open work, owners and acceptance
 
@@ -72,27 +71,23 @@ Supported validation remains deferred.
 preflight and construction with valid/unknown options, and coordinate with C11.
 Filtering the log is not a fix.
 
-### C15 — Finish reproducible maintenance checks
+### C15 — Reproducible maintenance checks (complete)
 
-**Owner/modules:** `scripts/`, `pyproject.toml`, Harbor adapters in
-`acb/harbor/`, and the root/packaged Praxis Rust/Cargo assets.
+Private Harbor dependencies in contracts, environment, process ownership and
+metrics are mapped to tests in [the API inventory](harbor-api-contracts.md).
+The focused contracts inspect the pinned provider APIs and bind an actual Harbor
+job's script metric to the container executor without running it on the host.
 
-Done: pytest is declared in the `dev` dependency group, collection defaults to
-`tests/`, and the [maintenance guide](../scripts/README.md) documents the regression
-and installed-wheel gates. Live checks are opt-in.
+`acb/assets/praxis` is the sole Praxis source. Installed-wheel checks validate
+runtime resources and complete bundled workflow contexts. Shared helpers and the
+pinned rgctl bundle are canonical under `acb/workflows/_shared`; workflow snapshot
+validation rejects changed canonical bytes. No duplicate Praxis source remains
+to drift. Live RTK fixtures use Harbor transports, retain deterministic paired
+assertions, preserve no-network policy and verify fixture-owned teardown.
 
-Remaining:
-
-1. Inventory private Harbor API use in contracts, environment, processes and
-   metrics. Pin relied-on behavior with focused contract tests before upgrades.
-2. Choose one canonical source for duplicate Praxis Rust/Cargo assets and enforce
-   drift checks for packaged/generated copies.
-3. Keep live-check prerequisites, expected evidence and teardown checks documented;
-   share fixtures where this removes duplication without losing behavior coverage.
-
-**Acceptance:** the API inventory maps each dependency to a test; a drift check
-fails when a generated Praxis copy diverges; documented commands work from a
-fresh development setup. Full transitive dependency locking is outside this task.
+Pytest remains in the dev dependency group; maintenance commands, live
+prerequisites and acceptance limits are documented in [scripts](../scripts/README.md).
+Full dependency locking and the live Docker harness matrix remain deferred.
 
 ## Completed cleanup
 
@@ -108,6 +103,7 @@ fresh development setup. Full transitive dependency locking is outside this task
 | C08 — Partial results | Native records are validated independently; healthy records and missing slots remain reportable. Import errors alone do not fail execution. `test_harbor_execution_status.py`. |
 | C09 — Shared helpers | Output naming, authentication and usage parsing live in `acb/run_paths.py`, `acb/auth.py`, `acb/proxy/metrics.py`. No runner imports remain. |
 | C10 — HTML composition | Shared report loading, page/section/chart/evidence components and benchmark detail rendering replace private cross-module calls, whole-page string replacement and iframe composition. See [report architecture](report-rendering.md). |
+| C15 — Reproducible maintenance | Pinned Harbor API inventory/contracts, one packaged Praxis source, shared pinned workflow assets, installed-resource and snapshot checks. [Runtime cleanup](runtime-cleanup.md). |
 | C14 — Benchmark migration/runner retirement | SWE-bench, SWE-bench Lite and ScarfBench run through Harbor with native graders. Legacy scheduling, pod lifecycle and proxy/integration runtimes are removed. [Migration evidence](harbor-benchmark-migration.md). |
 | C16 — Documentation consistency | This record owns current status. Migration/design checkpoints are marked historical; active operations, report architecture and maintenance commands agree with the implementation. Old-format compatibility requirements are superseded. |
 
@@ -150,9 +146,9 @@ No paid model run or live Docker run was needed for those gates.
 
 1. C11: validated boundaries.
 2. C12: additional charts using the shared renderer.
-3. Finish C15's Harbor API contracts and Praxis drift enforcement.
 
-Keep this document current as each task closes. Record focused/full regressions
+The protocol-2 worker now rejects unsupported plans before setup; the broader C11
+typed input/event/result work remains open. Keep this document current as each task closes. Record focused/full regressions
 and any required live evidence. Use live checks for actual container lifecycle or
 provider claims; HTML/documentation changes do not require new paid-model runs.
 C13 stays deferred until explicitly resumed.

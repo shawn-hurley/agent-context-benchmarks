@@ -12,27 +12,22 @@ harnesses:
   claude-code:
     version: 2.1.241
     timeout: 1800
-    launch_profile: isolated-hooks
 benchmarks:
   swebench:
-    execution_backend: harbor
     dataset: SWE-bench/SWE-bench_Verified
     reward_metric: reward
     success_value: 1
     attempts: 1
   swebench-lite:
-    execution_backend: harbor
     dataset: SWE-bench/SWE-bench_Lite
     reward_metric: reward
     success_value: 1
     attempts: 1
   scarfbench:
-    execution_backend: harbor
     reward_metric: reward
     success_value: 1
     attempts: 1
   rh-swe-bench:
-    execution_backend: harbor
     dataset: rounakbende/rh-swe-bench
     revision: a31c36f6cb6d2c9f3caea36745564b3f4958239c
     task_root: tasks
@@ -40,7 +35,6 @@ benchmarks:
     success_value: 1
     attempts: 1
   harbor:
-    execution_backend: harbor
     attempts: 1
 extensions:
   rtk:

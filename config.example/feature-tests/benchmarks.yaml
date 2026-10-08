@@ -1,45 +1,36 @@
 smoke:
-  execution_backend: harbor
   path: tasks
   reward_metric: reward
   success_value: 1
 numeric:
-  execution_backend: harbor
   path: tasks
   reward_metric: quality
   success_value: 1
 separate:
-  execution_backend: harbor
   path: tasks
   reward_metric: reward
   success_value: 1
 multi-step:
-  execution_backend: harbor
   path: tasks
   reward_metric: reward
   success_value: 1
 verifier-crash:
-  execution_backend: harbor
   path: tasks
   reward_metric: reward
   success_value: 1
 missing-reward:
-  execution_backend: harbor
   path: tasks
   reward_metric: reward
   success_value: 1
 malformed-reward:
-  execution_backend: harbor
   path: tasks
   reward_metric: reward
   success_value: 1
 verifier-timeout:
-  execution_backend: harbor
   path: tasks
   reward_metric: reward
   success_value: 1
 task-skill:
-  execution_backend: harbor
   path: tasks
   reward_metric: reward
   success_value: 1
@@ -53,12 +44,10 @@ scarfbench:
   target: quarkus
 rh-swe-bench: {}
 resources:
-  execution_backend: harbor
   path: tasks
   reward_metric: reward
   success_value: 1
 network-none:
-  execution_backend: harbor
   path: tasks
   reward_metric: reward
   success_value: 1

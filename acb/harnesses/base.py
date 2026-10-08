@@ -3,7 +3,7 @@
 A HarnessAdapter knows how to invoke one CLI agent (claude-code, goose,
 opencode, pi) headlessly *inside a running container*, pointed at the proxy's
 base_url so every LLM call is measured. It returns the agent's raw output; the
-Benchmark turns the mutated container's checkout into a Prediction.
+The Harbor verifier collects the modified workspace for native grading.
 
 Generation is container-only (see acb/harbor/agent.py, acb/benchmarks/swebench.py):
 the harness runs inside the same SWE-bench eval image evaluation will grade
@@ -25,6 +25,8 @@ has been pulled out into this per-harness hook instead.
 """
 
 from __future__ import annotations
+
+from acb.transport import EnvironmentTransport
 
 import os
 from abc import ABC, abstractmethod
@@ -82,7 +84,7 @@ class HarnessAdapter(ABC):
         """
         return model_api
 
-    def setup_container(self, container: str, arch: str, cache_dir: Path) -> None:
+    def setup_container(self, container: EnvironmentTransport, arch: str, cache_dir: Path) -> None:
         """Stage anything this harness needs into `container` before
         `run_container()` execs it (e.g. `podman cp`-ing in a per-arch
         binary this harness ships as). Called once per instance, after the
@@ -101,7 +103,7 @@ class HarnessAdapter(ABC):
         """
         return None
 
-    def setup_skills(self, container: str, arch: str, cache_dir: Path) -> None:
+    def setup_skills(self, container: EnvironmentTransport, arch: str, cache_dir: Path) -> None:
         """Setup skills from harness config.
 
         Called after setup_container() to install skills (per agentskills.io
@@ -109,7 +111,7 @@ class HarnessAdapter(ABC):
         none are configured, this is a no-op.
 
         Args:
-            container: Podman container ID
+            container: Harbor environment transport
             arch: Target architecture (arm64 or amd64)
             cache_dir: Cache directory for downloaded skills
 
@@ -157,14 +159,14 @@ class HarnessAdapter(ABC):
                         f"{result.error}"
                     )
 
-    def setup_mcp_servers(self, container: str, arch: str, cache_dir: Path) -> None:
+    def setup_mcp_servers(self, container: EnvironmentTransport, arch: str, cache_dir: Path) -> None:
         """Setup MCP servers from harness config.
 
         Called after setup_skills() to configure MCP servers. MCP servers are
         optional -- if none are configured, this is a no-op.
 
         Args:
-            container: Podman container ID
+            container: Harbor environment transport
             arch: Target architecture (arm64 or amd64)
             cache_dir: Cache directory
 
@@ -178,20 +180,20 @@ class HarnessAdapter(ABC):
         self._write_mcp_config(container, mcp_servers)
 
     @abstractmethod
-    def _write_mcp_config(self, container: str, servers: list[dict]) -> None:
+    def _write_mcp_config(self, container: EnvironmentTransport, servers: list[dict]) -> None:
         """Write MCP server configuration to container in harness-specific format.
 
         Subclasses must implement this to write MCP configs appropriate for the
         harness. For harnesses that don't support MCP, this can be a no-op.
 
         Args:
-            container: Podman container ID
+            container: Harbor environment transport
             servers: List of MCP server configurations from harnesses.yaml
         """
         # Default: no-op for harnesses without MCP support
         pass
 
     @abstractmethod
-    def run_container(self, prompt: str, container: str, model: str, env: dict[str, str],
+    def run_container(self, prompt: str, container: EnvironmentTransport, model: str, env: dict[str, str],
                        out_dir: Path, instance_id: str) -> HarnessResult:
-        """Run the harness via `podman exec` inside the already-running `container`."""
+        """Run the harness through Harbor inside the already-running `container`."""

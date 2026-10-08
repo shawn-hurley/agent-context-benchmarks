@@ -1,5 +1,3 @@
-/no_think
-
 Read the installed mig-execute and mig-test-gen skills, mig-prompt-workspace/migration-prompt.md and mig-plan-workspace/tasks.md. Execute migIQ's migration plan in /work for Quarkus 3.30.5, preserving the application's behavior. Use shell to read and apply the skills; Claude slash commands and Agent APIs are unavailable in this harness.
 Track progress in the task list and mig-execute-workspace/execution-log.md. Use rgctl structural queries or CFG queries where they help, and refresh the graph after substantial edits. The pinned build has no semantic ONNX feature; use structural queries and source reads instead. Do not enable optional rgctl Kantra evaluation.
 Maven edits must leave valid POMs and module relationships. Validate POM changes with `mvn -q -DskipTests validate`. Existing test.sh and benchmark behavior tests are authoritative; do not edit or weaken existing tests. Additional tests generated with mig-test-gen belong under mig-execute-workspace/outputs/tests and supplement the existing checks. Implement application changes in the original source tree, not in an outputs copy.

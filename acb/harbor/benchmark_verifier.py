@@ -48,24 +48,7 @@ async def run_grader(command, *, cwd, env, log):
             raise
 
 
-def grader_env(config, output):
-    """Container env for a native grader, with a `docker` shim under Podman.
-
-    Both native graders shell out to a literal `docker` binary, and installed
-    wheels do not have the checkout's bin/docker shim.
-    """
-    from acb.container import container_env
-    env = container_env(config)
-    if config.get("container_backend") == "podman":
-        binary = shutil.which("podman")
-        if not binary:
-            raise FileNotFoundError("Podman is required by the selected grading backend")
-        shim = output / "bin"
-        shim.mkdir(exist_ok=True)
-        (shim / "docker").write_text("#!/bin/sh\nexec " + shlex.quote(binary) + ' "$@"\n')
-        (shim / "docker").chmod(0o755)
-        env["PATH"] = str(shim) + os.pathsep + env.get("PATH", "")
-    return env
+from acb.container import grader_env
 
 
 class BenchmarkVerifier(BaseVerifier):

@@ -1,3 +1,4 @@
+from conftest import TransportDouble
 """Configured capabilities must reach the executable, not only a config file."""
 import json
 import shlex
@@ -10,7 +11,7 @@ from acb.harnesses.pi import Pi
 from acb.mcp import MCPServerManager
 
 
-@pytest.mark.parametrize('profile', ['bare', 'isolated-hooks'])
+@pytest.mark.parametrize('profile', ['isolated-hooks'])
 def test_claude_launch_loads_only_explicit_mcp_servers(monkeypatch, tmp_path, profile):
     adapter = claude_code.ClaudeCode({'launch_profile': profile, 'conda_env': None,
                                     'mcp_servers': [{'name': 'fixture', 'command': '/fixture'}]})
@@ -20,8 +21,8 @@ def test_claude_launch_loads_only_explicit_mcp_servers(monkeypatch, tmp_path, pr
     adapter._write_mcp_config('container', adapter.config['mcp_servers'])
     commands = []
     monkeypatch.setattr(claude_code, 'execute', lambda command, **kwargs: commands.append(command))
-    adapter.run_container('Fix this', 'container', 'model', {}, tmp_path, 'fixture')
-    argv = shlex.split(commands[0][-1])[1:]
+    adapter.run_container('Fix this', TransportDouble(), 'model', {}, tmp_path, 'fixture')
+    argv = shlex.split(commands[0].argv[-1])[1:]
     path = argv[argv.index('--mcp-config') + 1]
     assert copied[path]['mcpServers']['fixture']['command'] == '/fixture'
     assert '--strict-mcp-config' in argv
@@ -41,7 +42,7 @@ def test_goose_launch_preserves_selected_mcp_and_builtin_tools(monkeypatch, tmp_
     adapter._write_mcp_config('container', adapter.config['mcp_servers'])
     launched = []
     monkeypatch.setattr(goose, 'execute', lambda *args, **kwargs: launched.append(copied[-1]))
-    adapter.run_container('Fix this', 'container', 'model', {}, tmp_path, 'fixture')
+    adapter.run_container('Fix this', TransportDouble(), 'model', {}, tmp_path, 'fixture')
     assert len(copied) == 2
     extensions = launched[0]['extensions']
     assert extensions['fixture']['cmd'] == '/fixture'

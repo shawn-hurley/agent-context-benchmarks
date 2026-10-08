@@ -1,17 +1,16 @@
 schema_version: 2
 config_dir: ..
-# Single-instance paired RTK pilot. Fill in binary_path and sha256 for the target Linux build.
 run_id: opencode-baseline-psf-requests-1142
 benchmark: swebench
 harness: opencode
 model: mlx-community/Qwen3-Coder-30B-A3B-Instruct-4bit-dwq-v2
-proxy: praxis
 subset:
-  - psf__requests-1142
+- psf__requests-1142
 limit: 1
-max_workers: 1
 output_dir: ../../runs
 overrides:
   harness:
-    version: "1.18.22"
-    execution_integrations: []
+    version: 1.18.22
+    extensions: []
+execution:
+  max_workers: 1

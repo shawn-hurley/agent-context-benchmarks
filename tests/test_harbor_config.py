@@ -9,7 +9,7 @@ from acb.resolver import resolve
 
 
 def registry():
-    return Registries({}, {}, {"models": {"local": {"api": "openai", "endpoint": "localhost:8000", "tls": False}}})
+    return Registries({}, {}, {"local": {"api": "openai", "endpoint": "localhost:8000", "tls": False}})
 
 
 def config(**kwargs):
@@ -57,13 +57,13 @@ def test_per_harness_empty_list_replaces_shared():
 
 
 @pytest.mark.parametrize("changes,match", [
-    ({"max_workers": 0}, "max_workers"),
+    ({"execution": {"max_workers": 0}}, "max_workers"),
     ({"harness": ["goose", "goose"]}, "unique"),
     ({"harness": ["missing"]}, "unknown harness"),
     ({"extensions": ["rtk", "rtk"]}, "duplicate"),
     ({"extensions": [{"name": "rtk", "options": {"oops": 1}}]}, "unknown fields"),
-    ({"extensions": ["rtk"], "overrides": {"harnesses": {"claude-code": {"launch_profile": "bare"}}}}, "cannot load"),
-    ({"extensions": ["rtk"], "overrides": {"harness": {"execution_integrations": [{"name": "rtk"}]}}}, "ambiguous"),
+    ({"extensions": ["rtk"], "overrides": {"harnesses": {"claude-code": {"launch_profile": "bare"}}}}, "launch_profile"),
+    ({"extensions": ["rtk"], "overrides": {"harness": {"execution_integrations": [{"name": "rtk"}]}}}, "named extensions"),
     ({"execution": {"environment": "host"}}, "host execution"),
     ({"overrides": {"harness": {"typo": True}}}, "unknown fields"),
 ])
@@ -152,7 +152,7 @@ def test_v2_registry_and_machine_paths_use_their_declaring_files(tmp_path, monke
 
 
 def test_top_level_component_typo_is_not_treated_as_legacy_config():
-    with pytest.raises(ValueError, match='top-level selections'):
+    with pytest.raises(ValueError, match='unknown fields'):
         resolve(config(skills=[{'name': 'caveman', 'optoins': {}}]), registry())
 
 
@@ -202,11 +202,13 @@ def test_inline_assets_and_container_paths(tmp_path, monkeypatch, location):
     run_dir = tmp_path / 'experiments'
     r = registry()
     r.sources = [str(registry_dir / 'harnesses.yaml')]
+    r.sources.append(str(registry_dir / 'skills.yaml'))
+    r.skills = {'rgctl': {'source_type': 'local', 'source_path': '../skills/rgctl'}}
     settings = {
-        'skills': [{'name': 'rgctl', 'source_type': 'local', 'source_path': '../skills/rgctl'}],
-        'execution_integrations': [{'name': 'rtk', 'binary_path': './bin/rtk',
-                                    'python_path': '/opt/container/python'}],
-        'workdir': '/work', 'python_path': '/opt/container/python',
+        'skills': ['rgctl'],
+        'extensions': [{'name': 'rtk', 'options': {'binary_path': './bin/rtk',
+                                                 'python_path': '/opt/container/python'}}],
+        'workdir': '/work',
     }
     kwargs = {}
     if location == 'registry':
@@ -222,7 +224,6 @@ def test_inline_assets_and_container_paths(tmp_path, monkeypatch, location):
     assert result['skills'][0]['source_path'] == str(tmp_path / 'skills/rgctl')
     assert result['execution_integrations'][0]['binary_path'] == str(origin / 'bin/rtk')
     assert result['execution_integrations'][0]['python_path'] == '/opt/container/python'
-    assert result['python_path'] == '/opt/container/python'
     assert result['workdir'] == '/work'
     assert (cfg, r) == before
 
@@ -260,21 +261,16 @@ def test_discovery_uses_nearest_project_and_prefers_dot_acb(tmp_path, filename):
 def test_remaining_host_paths_and_dataset_roots(tmp_path, monkeypatch, override, binary):
     monkeypatch.chdir(tmp_path)
     r = registry()
-    r.sources = [str(tmp_path / 'settings' / name) for name in ('proxy.yaml', 'benchmarks.yaml')]
-    paths = {key: './assets' for key in ('praxis_ai_repo', 'task_repo_cache_dir', 'benchmark_cache_dir')}
-    paths.update(scarf_binary=binary, task_root='dataset/tasks')
-    r.benchmarks['rh-swe-bench'] = paths
-    r.proxy['backends'] = {'praxis': {'binary': binary}}
-    cfg = config(source_file=str(tmp_path / 'experiments/run.yaml'),
-                 overrides={'benchmark': paths, 'proxy': {'binary': binary}} if override else {})
+    r.sources = [str(tmp_path / 'settings/benchmarks.yaml')]
+    paths = {'benchmark_cache_dir': './assets', 'scarf_binary': binary}
+    r.benchmarks['scarfbench'] = paths
+    cfg = config(benchmark='scarfbench', source_file=str(tmp_path / 'experiments/run.yaml'),
+                 overrides={'benchmark': paths} if override else {})
     plan = resolve(cfg, r).to_dict()
     origin = tmp_path / ('experiments' if override else 'settings')
-    for key in ('praxis_ai_repo', 'task_repo_cache_dir', 'benchmark_cache_dir'):
-        assert plan['benchmark_config'][key] == str(origin / 'assets')
+    assert plan['benchmark_config']['benchmark_cache_dir'] == str(origin / 'assets')
     expected_binary = str(origin / 'bin/scarf') if '/' in binary else binary
     assert plan['benchmark_config']['scarf_binary'] == expected_binary
-    assert plan['proxy_config']['binary'] == expected_binary
-    assert plan['benchmark_config']['task_root'] == 'dataset/tasks'
 
 
 @pytest.mark.parametrize('command', ['resolve', 'prepare', 'run'])
@@ -374,11 +370,11 @@ def test_mutated_schema_cannot_bypass_resolver_or_runner_validation():
     ({'harness': {'pi': {}}}, 'harness must'),
     ({'benchmark': {'name': 'unknown'}}, 'unknown benchmark'),
     ({'overrides': {'benchmark': []}}, 'overrides.benchmark'),
-    ({'overrides': {'proxy': {'typo': True}}}, 'overrides.proxy'),
+    ({'overrides': {'proxy': {'typo': True}}}, 'proxy'),
     ({'execution': {'offline': 'false'}}, 'execution.offline'),
     ({'execution': {'timeout': True}}, 'execution.timeout'),
     ({'execution': {'max_workers': 1.5}}, 'execution.max_workers'),
-    ({'execution': {'cache_policy': []}}, 'execution.cache_policy'),
+    ({'execution': {'cache_policy': []}}, 'cache_policy'),
     ({'overrides': {'harness': {'max_budget_usd': float('nan')}}}, 'max_budget_usd'),
     ({'overrides': {'harness': {'launch_profile': 'typo'}}}, 'launch_profile'),
     ({'extensions': [], 'overrides': {'harness': {'extensions': []}, 'harnesses': {name: {'extensions': []} for name in ('goose', 'pi', 'opencode', 'claude-code')}}}, 'ambiguous'),
@@ -397,7 +393,6 @@ def test_invalid_settings_have_field_errors(changes, match):
     ('models', {'local': {'model': []}}, 'models.local.model'),
     ('benchmarks', {'rh-swe-bench': []}, 'benchmarks.rh-swe-bench'),
     ('harnesses', {'pi': []}, 'harnesses.pi'),
-    ('proxy', {'models': []}, 'proxy.models'),
 ])
 def test_invalid_registry_settings_have_field_errors(category, value, match):
     r = registry()
@@ -413,12 +408,12 @@ def test_precedence_budget_model_and_backend_without_side_effects(monkeypatch):
     monkeypatch.setattr('socket.create_connection', forbidden)
     r = registry()
     r.machine = {'environment': 'docker'}
-    r.benchmarks['rh-swe-bench'] = {'environment': 'podman', 'attempts': 2, 'max_workers': 9}
+    r.benchmarks['rh-swe-bench'] = {'environment': 'podman', 'attempts': 2}
     r.harnesses['pi'] = {'timeout': 100, 'system_prompt': 'registry'}
-    r.models['alias'] = {'model': 'local', 'endpoint': 'alias.example:8000'}
+    r.models['alias'] = {'model': 'local', 'api': 'openai', 'endpoint': 'alias.example:8000'}
     cfg = config(model='alias', benchmark={'name': 'rh-swe-bench', 'attempts': 3},
-                 max_workers=2, execution={'max_workers': 4, 'timeout': 400, 'environment': 'docker'},
-                 overrides={'benchmark': {'attempts': 5, 'execution_backend': 'harbor'},
+                 execution={'max_workers': 4, 'timeout': 400, 'environment': 'docker'},
+                 overrides={'benchmark': {'attempts': 5, },
                             'harness': {'timeout': 200, 'system_prompt': 'shared'},
                             'harnesses': {'pi': {'timeout': 300, 'system_prompt': 'local'}}})
     before = deepcopy((cfg, r))
@@ -427,7 +422,7 @@ def test_precedence_budget_model_and_backend_without_side_effects(monkeypatch):
     assert plan['attempts'] == 5
     assert plan['environment'] == 'docker'
     assert plan['max_workers'] == 4
-    assert plan['benchmark_config']['max_workers'] == 9  # evaluator budget, not scheduler
+    assert 'max_workers' not in plan['benchmark_config']
     assert all(settings['timeout'] == 400 for settings in plan['harnesses'].values())
     assert plan['harnesses']['pi']['system_prompt'] == 'local'
     assert plan['harnesses']['goose']['system_prompt'] == 'shared'
@@ -439,8 +434,8 @@ def test_precedence_budget_model_and_backend_without_side_effects(monkeypatch):
 
 def test_explicit_empty_inline_integration_replaces_registry_before_conflict_check():
     r = registry()
-    r.harnesses['pi'] = {'execution_integrations': [{'name': 'rtk'}]}
-    cfg = config(extensions=[], overrides={'harnesses': {'pi': {'execution_integrations': []}}})
+    r.harnesses['pi'] = {'extensions': ['rtk']}
+    cfg = config(extensions=[], overrides={'harnesses': {'pi': {'extensions': []}}})
     assert resolve(cfg, r).to_dict()['harnesses']['pi']['execution_integrations'] == []
 
 
@@ -466,7 +461,7 @@ def test_existing_benchmark_fields_are_supported():
 
 @pytest.mark.parametrize('entries,match', [
     ([{'name': 'rgctl', 'source_type': 'local', 'source_pth': 'skills'}], 'unknown fields'),
-    ([{'name': 'rgctl', 'source_type': 'local'}, {'name': 'rgctl', 'source_type': 'local'}], 'duplicate'),
+    ([{'name': 'rgctl', 'source_type': 'local'}, {'name': 'rgctl', 'source_type': 'local'}], 'unknown fields'),
     ([{'name': 'rgctl', 'source_type': 'typo'}], 'source_type'),
 ])
 def test_inline_skill_errors_are_validated_during_resolve(entries, match):

@@ -47,8 +47,7 @@ and middleware. Recovery returns the bytes captured after RTK, rather than
 reconstructing pre-RTK output.
 
 Shared lists apply to all selected harnesses. Per-harness overrides can replace
-lists; empty lists disable selections. Do not combine named extensions with
-nonempty advanced `execution_integrations` or `model_middleware` settings.
+lists; empty lists disable selections. Only named selections are accepted; internal integration arrays are worker inputs.
 See [configuration precedence](configuration.md#precedence-and-component-selections).
 
 Resolve and prepare each arm, then run baseline and treatment separately against

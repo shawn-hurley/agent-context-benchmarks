@@ -29,16 +29,8 @@ impl RequestClassifierFilter {
     fn classify_request(body: &Bytes, endpoint: &str) -> Option<RequestClassification> {
         let json: serde_json::Value = serde_json::from_slice(body).ok()?;
 
-        type MessageClassifier = fn(
-            &[serde_json::Value],
-            bool,
-        ) -> (
-            ContentType,
-            Option<String>,
-            Option<String>,
-            Vec<ToolIdentity>,
-            u32,
-        );
+        type MessageClassifier =
+            fn(&[serde_json::Value], bool) -> (ContentType, Vec<ToolIdentity>, u32);
         let classify_messages: MessageClassifier = match endpoint {
             "/v1/responses" => return Some(Self::classify_responses_request(&json)),
             "/v1/chat/completions" => Self::classify_openai_request,
@@ -52,17 +44,16 @@ impl RequestClassifierFilter {
 
         let message_count = messages.map(|m| m.len() as u32);
 
-        let (content_type, tool_name, tool_detail, tools, tools_used) = if let Some(msgs) = messages
-        {
+        let (content_type, tools, tools_used) = if let Some(msgs) = messages {
             if msgs.is_empty() {
-                (ContentType::Unknown, None, None, Vec::new(), 0)
+                (ContentType::Unknown, Vec::new(), 0)
             } else {
                 classify_messages(msgs, system.is_some())
             }
         } else if system.is_some() {
-            (ContentType::SystemPrompt, None, None, Vec::new(), 0)
+            (ContentType::SystemPrompt, Vec::new(), 0)
         } else {
-            (ContentType::Unknown, None, None, Vec::new(), 0)
+            (ContentType::Unknown, Vec::new(), 0)
         };
 
         // Use tools_used if we found tools in this turn, otherwise count available tools
@@ -74,8 +65,6 @@ impl RequestClassifierFilter {
 
         Some(RequestClassification {
             content_type,
-            tool_name,
-            tool_detail,
             tools,
             tool_count,
             message_count,
@@ -162,11 +151,8 @@ impl RequestClassifierFilter {
             None if has_instructions => (ContentType::SystemPrompt, Vec::new(), 0),
             None => (ContentType::Unknown, Vec::new(), 0),
         };
-        let first = tools.first();
         RequestClassification {
             content_type,
-            tool_name: first.map(|tool: &ToolIdentity| tool.name.clone()),
-            tool_detail: first.and_then(|tool| tool.detail.clone()),
             tools,
             tool_count: if tool_count > 0 {
                 Some(tool_count)
@@ -192,16 +178,10 @@ impl RequestClassifierFilter {
     fn classify_openai_request(
         messages: &[serde_json::Value],
         has_system: bool,
-    ) -> (
-        ContentType,
-        Option<String>,
-        Option<String>,
-        Vec<ToolIdentity>,
-        u32,
-    ) {
+    ) -> (ContentType, Vec<ToolIdentity>, u32) {
         // Turn 1: Initial system prompt + user message
         if messages.len() == 1 && has_system {
-            return (ContentType::SystemPrompt, None, None, Vec::new(), 0);
+            return (ContentType::SystemPrompt, Vec::new(), 0);
         }
 
         // Explicit tool messages are authoritative and must be checked before
@@ -227,10 +207,9 @@ impl RequestClassifierFilter {
                         })
                 });
             if let Some(tool) = identity {
-                let name = tool.name.clone();
-                return (ContentType::ToolResult, Some(name), None, vec![tool], 1);
+                return (ContentType::ToolResult, vec![tool], 1);
             }
-            return (ContentType::ToolResult, None, None, Vec::new(), 1);
+            return (ContentType::ToolResult, Vec::new(), 1);
         }
 
         // Find last USER message (OpenAI uses "user" role for tool results)
@@ -264,7 +243,7 @@ impl RequestClassifierFilter {
                     } else {
                         1
                     };
-                    return (ContentType::ToolResult, None, None, Vec::new(), tool_count);
+                    return (ContentType::ToolResult, Vec::new(), tool_count);
                 }
             }
         }
@@ -283,46 +262,27 @@ impl RequestClassifierFilter {
                         .iter()
                         .filter_map(Self::openai_tool_identity)
                         .collect::<Vec<_>>();
-                    let first = tools.first();
-                    return (
-                        ContentType::ToolCall,
-                        first.map(|t| t.name.clone()),
-                        first.and_then(|t| t.detail.clone()),
-                        tools,
-                        tool_calls.len() as u32,
-                    );
+                    return (ContentType::ToolCall, tools, tool_calls.len() as u32);
                 }
             }
 
             // Check for text content
             if let Some(_content) = asst_msg.get("content") {
-                return (
-                    ContentType::AssistantContinuation,
-                    None,
-                    None,
-                    Vec::new(),
-                    0,
-                );
+                return (ContentType::AssistantContinuation, Vec::new(), 0);
             }
         }
 
         // Default: regular user message
-        (ContentType::UserMessage, None, None, Vec::new(), 0)
+        (ContentType::UserMessage, Vec::new(), 0)
     }
 
     fn classify_anthropic_request(
         messages: &[serde_json::Value],
         has_system: bool,
-    ) -> (
-        ContentType,
-        Option<String>,
-        Option<String>,
-        Vec<ToolIdentity>,
-        u32,
-    ) {
+    ) -> (ContentType, Vec<ToolIdentity>, u32) {
         // Turn 1: Initial system prompt + user message
         if messages.len() == 1 && has_system {
-            return (ContentType::SystemPrompt, None, None, Vec::new(), 0);
+            return (ContentType::SystemPrompt, Vec::new(), 0);
         }
 
         let tool_by_id = Self::anthropic_tool_map(messages);
@@ -355,8 +315,6 @@ impl RequestClassifierFilter {
                 if !tool_results.is_empty() && has_text {
                     return (
                         ContentType::UserMessage,
-                        None,
-                        None,
                         Vec::new(),
                         tool_results.len() as u32,
                     );
@@ -364,10 +322,6 @@ impl RequestClassifierFilter {
 
                 // Pure tool result(s)
                 if !tool_results.is_empty() {
-                    let first_tool_id = tool_results[0]
-                        .get("tool_use_id")
-                        .and_then(|id| id.as_str())
-                        .map(|s| s.to_string());
                     let tools = tool_results
                         .iter()
                         .filter_map(|result| {
@@ -381,14 +335,7 @@ impl RequestClassifierFilter {
                             })
                         })
                         .collect::<Vec<_>>();
-                    let first_name = tools.first().map(|t| t.name.clone()).or(first_tool_id);
-                    return (
-                        ContentType::ToolResult,
-                        first_name,
-                        None,
-                        tools,
-                        tool_results.len() as u32,
-                    );
+                    return (ContentType::ToolResult, tools, tool_results.len() as u32);
                 }
             }
         }
@@ -413,31 +360,18 @@ impl RequestClassifierFilter {
                         .into_iter()
                         .filter_map(Self::anthropic_tool_identity)
                         .collect::<Vec<_>>();
-                    let first = tools.first();
-                    return (
-                        ContentType::ToolCall,
-                        first.map(|t| t.name.clone()),
-                        first.and_then(|t| t.detail.clone()),
-                        tools,
-                        tool_count,
-                    );
+                    return (ContentType::ToolCall, tools, tool_count);
                 }
 
                 // Assistant has content but no tool_use
                 if !content.is_empty() {
-                    return (
-                        ContentType::AssistantContinuation,
-                        None,
-                        None,
-                        Vec::new(),
-                        0,
-                    );
+                    return (ContentType::AssistantContinuation, Vec::new(), 0);
                 }
             }
         }
 
         // Default: regular user message
-        (ContentType::UserMessage, None, None, Vec::new(), 0)
+        (ContentType::UserMessage, Vec::new(), 0)
     }
 
     fn openai_tool_identity(call: &serde_json::Value) -> Option<ToolIdentity> {

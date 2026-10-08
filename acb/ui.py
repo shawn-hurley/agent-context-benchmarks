@@ -13,8 +13,6 @@ from __future__ import annotations
 import locale
 import logging
 import os
-import signal
-import subprocess
 import sys
 import threading
 import time
@@ -32,17 +30,6 @@ from rich.table import Table
 from rich.text import Text
 
 from acb.logging_config import log_debug, log_error
-
-
-def _log_terminal_state(console: Console, label: str):
-    """Log current terminal state for debugging display issues."""
-    if os.environ.get("ACB_DEBUG_UI"):
-        log_debug(f"[TERMINAL {label}] "
-                  f"is_terminal={console.is_terminal}, "
-                  f"width={console.width}, "
-                  f"height={console.height}, "
-                  f"stdout_isatty={sys.stdout.isatty()}, "
-                  f"stderr_isatty={sys.stderr.isatty()}")
 
 
 def _check_console_visibility(console: Console) -> dict:
@@ -91,7 +78,7 @@ class InstanceProgress:
     last_activity: str = "queued"
     tokens_used: int | None = None
     error_message: str | None = None
-    pod_name: str | None = None  # Pod name for debugging/inspection (e.g., "acb-12345678")
+    trial_name: str | None = None  # Trial name for debugging/inspection (e.g., "acb-12345678")
 
     @property
     def elapsed(self) -> float:
@@ -198,12 +185,12 @@ class ProgressTracker:
             
             log_debug(f"add_instance({composite_key}, harness={harness}) - now QUEUED")
 
-    def start_instance(self, tracker_key: str, pod_name: str | None = None) -> None:
+    def start_instance(self, tracker_key: str, trial_name: str | None = None) -> None:
         """Mark instance as started.
         
         Args:
             tracker_key: Composite key {harness}-{instance_id}
-            pod_name: Optional pod name for debugging
+            trial_name: Optional trial name for debugging
         """
         with self._lock:
             if tracker_key not in self.instances:
@@ -211,13 +198,13 @@ class ProgressTracker:
             inst = self.instances[tracker_key]
             inst.status = InstanceStatus.RUNNING
             inst.start_time = time.monotonic()
-            if pod_name:
-                inst.pod_name = pod_name
+            if trial_name:
+                inst.trial_name = trial_name
             
             # Always log state transitions in debug mode for diagnostics
-            pod_info = f" pod={pod_name}" if pod_name else ""
+            trial_info = f" trial={trial_name}" if trial_name else ""
             running_count = sum(1 for i in self.instances.values() if i.status == InstanceStatus.RUNNING)
-            log_debug(f"start_instance({tracker_key}){pod_info} - now RUNNING "
+            log_debug(f"start_instance({tracker_key}){trial_info} - now RUNNING "
                       f"(total_running={running_count})")
 
     def update_activity(
@@ -239,23 +226,6 @@ class ProgressTracker:
             
             if os.environ.get("ACB_DEBUG_UI"):
                 log_debug(f"update_activity({tracker_key}) - {activity[:30]}... tokens={tokens}")
-
-    def set_pod_name(self, tracker_key: str, pod_name: str) -> None:
-        """Store pod name for instance.
-        
-        Args:
-            tracker_key: Composite key {harness}-{instance_id}
-            pod_name: Name of the created pod
-        """
-        with self._lock:
-            if tracker_key not in self.instances:
-                return
-            
-            inst = self.instances[tracker_key]
-            inst.pod_name = pod_name
-            
-            if os.environ.get("ACB_DEBUG_UI"):
-                log_debug(f"set_pod_name({tracker_key}) - {pod_name}")
 
     def complete_instance(
         self,
@@ -376,25 +346,18 @@ class ProgressTracker:
             }
         return icons.get(status, "?")
 
-    def _format_pod_name(self, pod_name: str | None, status: InstanceStatus) -> str:
-        """Format pod name for display.
-        
-        Shows short hash (6 chars) for active pods, "—" otherwise.
-        Format: acb-abcd (fits in 12-char column)
-        """
-        if not pod_name:
+    def _format_trial_name(self, trial_name: str | None, status: InstanceStatus) -> str:
+        """Abbreviate the identity of a running or verifying trial."""
+        if not trial_name:
             return "—"
         
-        # Only show pod name for running/verifying instances
+        # Only show trial name for running/verifying instances
         if status not in (InstanceStatus.RUNNING, InstanceStatus.VERIFYING):
             return "—"
         
-        # Extract short hash from full pod name
-        # Full format: "acb-{16-char-hash}"
-        # Display: "acb-{6-char-hash}" (total 10 chars, fits in 12-char column)
-        if len(pod_name) >= 10:  # "acb-" + at least 6 chars
-            return pod_name[:10]  # "acb-{6-char-hash}"
-        return pod_name
+        if len(trial_name) >= 10:  # abbreviated trial identity
+            return trial_name[:10]  # trial identity prefix
+        return trial_name
 
     def _get_visible_instances(self) -> list[InstanceProgress]:
         """Return instances to show in table.
@@ -441,7 +404,7 @@ class ProgressTracker:
         table = Table(title="Instance Status", show_header=True, header_style="bold cyan")
         table.add_column("Instance", style="white", width=16)
         table.add_column("Harness", style="white", width=8)
-        table.add_column("Pod", style="dim", width=12)  # Pod name for debugging
+        table.add_column("Trial", style="dim", width=12)  # Trial name for debugging
         table.add_column("Time", justify="right", width=6)
         table.add_column("Tokens", justify="right", width=7)
         table.add_column("Last Activity", style="dim", width=20)
@@ -497,13 +460,13 @@ class ProgressTracker:
             else:
                 status_color = "white"
 
-            # Format pod name (short hash for active pods)
-            pod_display = self._format_pod_name(inst.pod_name, inst.status)
+            # Format trial name (short hash for active pods)
+            trial_display = self._format_trial_name(inst.trial_name, inst.status)
             
             row = [
                 Text(f"{icon} {instance_display}", style=status_color),
                 inst.harness[:8],  # Truncate harness name
-                Text(pod_display, style="dim"),  # Pod name (short hash or "—")
+                Text(trial_display, style="dim"),  # Trial name (short hash or "—")
                 inst.elapsed_str,
                 Text(inst.tokens_str, style="yellow"),
                 inst.last_activity,
@@ -861,104 +824,3 @@ class LiveTrackerDisplay:
                 log_debug(f"[DIAGNOSTIC] Could not inspect layout: {e}")
         
         yield layout
-
-
-def cleanup_all_pods(tracker: ProgressTracker) -> None:
-    """Find and forcefully remove all currently running ACB pods.
-    
-    Iterates through tracker instances to find all pods that are running,
-    verifying, or in generation/verification states, and force-removes them.
-    Also performs a safety scan for any orphaned acb-* pods in the system.
-    """
-    pod_names_to_remove = set()
-    
-    # 1. Collect pod names from tracker
-    for inst in tracker.instances.values():
-        if inst.pod_name and inst.status in (
-            InstanceStatus.RUNNING,
-            InstanceStatus.VERIFYING,
-            InstanceStatus.GENERATED,
-        ):
-            pod_names_to_remove.add(inst.pod_name)
-    
-    # 2. Remove tracked pods
-    for pod_name in pod_names_to_remove:
-        try:
-            subprocess.run(
-                ["podman", "pod", "rm", "-f", pod_name],
-                capture_output=True,
-                text=True,
-                timeout=5
-            )
-            if os.environ.get("ACB_DEBUG_UI"):
-                log_debug(f"Cleaned up pod: {pod_name}")
-        except subprocess.TimeoutExpired:
-            if os.environ.get("ACB_DEBUG_UI"):
-                log_debug(f"Timeout removing pod {pod_name}")
-        except Exception as e:  # noqa: BLE001
-            if os.environ.get("ACB_DEBUG_UI"):
-                log_debug(f"Failed to remove pod {pod_name}: {e}")
-    
-    # 3. Safety net: Find and remove any orphaned acb-* pods from this run
-    # (in case some slipped through the tracking system)
-    try:
-        result = subprocess.run(
-            ["podman", "pod", "ls", "--format", "{{.Name}}", "--filter", f"label=acb-run-id={tracker.run_id}"],
-            capture_output=True,
-            text=True,
-            timeout=5
-        )
-        if result.stdout:
-            orphaned_pods = [p.strip() for p in result.stdout.strip().split('\n') if p.strip()]
-            for pod_name in orphaned_pods:
-                if pod_name not in pod_names_to_remove:
-                    try:
-                        subprocess.run(
-                            ["podman", "pod", "rm", "-f", pod_name],
-                            capture_output=True,
-                            text=True,
-                            timeout=5
-                        )
-                        if os.environ.get("ACB_DEBUG_UI"):
-                            log_debug(f"Cleaned up orphaned pod: {pod_name}")
-                    except Exception:  # noqa: BLE001
-                        pass
-    except Exception:  # noqa: BLE001
-        pass  # Safety net scan failed, but we already removed the tracked pods
-
-
-def setup_interrupt_handler(tracker: ProgressTracker, executor) -> None:
-    """Setup aggressive Ctrl+C handler with immediate pod cleanup.
-    
-    When Ctrl+C is pressed (SIGINT):
-    1. Sets interrupted flag to prevent new work
-    2. Immediately force-removes all running pods
-    3. Cancels pending futures (ones not yet started)
-    4. Prints final summary
-    5. Hard exits (bypasses normal cleanup to exit immediately)
-    """
-    def signal_handler(sig, frame):
-        if os.environ.get("ACB_DEBUG_UI"):
-            log_debug("🛑 Interrupt received! Cleaning up pods immediately...")
-        
-        # 1. Set interrupt flag (prevents new work from starting)
-        tracker.interrupted = True
-        
-        # 2. Immediately force-remove all running pods
-        cleanup_all_pods(tracker)
-        
-        # 3. Cancel any futures that haven't started yet
-        executor.shutdown(wait=False, cancel_futures=True)
-        
-        # 4. Show final summary (only in debug mode)
-        if os.environ.get("ACB_DEBUG_UI"):
-            try:
-                print("\n" + tracker.summary(), flush=True)
-            except Exception:  # noqa: BLE001
-                pass  # If summary fails, still exit
-        
-        # 5. Hard exit (bypasses normal Python cleanup/context managers)
-        # Using os._exit() ensures immediate termination without waiting for threads
-        os._exit(1)
-
-    signal.signal(signal.SIGINT, signal_handler)

@@ -3,7 +3,6 @@ config_dir: config
 run_id: swebench-rtk
 benchmark:
   name: swebench-lite
-  execution_backend: harbor
 harness:
 - goose
 - pi

@@ -38,37 +38,6 @@ class ACBHarborAgent(BaseAgent):
     def version(self):
         return "1"
 
-    def _use_kantra_local_proxy(self):
-        return ((self.plan.get("workflow") or {}).get("agent_adapter") == "local-qwen-no-think"
-                and self.plan["model"]["name"] in {
-                    "mlx-community/Qwen3.8-27B-4bit", "Qwen/Qwen3.5-4B"})
-
-    async def _start_kantra_local_proxy(self, environment):
-        started = await environment.exec(
-            "setsid python3 /opt/acb/no-think-proxy.py </dev/null "
-            ">/tmp/acb-no-think-proxy.log 2>&1 & echo $! >/tmp/acb-no-think-proxy.pid",
-            timeout_sec=10,
-        )
-        if started.return_code:
-            raise RuntimeError("cannot start local Qwen request adapter")
-        self._no_think_proxy_started = True
-        for _ in range(30):
-            probe = await environment.exec(
-                "python3 -c \"from urllib.request import urlopen; "
-                "urlopen('http://127.0.0.1:18879/v1/models', timeout=2).read()\"",
-                timeout_sec=5,
-            )
-            if probe.return_code == 0:
-                (self.artifacts / "request-adapter.json").write_text(json.dumps({
-                    "enabled": True, "scope": "local Qwen Kantra pilot",
-                    "request_change": "chat_template_kwargs.enable_thinking=false",
-                    "tools_allowed": ["shell", "write", "edit"],
-                    "upstream": "Praxis loopback; measurement remains enabled",
-                }, indent=2))
-                return "http://127.0.0.1:18879"
-            await asyncio.sleep(.2)
-        raise RuntimeError("local Qwen request adapter did not become ready")
-
     async def _thread(self, function, *args):
         from acb.downloads import download_policy
         with download_policy(offline=self.plan.get("offline", False), cancelled=self.transport.closed):
@@ -207,7 +176,6 @@ class ACBHarborAgent(BaseAgent):
             "services_during_verification": "stopped",
         }, indent=2))
         primary_error = None
-        self._no_think_proxy_started = False
         self.praxis = HarborPraxis(environment, self.plan, self.harness_name,
                                    str(self.context_id), self.artifacts)
         try:
@@ -215,8 +183,6 @@ class ACBHarborAgent(BaseAgent):
             providers = await verify_provider_images(environment, self.plan.get("provider_images", {}))
             (self.artifacts / "provider-images.json").write_text(json.dumps(providers, indent=2))
             base_url = await self.praxis.start()
-            if self._use_kantra_local_proxy():
-                base_url = await self._start_kantra_local_proxy(environment)
             endpoint = await self._thread(self.integrations.start, ModelEndpoint(base_url, "acb-trial", self.harness.api))
             env = self.harness.build_container_env(endpoint.base_url, endpoint.api_key)
             if set(env) & set(self.integration_env):
@@ -251,16 +217,6 @@ class ACBHarborAgent(BaseAgent):
                 cleanup_errors.extend(errors)
             except Exception as error:
                 cleanup_errors.append(str(error))
-            if self._no_think_proxy_started:
-                try:
-                    stopped = await environment.exec(
-                        "kill $(cat /tmp/acb-no-think-proxy.pid) && rm /tmp/acb-no-think-proxy.pid",
-                        timeout_sec=10,
-                    )
-                    if stopped.return_code:
-                        raise RuntimeError("local Qwen request adapter did not stop")
-                except Exception as error:
-                    cleanup_errors.append(str(error))
             try:
                 await self.praxis.stop(require_model_requests=True)
             except Exception as error:

@@ -74,7 +74,11 @@ components inline and as standalone pages.
 Current inputs are `report.json` with `evaluations`, usage/metrics JSONL at the
 harness root, and visible `<harness>/<trial-id>/` artifacts. The renderer does not
 use the old `instances/` aliases or infer evaluations from old metric formats.
-Backward compatibility with old reports and rendering APIs is out of scope.
+Comparisons use saved benchmark contracts, revisions and task checksums. Missing
+saved identity produces unavailable comparisons; reports never recover identity
+from mutable external task files. Partial native submission/diff recovery remains
+available for current trials. Backward compatibility with old reports and
+rendering APIs is out of scope.
 
 HTML text is escaped; embedded chart JSON escapes HTML delimiters and Unicode
 line separators. Tool commands, model names and patch text are data, not markup.

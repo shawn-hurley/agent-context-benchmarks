@@ -168,7 +168,7 @@ def build_config(port: int, model_spec, harness_api: str, include_token_count: b
             "anthropic-harness -> openai-backend translation is wired up "
             "(see build_config()'s docstring / the module docstring's "
             "'Anthropic<->OpenAI translation' section). Pick a model whose "
-            "`api` in proxy.yaml matches the harness, use a harness that "
+            "`api` in models.yaml matches the harness, use a harness that "
             "speaks the model's API, or add the reverse direction."
         )
 

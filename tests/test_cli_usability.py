@@ -16,7 +16,7 @@ from acb.interactive_run import _Screen
 @pytest.mark.parametrize("flags", [
     ["--model", "candidate"], ["--limit", "1"], ["--max-workers", "2"],
     ["--benchmark", "scarfbench"], ["--harness", "pi"],
-    ["--run-id", "new-name"], ["--proxy", "praxis"],
+    ["--run-id", "new-name"],
 ])
 def test_config_selection_conflicts_stop_before_execution(monkeypatch, capsys, flags):
     monkeypatch.setattr("acb.harbor.backend.run", lambda *a, **kw: pytest.fail("execution started"))

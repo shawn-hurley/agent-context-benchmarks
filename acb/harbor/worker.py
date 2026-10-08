@@ -18,6 +18,12 @@ from acb.harbor.paths import JOB_NAME, job_dir
 from acb.harbor.results import evaluation, import_results, load_results
 
 
+def validate_protocol(plan):
+    if (not isinstance(plan, dict) or type(plan.get("protocol_version")) is not int
+            or plan["protocol_version"] != PROTOCOL_VERSION):
+        raise ValueError("unsupported ACB worker protocol; prepare again")
+
+
 def execution_summary(plan, results, *, control=None, import_errors=()):
     """Execution status is independent of verification and artifact completeness."""
     config = plan["benchmark_config"]
@@ -41,8 +47,7 @@ def execution_summary(plan, results, *, control=None, import_errors=()):
 
 def job_config(plan: dict, output: Path, *, install_only=False, control=None):
     from harbor.models.job.config import JobConfig
-    if plan.get("protocol_version") != PROTOCOL_VERSION:
-        raise ValueError("unsupported ACB worker protocol")
+    validate_protocol(plan)
     agents = [{"import_path": "acb.harbor.agent:ACBHarborAgent", "model_name": plan["model"]["name"],
                "kwargs": {"plan": plan, "harness": name},
                "override_setup_timeout_sec": 600,
@@ -111,6 +116,7 @@ def job_config(plan: dict, output: Path, *, install_only=False, control=None):
 
 
 async def execute(plan, output, install_only=False, control=None):
+    validate_protocol(plan)
     from harbor.job import Job
     verify_manifest(plan["manifest"])
     from acb.harbor.benchmark_grader import verify_grader
@@ -235,8 +241,7 @@ def main():
     if version("harbor") != HARBOR_VERSION:
         raise RuntimeError(f"ACB requires Harbor {HARBOR_VERSION}")
     plan = json.loads(Path(args.input).read_text())
-    if plan.get("protocol_version") != PROTOCOL_VERSION:
-        raise ValueError("unsupported worker protocol")
+    validate_protocol(plan)
     output = Path(args.output)
     if args.action == "prepare":
         from acb.harbor.benchmark_grader import prepare_grader

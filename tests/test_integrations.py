@@ -219,10 +219,10 @@ def test_rtk_checksum_failure_does_not_copy_to_container(monkeypatch, context):
 def test_report_includes_activation_evidence(context):
     from types import SimpleNamespace
     from acb.report import build_report
-    manifest_dir = context.cache_dir / "instances/example/integrations/rtk"
+    manifest_dir = context.cache_dir / "example/integrations/rtk"
     manifest_dir.mkdir(parents=True)
     manifest = {"name": "rtk", "verification": {"agent_tool_verified": False}}
     (manifest_dir / "manifest.json").write_text(json.dumps(manifest))
     cfg = SimpleNamespace(run_id="test", benchmark="test", harness="goose", model="test", proxy="praxis")
-    report = build_report(context.cache_dir / "usage.jsonl", {}, context.cache_dir, cfg)
+    report = build_report(context.cache_dir / "usage.jsonl", {"example": False}, context.cache_dir, cfg)
     assert json.loads(report.read_text())["integrations"] == {"example": [manifest]}

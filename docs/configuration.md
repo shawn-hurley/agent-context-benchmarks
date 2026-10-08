@@ -58,10 +58,9 @@ experiment. An absent harness registry uses packaged exact version defaults.
 | `models.yaml` | Model aliases, provider IDs, API, endpoint and credential environment references |
 | `machine.yaml` | `environment: docker` or `podman`, and `cache_dir` |
 | `benchmarks.yaml` | Task source, revision, grading, attempts and native grader settings |
-| `harnesses.yaml` | Versions, timeouts, launch profiles and component defaults |
+| `harnesses.yaml` | Versions, timeouts and named component defaults |
 | `skills.yaml` / `extensions.yaml` | Component definitions/options supplementing the built-in catalog |
 | `mcp.yaml` | Named MCP configurations within harness delivery limits |
-| `proxy.yaml` | Existing model definitions under `models` and Praxis settings under `backends` |
 
 For example, `config/models.yaml` can define:
 
@@ -78,7 +77,7 @@ The alias selects a definition; `model` is the ID sent to the provider. `endpoin
 is a host and optional port, without a scheme or API path. Use `api: anthropic`
 for that API. A local compatible server can use `tls: false` and omit `key_env`.
 Credentials stay in the named environment variable; review/resolution does not
-read its value. `proxy: praxis` is the supported measurement route.
+read its value. Harbor always executes trials; Praxis always captures model traffic.
 
 Without an explicit directory, registry discovery starts beside the loaded YAML
 (or at the invocation directory for a new draft). It walks ancestors and checks
@@ -98,14 +97,15 @@ Precedence runs from left to right:
 | Shared components | Harness registry → shared override or top-level selection → per-harness selection |
 | Component options | Catalog defaults → selection options; versions must match the catalog |
 | Engine | Default Podman → machine → benchmark → `execution.environment` |
-| Global concurrency | Default 4 → run `max_workers` → `execution.max_workers` |
+| Global concurrency | Default 4 → `execution.max_workers` |
 | Offline | Default false → benchmark `offline` → `execution.offline` |
-| Model definition | `models.yaml` resolves alias/wire ID; its fields override `proxy.yaml` fields for that wire ID |
+| Model definition | `models.yaml` provides the complete alias definition and optional wire ID |
 
 Component lists replace lower layers; `[]` explicitly disables a selection.
 Do not declare a top-level list and the same shared list under
-`overrides.harness`. Named extensions also conflict with nonempty effective
-`execution_integrations`/`model_middleware`; use one configuration route.
+`overrides.harness`. Only named component selections are accepted. Put custom skill and MCP definitions
+in `skills.yaml` and `mcp.yaml`; select their names in run/harness configuration.
+Resolved integration arrays are internal worker inputs.
 
 Use `skills: [caveman]` for response instructions and `extensions: [rtk]` for
 shell-tool integration. Caveman middleware is a separate extension. See
@@ -140,7 +140,7 @@ preparation. Pi rejects MCP delivery; see the
 | Skill/RTK host assets | Declaring catalog, registry or run YAML |
 | Bare grader command names | Controller PATH; explicit paths use their declaring file |
 | Dataset `task_root` | Prefix inside the dataset, not a host path |
-| Container workdir/interpreter | Path inside the task container |
+| Harness workdir / RTK option `python_path` | Path inside the task container |
 
 Host paths support `~`. If no cache is configured, it is `.cache` under the
 output directory; a benchmark cache setting overrides the machine cache.
@@ -152,3 +152,35 @@ sources, aliases, versions and task/runtime identity. Existing run names receive
 a suffix. See [operations](harbor-operations.md) for grading/measurement semantics.
 Offline mode restricts ACB-controlled downloads; it does not guarantee engine
 network isolation.
+
+## Applicable controls and migration
+
+`execution.max_workers` is the only YAML concurrency control (default four).
+CLI `--max-workers` writes this execution setting. Claude Code alone accepts
+`max_budget_usd`; Goose alone accepts `max_tool_repetitions`. A shared override
+must apply to every selected harness; use `overrides.harnesses.NAME` otherwise.
+Claude always launches with isolated explicit settings and hook support.
+
+Native ScarfBench settings include `benchmark_cache_dir`, `source`, `target`,
+`instances`, `scarf_binary`, validation timeout and Maven cache controls. Native
+SWE-bench settings include dataset/revision/split, task repositories,
+`swebench_python`, image architecture and patch exclusions. Selecting existing
+Harbor tasks with `path` bypasses native export and grading, so native-only
+settings are rejected. The pinned RH dataset accepts `task_root`; Harbor
+registry/package datasets accept `registry` and `version`. Explicit fields are
+validated at every layer, including fields replaced by later overrides.
+
+For older YAML, move model definitions from `proxy.yaml` into `models.yaml`,
+materializing any endpoint, API, TLS, key environment and Vertex settings that
+aliases inherited. Keep provider IDs in `model` and pricing keys unchanged.
+Move inline skill/MCP definitions into their registries. Replace internal RTK or
+Caveman arrays with named `extensions` and their supported `options`.
+Remove runtime/proxy selectors, host harness binaries, harness model/tuning
+fields and `execution.cache_policy`; the latter never reset provider caches.
+Custom Praxis builds use `benchmark.praxis_image`.
+
+YAML remains schema 2. Prepared worker plans use protocol 2; re-prepare old plans.
+Workers reject unsupported protocol versions before creating output, volumes or
+provider services. Cache behavior in saved provenance describes the implemented
+provider-managed behavior, with no reset operation. The full decisions are in
+[the runtime cleanup record](runtime-cleanup.md).

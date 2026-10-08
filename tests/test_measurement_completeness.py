@@ -68,7 +68,7 @@ def test_missing_usage_excludes_tokens_but_preserves_grades(tmp_path):
     assert row["baseline"]["tokens"] == 0
     assert row["candidate"]["tokens"] is None
     assert comparison["matched_tokens"]["absolute"] is None
-    measurement = json.loads((candidate / "goose/instances/trial-id/measurement.json").read_text())
+    measurement = json.loads((candidate / "goose/trial-id/measurement.json").read_text())
     assert measurement["complete"] is False
     assert measurement["collection_complete"] is True
     assert "missing required fields" in measurement["errors"][0]

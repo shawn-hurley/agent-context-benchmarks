@@ -17,6 +17,7 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import shlex
 import subprocess
 from pathlib import Path
 from acb.transport import EnvironmentTransport
@@ -52,7 +53,6 @@ def resolve_docker_host(config: dict | None = None) -> str | None:
     return None
 
 
-_REPO_BIN = Path(__file__).resolve().parent.parent / "bin"
 _DOCKER_CONFIG_DIR = Path.home() / ".cache" / "acb" / "docker-config"
 
 
@@ -76,178 +76,50 @@ def _ensure_empty_docker_config() -> Path:
 
 
 def container_env(config: dict | None = None) -> dict[str, str]:
-    """os.environ plus a resolved DOCKER_HOST (for the eval subprocess).
-
-    When the resolved backend is Podman, also:
-    * prepends this repo's `bin/` to PATH: SWE-bench's own
-      `cleanup_container()` (swebench/harness/docker_utils.py) shells out to
-      a literal `docker` binary for stop/kill/rm regardless of DOCKER_HOST,
-      and there's no `podman-docker` package on Homebrew (it's a Linux-only
-      package) to provide one -- `bin/docker` here is a one-line
-      `exec podman "$@"` shim.
-    * points DOCKER_CONFIG at a config with the credential store disabled
-      (see `_ensure_empty_docker_config`).
-    """
+    """Resolve SDK connectivity and disable Podman-incompatible credentials."""
     env = os.environ.copy()
     host = resolve_docker_host(config)
     if host:
         env["DOCKER_HOST"] = host
-        if "podman" in host or shutil.which("docker") is None:
-            env["PATH"] = f"{_REPO_BIN}:{env.get('PATH', '')}"
-            env["DOCKER_CONFIG"] = str(_ensure_empty_docker_config())
+    if (config or {}).get("container_backend") == "podman":
+        env["DOCKER_CONFIG"] = str(_ensure_empty_docker_config())
     return env
 
 
-# ---------------------------------------------------------------------------
-# Pod/container orchestration for container-mode generation.
-#
-# This talks to `podman` directly (CLI, not the docker SDK) since it needs
-# pods, which are a Podman concept with no Docker equivalent. Files are moved
-# in/out via `podman cp` rather than bind mounts: this Podman machine (AppleHV
-# backend on macOS) has no host directory shared into the VM by default, so
-# `-v <hostpath>:...` silently fails with "no such file or directory" inside
-# the VM even though the path exists on the Mac host.
-# ---------------------------------------------------------------------------
+def grader_env(config, output):
+    """Container env for a native grader, with a `docker` shim under Podman.
 
-
-def _run(cmd: list[str], log_output: bool = True, **kwargs) -> subprocess.CompletedProcess:
-    kwargs.setdefault("check", True)
-    kwargs.setdefault("capture_output", True)
-    kwargs.setdefault("text", True)
-    
-    # Prevent TTY detection to avoid terminal control sequences
-    # that interfere with Rich Live display during QUEUED→RUNNING transitions
-    kwargs.setdefault("stdin", subprocess.DEVNULL)
-    kwargs.setdefault("close_fds", True)  # Close inherited file descriptors to prevent /dev/tty access
-    env = kwargs.get("env", os.environ.copy())
-    if "TERM" not in env:
-        env["TERM"] = "dumb"
-    
-    # Additional environment variables to prevent Podman/Docker from detecting
-    # TTY and showing progress bars or other interactive output that might
-    # bypass stdout/stderr redirection and write directly to /dev/tty
-    env.setdefault("DOCKER_BUILDKIT", "0")
-    env.setdefault("PODMAN_PROGRESS_BAR", "0")
-    env.setdefault("BUILDAH_PROGRESS_BAR", "0")
-    
-    kwargs["env"] = env
-    
-    try:
-        result = subprocess.run(cmd, **kwargs)
-        
-        # Log container operations for debugging (always enabled)
-        from acb.logging_config import log_debug
-        cmd_str = " ".join(cmd)
-        log_debug(f"[CONTAINER] {cmd_str}")
-        
-        # Conditionally log stdout/stderr based on log_output parameter
-        # Command is always logged above; this controls output logging only
-        if log_output:
-            if result.stdout and result.stdout.strip():
-                # Truncate to 1000 chars to keep logs readable
-                stdout_truncated = result.stdout[:1000]
-                if len(result.stdout) > 1000:
-                    stdout_truncated += f"... ({len(result.stdout)} total chars)"
-                log_debug(f"[CONTAINER OUT] {stdout_truncated}")
-            
-            if result.stderr and result.stderr.strip():
-                stderr_truncated = result.stderr[:1000]
-                if len(result.stderr) > 1000:
-                    stderr_truncated += f"... ({len(result.stderr)} total chars)"
-                log_debug(f"[CONTAINER ERR] {stderr_truncated}")
-        
-        return result
-    except subprocess.CalledProcessError as e:
-        # Log the failure with full details
-        from acb.logging_config import log_error
-        cmd_str = " ".join(cmd)
-        log_error(f"[CONTAINER FAIL] {cmd_str}")
-        
-        if e.stdout:
-            log_error(f"[CONTAINER STDOUT] {e.stdout}")
-        if e.stderr:
-            log_error(f"[CONTAINER STDERR] {e.stderr}")
-        
-        # Preserve error details in exception
-        raise RuntimeError(
-            f"command failed: {cmd_str}\n--- stdout ---\n{e.stdout}"
-            f"\n--- stderr ---\n{e.stderr}"
-        ) from e
-
-
-
-
-
-
-
-
-def container_cp_in(container: str, host_path, container_path: str) -> None:
-    """Copy file/directory from host into container.
-    
-    Includes diagnostic logging to track potential screen blanking issues.
+    Native graders call `docker`; create the selected Podman wrapper in the
+    grading artifact directory so installed packages work without a checkout.
     """
-    if isinstance(container, EnvironmentTransport):
-        container.upload(Path(host_path), container_path)
-        return
-    from acb.logging_config import log_debug
-    import os
-    if os.environ.get("ACB_DEBUG_UI"):
-        log_debug(f"[CP_IN_START] {host_path} -> {container}:{container_path}")
-    try:
-        _run(["podman", "cp", str(host_path), f"{container}:{container_path}"])
-        if os.environ.get("ACB_DEBUG_UI"):
-            log_debug(f"[CP_IN_END] {host_path} -> {container}:{container_path}")
-    except Exception as e:
-        if os.environ.get("ACB_DEBUG_UI"):
-            log_debug(f"[CP_IN_FAILED] {host_path} -> {container}:{container_path}: {e}")
-        raise
+    env = container_env(config)
+    if config.get("container_backend") == "podman":
+        binary = shutil.which("podman")
+        if not binary:
+            raise FileNotFoundError("Podman is required by the selected grading backend")
+        shim = output / "bin"
+        shim.mkdir(parents=True, exist_ok=True)
+        (shim / "docker").write_text("#!/bin/sh\nexec " + shlex.quote(binary) + ' "$@"\n')
+        (shim / "docker").chmod(0o755)
+        remaining = [entry for entry in env.get("PATH", "").split(os.pathsep) if entry != str(shim)]
+        env["PATH"] = os.pathsep.join([str(shim), *remaining])
+    return env
 
 
-def container_cp_out(container: str, container_path: str, host_path) -> None:
-    """Copy file/directory from container to host.
-    
-    Includes diagnostic logging to track potential screen blanking issues.
-    """
-    if isinstance(container, EnvironmentTransport):
-        container.download(container_path, Path(host_path))
-        return
-    from acb.logging_config import log_debug
-    import os
-    if os.environ.get("ACB_DEBUG_UI"):
-        log_debug(f"[CP_OUT_START] {container}:{container_path} -> {host_path}")
-    try:
-        _run(["podman", "cp", f"{container}:{container_path}", str(host_path)])
-        if os.environ.get("ACB_DEBUG_UI"):
-            log_debug(f"[CP_OUT_END] {container}:{container_path} -> {host_path}")
-    except Exception as e:
-        if os.environ.get("ACB_DEBUG_UI"):
-            log_debug(f"[CP_OUT_FAILED] {container}:{container_path} -> {host_path}: {e}")
-        raise
+def _transport(container) -> EnvironmentTransport:
+    if not isinstance(container, EnvironmentTransport):
+        raise TypeError("adapter operations require EnvironmentTransport")
+    return container
 
 
+def container_cp_in(container: EnvironmentTransport, host_path, container_path: str) -> None:
+    _transport(container).upload(Path(host_path), container_path)
 
 
+def container_cp_out(container: EnvironmentTransport, container_path: str, host_path) -> None:
+    _transport(container).download(container_path, Path(host_path))
 
 
-
-
-def container_exec_capture(container: str, cmd: list[str], workdir: str | None = None,
-                          log_output: bool = True) -> str:
-    """Run ``cmd`` inside ``container`` and return stdout (raises on nonzero exit).
-    
-    Args:
-        container: Container name
-        cmd: Command to execute as list
-        workdir: Optional working directory inside container
-        log_output: If False, suppress stdout/stderr logging (default: True)
-    
-    Returns:
-        Command stdout as string
-    """
-    if isinstance(container, EnvironmentTransport):
-        return container.capture(cmd, workdir)
-    full = ["podman", "exec"]
-    if workdir:
-        full += ["--workdir", workdir]
-    full += [container, *cmd]
-    return _run(full, log_output=log_output).stdout
+def container_exec_capture(container: EnvironmentTransport, cmd: list[str], workdir: str | None = None,
+                           log_output: bool = True) -> str:
+    return _transport(container).capture(cmd, workdir)

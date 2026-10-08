@@ -1,3 +1,4 @@
+from conftest import TransportDouble
 """Claude hook protocol, permission preservation, and launch-profile parity."""
 import hashlib
 import json
@@ -133,10 +134,10 @@ def test_isolated_launch_parity(monkeypatch, tmp_path, enabled):
     if enabled:
         adapter.integration_activation = IntegrationActivation(claude_settings=("/opt/acb/rtk/native/claude-settings.json",))
     captured = []
-    monkeypatch.setattr(claude_code, "execute", lambda command, **kwargs: captured.extend(command))
+    monkeypatch.setattr(claude_code, "execute", lambda command, **kwargs: captured.append(command))
     env = adapter.build_container_env("http://praxis:8080", "fixture-key")
-    adapter.run_container("Fix this", "container", "local-model", env, tmp_path, "fixture")
-    argv = shlex.split(captured[-1].split("&& exec ", 1)[1])
+    adapter.run_container("Fix this", TransportDouble(), "local-model", env, tmp_path, "fixture")
+    argv = shlex.split(captured[-1].argv[-1].split("&& exec ", 1)[1])
     assert "--bare" not in argv
     assert argv[argv.index("--settings") + 1] == ("/opt/acb/rtk/native/claude-settings.json" if enabled else "{}")
     assert argv[argv.index("--setting-sources") + 1] == ""
@@ -148,13 +149,15 @@ def test_isolated_launch_parity(monkeypatch, tmp_path, enabled):
     assert env["CLAUDE_CODE_DISABLE_AUTO_MEMORY"] == "1"
 
 
-def test_default_profile_remains_bare(monkeypatch, tmp_path):
+def test_default_profile_is_isolated_and_hooks_are_supported(monkeypatch, tmp_path):
     adapter = claude_code.ClaudeCode()
     captured = []
-    monkeypatch.setattr(claude_code, "execute", lambda command, **kwargs: captured.extend(command))
-    adapter.run_container("Fix this", "container", "local-model", {}, tmp_path, "fixture")
-    assert "--bare" in shlex.split(captured[-1])
-    assert "--settings" not in shlex.split(captured[-1])
+    monkeypatch.setattr(claude_code, "execute", lambda command, **kwargs: captured.append(command))
+    adapter.run_container("Fix this", TransportDouble(), "local-model", {}, tmp_path, "fixture")
+    assert "--bare" not in shlex.split(captured[-1].argv[-1])
+    assert "--settings" in shlex.split(captured[-1].argv[-1])
     adapter.integration_activation = IntegrationActivation(claude_settings=("/opt/acb/rtk/native/claude-settings.json",))
-    with pytest.raises(ValueError, match="launch_profile"):
-        adapter.run_container("Fix this", "container", "local-model", {}, tmp_path, "fixture")
+    adapter.run_container("Fix this", TransportDouble(), "local-model", {}, tmp_path, "fixture")
+    assert "/opt/acb/rtk/native/claude-settings.json" in captured[-1].argv[-1]
+    with pytest.raises(ValueError, match="isolated-hooks"):
+        claude_code.ClaudeCode({"launch_profile": "bare"})

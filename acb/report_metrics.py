@@ -133,18 +133,8 @@ def metric_total_tokens(metric: dict) -> float:
 
 
 def tool_identities(metric: dict) -> list[dict]:
-    """Return normalized tool identities, including legacy records."""
-    tools = metric.get("tools") or []
-    if tools:
-        return tools
-    name = metric.get("tool_name")
-    if not name:
-        return []
-    return [{
-        "name": name,
-        "detail": metric.get("tool_detail"),
-        "call_id": metric.get("tool_call_id"),
-    }]
+    """Return the current array of normalized tool identities."""
+    return metric.get("tools") or []
 
 
 def normalize_tool_interactions(metrics: list[dict]) -> list[dict]:
@@ -333,9 +323,6 @@ def shell_command_breakdown(metrics: list[dict]) -> dict:
         detail = interaction['detail']
         if name.lower() in {'bash', 'shell'}:
             command = detail or 'unknown'
-        elif detail and detail.lower() == 'bash':
-            # Older records stored the command in tool_name and the tool in detail.
-            command = name
         else:
             continue
         entry = commands.setdefault(command, {

@@ -292,9 +292,10 @@ covers its full distribution. Internal symlinks are recorded; escaping links and
 reserved cache metadata are rejected.
 
 Failed extraction leaves no ready cache entry. Failed publication restores an
-incomplete prior entry. Existing caches without a manifest remain compatible and
-continue through Harbor's installed startup/version checks; they do not have
-retrospective file-integrity guarantees.
+incomplete prior entry. Entries without `.acb-cache.json` are not ready. Online
+preparation repopulates them atomically under the existing cache lock; offline
+preparation fails with guidance to prepare online. Existing corrupt manifests or
+changed files remain errors. No unrelated cache entries are pruned.
 
 Thirteen tests exercise all four adapters using generated archives, including
 concurrency, interrupted extraction, corruption, offline misses and publication

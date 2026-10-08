@@ -19,7 +19,7 @@ from acb.resolver import resolve
 
 def swebench_parity(root, prepared_request, python, environment):
     """Compare fixed patches through the bridge child and official entrypoint."""
-    from acb.container import container_env
+    from acb.container import grader_env
     from acb.harbor import swebench_grade
     original = json.loads(prepared_request.read_text())
     baseline_script = """
@@ -55,7 +55,7 @@ Path('grade.json').write_text(json.dumps({'resolved': bool(result and result[1][
             path.write_text(json.dumps(request))
             command = [python, swebench_grade.__file__, str(path)] if route == "bridge" else [python, "-c", baseline_script, str(path)]
             with (output / "grader.log").open("w") as log:
-                subprocess.run(command, cwd=output, env=container_env({"container_backend": environment}),
+                subprocess.run(command, cwd=output, env=grader_env({"container_backend": environment}, output),
                                stdout=log, stderr=log, check=True, timeout=180)
             outcomes.append(json.loads((output / "grade.json").read_text()))
             paths = list((output / "logs").rglob("report.json"))
@@ -105,11 +105,10 @@ def main():
     root = args.output.resolve()
     root.mkdir(parents=True, exist_ok=False)
     dataset, bundle = fixtures(root, args.image)
-    registry = Registries({}, {"swebench": {}, "scarfbench": {}},
-                          {"models": {"fixture": {"api": "openai", "endpoint": "localhost:1", "tls": False}}})
+    registry = Registries({}, {"swebench": {}, "scarfbench": {}}, {"fixture": {"api": "openai", "endpoint": "localhost:1", "tls": False}})
     records = []
     for benchmark in ("swebench", "scarfbench"):
-        settings = {"execution_backend": "harbor", "reward_metric": "reward", "success_value": 1}
+        settings = {"reward_metric": "reward", "success_value": 1}
         if benchmark == "swebench":
             settings.update(dataset=str(dataset), task_repo_cache_dir=str(root))
         else:

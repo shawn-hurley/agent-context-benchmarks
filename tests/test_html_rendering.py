@@ -48,7 +48,7 @@ def enrich(root):
         trial.mkdir()
         (trial / 'prediction.json').write_text(json.dumps({'instance_id': row['instance_id'], 'model_patch': '+ patch for ' + row['instance_id']}))
         rows.append({**row, 'timestamp_ms': 100, 'content_type': 'tool_call',
-                     'tool_name': 'Bash', 'tool_detail': 'echo', 'request_id': row['instance_id'],
+                     "tools": [{"name": 'Bash', "detail": 'echo'}], 'request_id': row['instance_id'],
                      'cache_read_input_tokens': 0, 'cache_creation_input_tokens': 0})
     (root / 'benchmark_metrics.jsonl').write_text(''.join(json.dumps(row) + '\n' for row in rows))
     (root / 'metrics.jsonl').write_text(''.join(json.dumps({'instance_id': row['instance_id'], 'resolved': True}) + '\n' for row in rows))

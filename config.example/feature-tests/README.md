@@ -19,8 +19,9 @@ acb run --config config/runs/baseline.yaml --control nop
 
 The reset archives the complete previous `config/` under `.config/backups/` before
 installing the new matrix. It preserves model definitions and optional prices,
-uses the shared `runs/.cache`, and reuses locally available ScarfBench/RH inputs
-and the cached ARM64 rgctl binary when present. It does not copy old harness
+uses the shared `runs/.cache`, and preserves a valid external ScarfBench
+prerequisite directory. Supply RH task bundles and rgctl binaries through explicit
+current settings; reset does not search historical runs or cached binaries. It does not copy old harness
 prompts or experiment overrides. Restore by moving the new config aside and moving
 the archived directory back to `config/`.
 
@@ -68,8 +69,8 @@ they are not expressible as a positive run YAML alone.
 ## Prerequisites and limits
 
 - `rgctl`: place a **Linux binary for the task architecture** at
-  `assets/skills/rgctl/rgctl`. The local reset reuses the known cached ARM64 asset
-  on ARM64 hosts. The tracked template intentionally does not contain binaries.
+  `assets/skills/rgctl/rgctl`. The tracked template intentionally does not contain
+  binaries; install this prerequisite explicitly after resetting local config.
 - `mcp`: requires npm registry access to start the filesystem server via `npx`.
   Pin its package version before recording reproducible experimental results.
   Pi is deliberately excluded: its adapter rejects MCP runtime delivery.
@@ -80,8 +81,8 @@ they are not expressible as a positive run YAML alone.
   [benchmark migration](../../docs/harbor-benchmark-migration.md). Point ScarfBench's
   `benchmark_cache_dir` at an existing bundle. RH defaults to the pinned upstream
   dataset; unsupported disk quotas need an explicitly reviewed task copy. Local
-  reset copies the previously approved bundle and deviation record into
-  `assets/benchmarks/rh-swe-bench` when available; no new quota override is applied.
+  RH defaults use the pinned upstream registry. To use an approved local bundle,
+  set `path` explicitly and retain its deviation record alongside the task copy.
 - Docker has [scoped Quick Start evidence](../../docs/validation/quick-start-validation.md)
   for the repair task and native Cart controls. The full Docker feature/harness
   and isolation matrix remains unverified.

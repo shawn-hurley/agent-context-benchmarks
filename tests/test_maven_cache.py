@@ -126,7 +126,7 @@ def test_yaml_cache_options_resolve_before_execution(tmp_path, monkeypatch, loca
 def test_cache_resolution_defaults_and_override_precedence():
     from acb.config import Registries, RunConfig
     from acb.resolver import resolve
-    registry = Registries({}, {}, {}, models={'fixture': {'api': 'openai', 'endpoint': 'example.invalid'}})
+    registry = Registries({}, {}, models={'fixture': {'api': 'openai', 'endpoint': 'example.invalid'}})
     cfg = RunConfig(run_id='cache-check', benchmark='scarfbench', harness='goose', model='fixture')
     assert cache_volume(resolve(cfg, registry).to_dict()['benchmark_config']) == DEFAULT_VOLUME
     registry.benchmarks = {'scarfbench': {'maven_cache': True, 'maven_cache_volume': 'registry-cache'}}
@@ -146,7 +146,7 @@ def test_cache_resolution_defaults_and_override_precedence():
 def test_invalid_cache_options_fail_during_resolution(settings, match):
     from acb.config import Registries, RunConfig
     from acb.resolver import resolve
-    registry = Registries({}, {}, {}, models={'fixture': {'api': 'openai', 'endpoint': 'example.invalid'}})
+    registry = Registries({}, {}, models={'fixture': {'api': 'openai', 'endpoint': 'example.invalid'}})
     cfg = RunConfig(run_id='cache-check', benchmark='scarfbench', harness='goose', model='fixture',
                     overrides={'benchmark': settings})
     with pytest.raises(ValueError, match=match):

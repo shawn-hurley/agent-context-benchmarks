@@ -17,7 +17,7 @@ def test_trial_logs_can_be_followed_before_import_and_remain_readable_after(tmp_
     (tmp_path / "job.log").write_text("job running\n")
 
     view = expose_trial(tmp_path, "pi", "id-1", native.name)
-    assert (tmp_path / "pi" / "instances" / "id-1").is_symlink()
+    assert not (tmp_path / "pi" / "instances").exists()
     assert (view / "job.log").read_text() == "job running\n"
     assert (view / "trial.log").read_text() == "trial started\n"
     assert (view / "transcript.log").read_text() == '{"type":"start"}\n'
@@ -40,7 +40,7 @@ def test_trial_logs_can_be_followed_before_import_and_remain_readable_after(tmp_
     assert not (view / "transcript.jsonl").is_symlink()
     assert (view / "verifier" / "test-stdout.txt").read_text() == "verifier output"
     assert (view / "evaluation.json").is_file()
-    assert (tmp_path / "pi" / "instances" / "id-1" / "transcript.jsonl").samefile(view / "transcript.jsonl")
+    assert not (tmp_path / "pi" / "instances").exists()
     (tmp_path / "job.log").write_text("job completed\n")
     archive_job_log(tmp_path, ["pi"])
     assert (view / "job.log").read_text() == "job completed\n"

@@ -12,28 +12,63 @@ import re
 import yaml
 
 from acb.config import ModelSpec, Registries, RunConfig
+from acb.harbor import PROTOCOL_VERSION
 
 CATEGORIES = ("skills", "mcp_servers", "extensions")
 HARNESSES = ("goose", "pi", "opencode", "claude-code")
-HARNESS_FIELDS = {
-    "version", "timeout", "binary", "system_prompt", "max_tool_repetitions",
-    "max_budget_usd", "launch_profile", "workdir", "conda_env", "skills",
-    "mcp_servers", "extensions", "execution_integrations", "model_middleware",
-    "model", "provider", "thinking", "max_tokens", "temperature", "python_path",
+HARNESS_COMMON_FIELDS = {
+    "version", "timeout", "system_prompt", "workdir", "conda_env",
+    "skills", "mcp_servers", "extensions",
 }
-BENCH_FIELDS = {
-    "execution_backend", "dataset", "revision", "task_root", "path", "environment",
-    "attempts", "reward_metric", "success_value", "praxis_image", "python",
-    "metrics", "grade_direction", "grade_tolerance",
-    "registry", "version", "git_url", "architecture", "cache_dir", "offline",
-    "instances", "split", "exclude", "exclude_repos", "scarfbench_dir",
-    "scarfbench_image", "container_backend", "docker_host", "max_workers", "praxis_ai_repo",
-    "task_repo_cache_dir", "benchmark_cache_dir", "scarf_binary",
-    "image_arch", "task_repo", "namespace", "patch_exclude_patterns",
-    "source", "target", "validate_timeout_minutes", "swebench_python",
+HARNESS_SPECIFIC_FIELDS = {
+    "goose": {"max_tool_repetitions"}, "claude-code": {"max_budget_usd"},
+    "pi": set(), "opencode": set(),
+}
+HARNESS_FIELDS = HARNESS_COMMON_FIELDS | set().union(*HARNESS_SPECIFIC_FIELDS.values())
+BENCH_COMMON_FIELDS = {
+    "path", "environment", "attempts", "reward_metric", "success_value", "praxis_image",
+    "metrics", "grade_direction", "grade_tolerance", "architecture", "cache_dir", "offline",
+}
+SCARF_FIELDS = {
+    "instances", "benchmark_cache_dir", "scarfbench_image", "docker_host", "scarf_binary",
+    "source", "target", "validate_timeout_minutes", "exclude", "exclude_repos",
     "maven_cache", "maven_cache_volume",
 }
-EXEC_FIELDS = {"max_workers", "timeout", "environment", "offline", "cache_policy"}
+SWE_FIELDS = {
+    "dataset", "revision", "split", "task_repo", "task_repo_cache_dir", "image_arch",
+    "patch_exclude_patterns", "docker_host", "swebench_python", "validate_timeout_minutes",
+    "exclude", "exclude_repos",
+}
+HARBOR_FIELDS = {"dataset", "revision", "task_root", "registry", "version"}
+BENCH_FIELDS = BENCH_COMMON_FIELDS | SCARF_FIELDS | SWE_FIELDS | HARBOR_FIELDS
+EXEC_FIELDS = {"max_workers", "timeout", "environment", "offline"}
+REMOVED_FIELDS = {
+    "container_backend": "use execution.environment",
+    "max_workers": "use execution.max_workers",
+    "praxis_ai_repo": "build and select benchmark.praxis_image",
+    "execution_backend": "Harbor is the sole execution backend",
+    "proxy": "Praxis is the measurement proxy; define models in models.yaml",
+    "execution_integrations": "select named extensions",
+    "model_middleware": "select named extensions",
+    "launch_profile": "Claude Code always uses the isolated-hooks profile",
+    "cache_policy": "cache behavior is derived from the implemented runtime",
+}
+
+
+def benchmark_fields(name, settings):
+    """Fields consumed by the selected task-loading and grading route."""
+    if settings.get("path"):
+        return BENCH_COMMON_FIELDS | {"dataset", "revision"}
+    if name == "scarfbench":
+        return BENCH_COMMON_FIELDS | SCARF_FIELDS
+    if name in ("swebench", "swebench-lite"):
+        return BENCH_COMMON_FIELDS | SWE_FIELDS
+    fields = BENCH_COMMON_FIELDS | {"dataset", "revision", "registry", "version"}
+    if settings.get("dataset") == "rounakbende/rh-swe-bench":
+        fields = BENCH_COMMON_FIELDS | {"dataset", "revision", "task_root"}
+    return fields
+
+
 SKILL_FIELDS = {
     "name", "version", "source_type", "source_url", "source_path", "ref",
     "binary_pattern", "binary_name", "binary_install_path", "skill_md_url",
@@ -50,7 +85,7 @@ def discover_config_dir(start: Path | None = None) -> Path:
     for parent in (start, *start.parents):
         for name in (".acb", "config"):
             path = parent / name
-            if any((path / file).is_file() for file in ("harnesses.yaml", "benchmarks.yaml", "machine.yaml", "models.yaml", "proxy.yaml", "skills.yaml", "extensions.yaml", "mcp.yaml")):
+            if any((path / file).is_file() for file in ("harnesses.yaml", "benchmarks.yaml", "machine.yaml", "models.yaml", "skills.yaml", "extensions.yaml", "mcp.yaml")):
                 return path
     return start / "config"
 
@@ -60,7 +95,8 @@ def _unknown(value: dict, allowed: set, field: str) -> None:
         raise ValueError(f"{field} must be a mapping")
     extra = set(value) - allowed
     if extra:
-        raise ValueError(f"{field}: unknown fields {sorted(extra, key=str)}")
+        guidance = "; ".join(f"{key}: {REMOVED_FIELDS[key]}" for key in sorted(extra, key=str) if key in REMOVED_FIELDS)
+        raise ValueError(f"{field}: unknown fields {sorted(extra, key=str)}" + (f"; {guidance}" if guidance else ""))
 
 
 def _positive(value, field):
@@ -108,36 +144,22 @@ def _select(entries, catalog, category):
     return selected
 
 
-def _catalog_selection(entries):
-    """Distinguish named selections from supported legacy inline configuration."""
-    return isinstance(entries, list) and all(
-        isinstance(entry, str) or isinstance(entry, dict) and
-        set(entry) <= {"name", "version", "options"} for entry in entries
-    )
-
-
 def _selection(cfg, category, registered, shared, local):
     top = getattr(cfg, category)
-    if top is not None and not _catalog_selection(top):
-        raise ValueError(f"{category}: top-level selections require name, version and options only")
-    sources = (registered, shared, local)
-    if top is not None:
-        for source in sources:
-            if source.get(category) and not _catalog_selection(source[category]):
-                raise ValueError(f"{category}: ambiguous shared and legacy selection")
     if top is not None and category in shared:
         raise ValueError(f"{category}: ambiguous top-level and shared override selection")
-    if category in local:
-        selection = local[category]
-    elif top is not None:
-        selection = top
-    else:
-        selection = shared.get(category, registered.get(category))
-    if category == "extensions" and selection is not None and any(
-        {**registered, **shared, **local}.get(key) for key in ("execution_integrations", "model_middleware")
-    ):
-        raise ValueError("extensions: ambiguous shared and legacy selection")
-    return selection
+    # Validate every supplied layer, even if a later selection replaces it.
+    for label, entries in (("top-level", top), ("registry", registered.get(category)),
+                           ("shared", shared.get(category)), ("local", local.get(category))):
+        if entries is None:
+            continue
+        if not isinstance(entries, list):
+            raise ValueError(f"{category}.{label} must be a list")
+        for entry in entries:
+            if isinstance(entry, str):
+                continue
+            _unknown(entry, {"name", "version", "options"}, f"{category}.{label}; named selections require name, version and options only")
+    return local.get(category, top if top is not None else shared.get(category, registered.get(category)))
 
 
 @dataclass(frozen=True)
@@ -167,22 +189,19 @@ def resolve(cfg: RunConfig, registries: Registries | None = None) -> ResolvedPla
     unknown = set(cfg.harnesses) - set(HARNESSES)
     if unknown:
         raise ValueError(f"unknown harnesses: {sorted(unknown)}")
-    _unknown(cfg.overrides, {"benchmark", "harness", "harnesses", "proxy"}, "overrides")
+    _unknown(cfg.overrides, {"benchmark", "harness", "harnesses"}, "overrides")
     _unknown(cfg.execution, EXEC_FIELDS, "execution")
     for key, allowed in (("benchmark", BENCH_FIELDS), ("harness", HARNESS_FIELDS),
-                         ("harnesses", set(cfg.harnesses)), ("proxy", {"binary"})):
+                         ("harnesses", set(cfg.harnesses))):
         if key in cfg.overrides:
             _unknown(cfg.overrides[key], allowed, "overrides." + key)
-    _positive(cfg.max_workers, "max_workers")
     for key in ("max_workers", "timeout"):
         if key in cfg.execution:
             _positive(cfg.execution[key], "execution." + key)
     if "offline" in cfg.execution and type(cfg.execution["offline"]) is not bool:
         raise ValueError("execution.offline must be a boolean")
-    if "cache_policy" in cfg.execution and not isinstance(cfg.execution["cache_policy"], str):
-        raise ValueError("execution.cache_policy must be a string")
     registry = registries or Registries.load(cfg.registry_dir())
-    for key in ("harnesses", "benchmarks", "models", "skills", "extensions", "proxy", "machine"):
+    for key in ("harnesses", "benchmarks", "models", "skills", "extensions", "machine"):
         if not isinstance(getattr(registry, key), dict):
             raise ValueError(f"registry.{key} must be a mapping")
     _unknown(registry.machine, {"environment", "cache_dir"}, "machine")
@@ -190,10 +209,6 @@ def resolve(cfg: RunConfig, registries: Registries | None = None) -> ResolvedPla
         raise ValueError("machine.environment must be docker or podman")
     if "cache_dir" in registry.machine and not isinstance(registry.machine["cache_dir"], str):
         raise ValueError("machine.cache_dir must be a path string")
-    _unknown(registry.proxy, {"models", "backends"}, "proxy")
-    for key in ("models", "backends"):
-        if key in registry.proxy and not isinstance(registry.proxy[key], dict):
-            raise ValueError(f"proxy.{key} must be a mapping")
     base = Path(cfg.source_file).parent if cfg.source_file else Path.cwd()
 
     def source_base(filename):
@@ -225,29 +240,27 @@ def resolve(cfg: RunConfig, registries: Registries | None = None) -> ResolvedPla
 
     def harness_assets(settings, origin):
         settings = deepcopy(settings)
-        for category in ("skills", "extensions", "execution_integrations"):
+        for category in ("skills", "extensions"):
             if category in settings:
                 settings[category] = asset_paths(settings[category], origin)
         return settings
     catalog = defaults()
     overrides = deepcopy(cfg.overrides)
-    benchmark = cfg.benchmark
-    if isinstance(benchmark, dict):
-        benchmark = deepcopy(benchmark)
-        name = benchmark.pop("name", None)
-        if not isinstance(name, str) or name not in catalog["benchmarks"] and name not in registry.benchmarks:
-            raise ValueError(f"unknown benchmark {name!r}")
-        _unknown(benchmark, BENCH_FIELDS, "benchmark")
-        _unknown(registry.benchmarks.get(name, {}), BENCH_FIELDS, f"benchmarks.{name}")
-        benchmark = {**catalog["benchmarks"].get(name, {}), **registry.benchmarks.get(name, {}), **benchmark}
-    else:
-        name = benchmark
-        if not isinstance(name, str) or name not in catalog["benchmarks"] and name not in registry.benchmarks:
-            raise ValueError(f"unknown benchmark {name!r}")
-        _unknown(registry.benchmarks.get(name, {}), BENCH_FIELDS, f"benchmarks.{name}")
-        benchmark = {**catalog["benchmarks"].get(name, {}), **registry.benchmarks.get(name, {})}
-    benchmark.update(overrides.get("benchmark", {}))
-    _unknown(benchmark, BENCH_FIELDS, "benchmark")
+    inline = deepcopy(cfg.benchmark) if isinstance(cfg.benchmark, dict) else {}
+    name = inline.pop("name", cfg.benchmark if isinstance(cfg.benchmark, str) else None)
+    if not isinstance(name, str) or name not in catalog["benchmarks"] and name not in registry.benchmarks:
+        raise ValueError(f"unknown benchmark {name!r}")
+    registered_benchmark = registry.benchmarks.get(name, {})
+    for label, value in ((f"benchmarks.{name}", registered_benchmark),
+                         ("benchmark", inline), ("overrides.benchmark", overrides.get("benchmark", {}))):
+        _unknown(value, BENCH_FIELDS, label)
+    effective = {**catalog["benchmarks"].get(name, {}), **registered_benchmark,
+                 **inline, **overrides.get("benchmark", {})}
+    allowed = benchmark_fields(name, effective)
+    for label, value in ((f"benchmarks.{name}", registered_benchmark),
+                         ("benchmark", inline), ("overrides.benchmark", overrides.get("benchmark", {}))):
+        _unknown(value, allowed, label + " (unsupported for selected task source)")
+    benchmark = {key: value for key, value in effective.items() if key in allowed}
     if benchmark.get("grade_direction", "higher") not in ("higher", "lower"):
         raise ValueError("benchmark.grade_direction must be higher or lower")
     import math
@@ -263,36 +276,28 @@ def resolve(cfg: RunConfig, registries: Registries | None = None) -> ResolvedPla
     workflow = load_workflow(cfg.workflow, base, name, cfg.harnesses) if cfg.workflow else None
     if workflow and (name not in ("scarfbench", "swebench", "swebench-lite") or benchmark.get("path")):
         raise ValueError("run-level workflows currently require an ACB-exported ScarfBench or SWE-bench task")
-    for key in ("max_workers", "validate_timeout_minutes"):
+    for key in ("validate_timeout_minutes",):
         if key in benchmark:
             _positive(benchmark[key], "benchmark." + key)
-    backend = benchmark.get("execution_backend", "harbor")
-    if backend != "harbor":
-        raise ValueError("benchmark.execution_backend must be harbor; the legacy runner has been retired")
     environment = cfg.execution.get("environment", benchmark.get("environment", registry.machine.get("environment", "podman")))
     if environment not in ("docker", "podman"):
         raise ValueError("execution.environment must be docker or podman; host execution is unsupported")
-    workers = cfg.execution.get("max_workers", cfg.max_workers)
+    workers = cfg.execution.get("max_workers", 4)
     _positive(workers, "max_workers")
     if cfg.limit is not None:
         _positive(cfg.limit, "limit")
     if cfg.subset is not None and (not isinstance(cfg.subset, list) or not cfg.subset or any(not isinstance(x, str) for x in cfg.subset) or len(set(cfg.subset)) != len(cfg.subset)):
         raise ValueError("subset must be a nonempty list of unique task IDs")
     _positive(benchmark.get("attempts", 1), "benchmark.attempts")
-    if cfg.proxy != "praxis":
-        raise ValueError("proxy must be praxis for container execution")
     model_data = deepcopy(registry.models.get(cfg.model, {}))
     _unknown(model_data, {item.name for item in fields(ModelSpec)} - {"name"} | {"model"}, f"models.{cfg.model}")
     wire_model = model_data.pop("model", cfg.model)
     if not isinstance(wire_model, str) or not wire_model:
         raise ValueError(f"models.{cfg.model}.model must be a nonempty string")
-    _unknown(registry.proxy.get("models", {}).get(wire_model, {}),
-             {item.name for item in fields(ModelSpec)} - {"name"}, f"proxy.models.{wire_model}")
-    model_data = {**registry.proxy.get("models", {}).get(wire_model, {}), **model_data}
     if not model_data:
-        raise ValueError(f"model {cfg.model!r} needs a models.yaml or proxy.yaml definition")
+        raise ValueError(f"model {cfg.model!r} needs a models.yaml definition")
     model = ModelSpec(name=wire_model, **model_data)
-    for key in ("tls", "reports_cache"):
+    for key in ("tls",):
         if type(getattr(model, key)) is not bool:
             raise ValueError(f"model.{key} must be a boolean")
     for key in ("key_env", "vertex_model"):
@@ -321,17 +326,21 @@ def resolve(cfg: RunConfig, registries: Registries | None = None) -> ResolvedPla
         }
     for harness in cfg.harnesses:
         local = per_harness.get(harness, {})
-        _unknown(local, HARNESS_FIELDS, f"overrides.harnesses.{harness}")
+        allowed = HARNESS_COMMON_FIELDS | HARNESS_SPECIFIC_FIELDS[harness]
+        _unknown(local, allowed, f"overrides.harnesses.{harness}")
+        _unknown(shared, allowed, f"overrides.harness (unsupported by {harness}; use overrides.harnesses)")
         local = harness_assets(local, base)
-        _unknown(registry.harnesses.get(harness, {}), HARNESS_FIELDS, f"harnesses.{harness}")
+        _unknown(registry.harnesses.get(harness, {}), allowed, f"harnesses.{harness}")
         registered = harness_assets(registry.harnesses.get(harness, {}), source_base("harnesses.yaml"))
         settings = {**catalog["harnesses"][harness], **registered, **shared, **local}
-        _unknown(settings, HARNESS_FIELDS, f"harness.{harness}")
+        _unknown(settings, allowed, f"harness.{harness}")
+        settings["execution_integrations"] = []
+        settings["model_middleware"] = []
+        if harness == "claude-code":
+            settings["launch_profile"] = "isolated-hooks"
         if not re.fullmatch(r"\d+\.\d+\.\d+", str(settings.get("version", ""))):
             raise ValueError(f"harness.{harness}.version requires an exact release")
-        if harness == "claude-code" and settings.get("launch_profile") not in ("bare", "isolated-hooks"):
-            raise ValueError("harness.claude-code.launch_profile must be bare or isolated-hooks")
-        for key in ("max_tool_repetitions", "max_tokens"):
+        for key in ("max_tool_repetitions",):
             if key in settings:
                 _positive(settings[key], f"harness.{harness}.{key}")
         if "max_budget_usd" in settings and (type(settings["max_budget_usd"]) not in (int, float) or not 0 < settings["max_budget_usd"] < float("inf")):
@@ -343,13 +352,6 @@ def resolve(cfg: RunConfig, registries: Registries | None = None) -> ResolvedPla
         for category in CATEGORIES:
             selection = _selection(cfg, category, registered, shared, local)
             if selection is None:
-                continue
-            if category != "extensions" and not _catalog_selection(selection):
-                if not isinstance(selection, list):
-                    raise ValueError(f"{category} must be a list")
-                if category == "skills":
-                    _inline_skills(selection, f"harness.{harness}.skills")
-                settings[category] = deepcopy(selection)
                 continue
             if category in ("skills", "extensions"):
                 selection = asset_paths(selection, base)
@@ -366,10 +368,6 @@ def resolve(cfg: RunConfig, registries: Registries | None = None) -> ResolvedPla
                         entry["options"]["binary_path"] = absolute(entry["options"]["binary_path"], selected_origin)
             settings[category] = selected
             if category == "extensions":
-                if settings.get("execution_integrations") or settings.get("model_middleware"):
-                    raise ValueError(f"extensions: ambiguous legacy selection for {harness}")
-                settings["execution_integrations"] = []
-                settings["model_middleware"] = []
                 for extension in selected:
                     if extension["name"] == "caveman":
                         mode = extension["options"].get("mode", "record")
@@ -382,8 +380,6 @@ def resolve(cfg: RunConfig, registries: Registries | None = None) -> ResolvedPla
                         raise ValueError(f"unregistered extension {extension['name']}")
                     if extension["version"] != "0.48.0" or settings["version"] != catalog["harnesses"][harness]["version"]:
                         raise ValueError(f"extensions.rtk: unsupported version pair for {harness}")
-                    if harness == "claude-code" and settings.get("launch_profile") != "isolated-hooks":
-                        raise ValueError("extensions.rtk: claude-code with launch_profile=bare cannot load required hooks")
                     settings["execution_integrations"].append({
                         "name": "rtk", "version": extension["version"],
                         "mode": "shell-wrapper" if harness == "goose" else "native",
@@ -395,7 +391,7 @@ def resolve(cfg: RunConfig, registries: Registries | None = None) -> ResolvedPla
                 settings[category] = [{**entry.get("config", {}), **entry["options"], "name": entry["name"]} for entry in selected]
         resolved[harness] = settings
     run_benchmark = cfg.benchmark if isinstance(cfg.benchmark, dict) else {}
-    for key in ("path", "cache_dir", "scarfbench_dir", "praxis_ai_repo", "task_repo_cache_dir", "benchmark_cache_dir"):
+    for key in ("path", "cache_dir", "task_repo_cache_dir", "benchmark_cache_dir"):
         if benchmark.get(key):
             origin = base if key in overrides.get("benchmark", {}) or key in run_benchmark else source_base("benchmarks.yaml")
             benchmark[key] = absolute(benchmark[key], origin)
@@ -418,28 +414,22 @@ def resolve(cfg: RunConfig, registries: Registries | None = None) -> ResolvedPla
     cache = benchmark.get("cache_dir", registry.machine.get("cache_dir", str(Path(output) / ".cache")))
     if "cache_dir" not in benchmark and "cache_dir" in registry.machine:
         cache = absolute(cache, source_base("machine.yaml"))
-    _unknown(registry.backend_config(cfg.proxy), {"binary"}, f"proxy.backends.{cfg.proxy}")
-    proxy_config = {**registry.backend_config(cfg.proxy), **overrides.get("proxy", {})}
-    binary = proxy_config.get("binary")
-    if binary and ("/" in binary or binary.startswith("~")):
-        origin = base if "binary" in overrides.get("proxy", {}) else source_base("proxy.yaml")
-        proxy_config["binary"] = absolute(binary, origin)
     requested = asdict(cfg)
     if requested["interactive_run"] is None:
         requested.pop("interactive_run")
     document = {
         "requested_config": requested_config(requested),
-        "protocol_version": 1, "catalog_revision": catalog["revision"],
+        "protocol_version": PROTOCOL_VERSION, "catalog_revision": catalog["revision"],
         "run_id": cfg.run_id, "benchmark": name, "benchmark_config": benchmark,
         "workflow": workflow,
-        "execution_backend": backend, "environment": environment,
+        "execution_backend": "harbor", "environment": environment,
         "model_alias": cfg.model, "model": asdict(model), "harnesses": resolved,
-        "proxy": cfg.proxy, "proxy_config": proxy_config,
+        "proxy": "praxis",
         "max_workers": workers, "attempts": benchmark.get("attempts", 1),
         "subset": cfg.subset, "limit": cfg.limit, "output_dir": output,
         "cache_dir": str(Path(cache).expanduser().resolve()),
         "offline": cfg.execution.get("offline", benchmark.get("offline", False)),
-        "cache_policy": cfg.execution.get("cache_policy", "provider-managed; no reset"),
+        "cache_policy": "provider-managed; no reset",
         "sources": registry.sources + ([cfg.source_file] if cfg.source_file else []),
         "pending_checks": sorted(set(pending + ["task manifest", "container runtime and image prerequisites"])),
     }

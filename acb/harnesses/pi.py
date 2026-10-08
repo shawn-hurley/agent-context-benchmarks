@@ -1,6 +1,6 @@
 """Pi (pi.dev) harness adapter.
 
-Runs pi headless (`pi --mode json --no-session`) via `podman exec` inside the
+Runs pi headless (`pi --mode json --no-session`) through Harbor inside the
 SWE-bench eval container -- same container-mode shape as goose, claude-code,
 and opencode.
 
@@ -59,6 +59,8 @@ Observed event shapes verified against a real run (pi 0.84.3, --mode json):
 """
 
 from __future__ import annotations
+
+from acb.transport import EnvironmentTransport
 
 import json
 import logging
@@ -286,7 +288,7 @@ class Pi(HarnessAdapter):
         """Pi supports both anthropic and openai providers natively."""
         return model_api
 
-    def setup_container(self, container: str, arch: str, cache_dir: Path) -> None:
+    def setup_container(self, container: EnvironmentTransport, arch: str, cache_dir: Path) -> None:
         """Download (once, cached) the pi release and copy into `container`.
 
         Copies the entire `pi/` directory (binary + node_modules) to
@@ -326,11 +328,11 @@ class Pi(HarnessAdapter):
             key_var: api_key,
         }
 
-    def run_container(self, prompt: str, container: str, model: str,
+    def run_container(self, prompt: str, container: EnvironmentTransport, model: str,
                        env: dict[str, str], out_dir: Path,
                        instance_id: str,
                        binary: str = "/usr/local/bin/pi") -> HarnessResult:
-        """Exec pi inside a running container via `podman exec`.
+        """Exec pi inside a running container through Harbor.
 
         Writes models.json into PI_CODING_AGENT_DIR inside the container
         before invoking pi so the provider baseUrl and model are registered.
@@ -463,16 +465,15 @@ class Pi(HarnessAdapter):
         exec_cmd = environment_command(
             container, ["bash", "-c", f"{preamble}exec {wrapped}"], env, workdir,
         )
-        # out_dir is now the per-instance directory (instances/{test_id}/)
+        # out_dir is the trial artifact directory
         transcript_path = Path(out_dir) / "transcript.jsonl"
-        label = f"[pi:{instance_id}]"
         timeout = self.config.get("timeout", 1800)
-        return execute(exec_cmd, env=None, cwd=None, transcript_path=transcript_path,
-                       label=label, timeout=timeout, describe_event=_describe_event,
+        return execute(exec_cmd, transcript_path=transcript_path,
+                       timeout=timeout, describe_event=_describe_event,
                        tracker=getattr(self, '_tracker', None),
                        tracker_key=getattr(self, '_tracker_key', None))
 
-    def _write_mcp_config(self, container: str, servers: list[dict]) -> None:
+    def _write_mcp_config(self, container: EnvironmentTransport, servers: list[dict]) -> None:
         """Reject MCP selections until an executable Pi extension is available.
 
         The pinned Pi release has no native MCP client. Writing a JSON file

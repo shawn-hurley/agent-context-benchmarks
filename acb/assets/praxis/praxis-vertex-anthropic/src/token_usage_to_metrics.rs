@@ -48,8 +48,6 @@ pub enum ContentType {
 #[derive(Clone, Debug)]
 pub struct RequestClassification {
     pub content_type: ContentType,
-    pub tool_name: Option<String>,
-    pub tool_detail: Option<String>,
     pub tools: Vec<ToolIdentity>,
     pub tool_count: Option<u32>,
     pub message_count: Option<u32>,
@@ -99,10 +97,6 @@ pub struct BenchmarkMetric {
     // Content classification fields
     #[serde(skip_serializing_if = "Option::is_none")]
     pub content_type: Option<ContentType>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub tool_name: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub tool_detail: Option<String>,
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub tools: Vec<ToolIdentity>,
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
@@ -251,8 +245,11 @@ impl HttpFilter for TokenUsageToMetricsFilter {
     ) -> Result<FilterAction, FilterError> {
         // Only write the metric once the entire response body has streamed and
         // all metadata (token counts, cache info) has been populated by upstream filters.
-        let responses_complete = ctx.extensions.get::<MetricsData>()
-            .map(|data| data.responses_complete).unwrap_or(false);
+        let responses_complete = ctx
+            .extensions
+            .get::<MetricsData>()
+            .map(|data| data.responses_complete)
+            .unwrap_or(false);
         if !end_of_stream && !responses_complete {
             return Ok(FilterAction::Continue);
         }
@@ -290,26 +287,19 @@ impl HttpFilter for TokenUsageToMetricsFilter {
             .get::<ResponseToolCalls>()
             .map(|calls| calls.0.clone())
             .unwrap_or_default();
-        let (content_type, tool_name, tool_detail, request_tools, tool_count, message_count) =
+        let (content_type, request_tools, tool_count, message_count) =
             if let Some(classification) = ctx.extensions.get::<RequestClassification>() {
                 (
                     Some(classification.content_type.clone()),
-                    classification.tool_name.clone(),
-                    classification.tool_detail.clone(),
                     classification.tools.clone(),
                     classification.tool_count,
                     classification.message_count,
                 )
             } else {
-                (None, None, None, Vec::new(), None, None)
+                (None, Vec::new(), None, None)
             };
         let (content_type, tools, tool_results) =
             Self::merge_tool_calls(content_type, request_tools, response_tools);
-        let response_first = tools.first();
-        let tool_name = response_first.map(|tool| tool.name.clone()).or(tool_name);
-        let tool_detail = response_first
-            .and_then(|tool| tool.detail.clone())
-            .or(tool_detail);
         let tool_count = if !tools.is_empty() {
             Some(tools.len() as u32)
         } else {
@@ -331,8 +321,6 @@ impl HttpFilter for TokenUsageToMetricsFilter {
             request_body_bytes,
             response_body_bytes,
             content_type,
-            tool_name,
-            tool_detail,
             tools,
             tool_results,
             tool_count,

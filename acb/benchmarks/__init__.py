@@ -1,14 +1,12 @@
 from __future__ import annotations
 
-from acb.benchmarks.base import Benchmark, Instance, Prediction
+from acb.benchmarks.base import Benchmark, Instance
 from acb.benchmarks.scarfbench import ScarfBench
-from acb.benchmarks.stubs import LiveCodeBench
 from acb.benchmarks.swebench import SWEBench
 
 _BENCHMARKS: dict[str, type[Benchmark]] = {
     "swebench": SWEBench,
     "swebench-lite": SWEBench,  # Same adapter, uses Lite dataset from benchmarks.yaml
-    "livecodebench": LiveCodeBench,
     "scarfbench": ScarfBench,
 }
 
@@ -19,4 +17,4 @@ def make_benchmark(name: str, config: dict | None = None) -> Benchmark:
     return _BENCHMARKS[name](config=config)
 
 
-__all__ = ["Benchmark", "Instance", "Prediction", "make_benchmark"]
+__all__ = ["Benchmark", "Instance", "make_benchmark"]

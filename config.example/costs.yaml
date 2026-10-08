@@ -1,7 +1,7 @@
 # Token pricing, USD per 1,000,000 tokens. Keyed by model id -- matches
-# config/proxy.yaml's `models:` keys / the `model` field in usage.jsonl rows.
+# the provider IDs in models.yaml / the `model` field in usage.jsonl rows.
 #
-# Deliberately separate from proxy.yaml: proxy.yaml is about how the proxy
+# Deliberately separate from models.yaml: model definitions describe how Praxis
 # *connects* to a backend (endpoint, api, credentials); this is a pure
 # reporting concern, applied whenever a report is generated (acb/costs.py),
 # not baked into usage.jsonl at record time -- so updating a price (or

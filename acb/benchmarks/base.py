@@ -22,18 +22,6 @@ class Instance:
     extra: dict[str, Any] = field(default_factory=dict)
 
 
-@dataclass
-class Prediction:
-    """A harness's answer for one instance, in the benchmark's expected shape."""
-
-    instance_id: str
-    model_name_or_path: str
-    # SWE-bench-style patch; other benchmarks may use `output` instead.
-    model_patch: str | None = None
-    output: str | None = None
-    error: str | None = None
-
-
 class Benchmark(ABC):
     name: str = "base"
 

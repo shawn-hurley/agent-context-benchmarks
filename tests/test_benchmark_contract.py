@@ -43,7 +43,7 @@ def test_source_changes_modify_input_identity(tmp_path):
     assert benchmark_contract(after)['inputs'] != contract['inputs']
 
 
-def test_legacy_report_recovers_contract_without_reimport(tmp_path):
+def test_missing_saved_contract_does_not_read_external_tasks(tmp_path):
     before, after = snapshots(tmp_path)
     a = run(tmp_path / 'a', {'one': 0}, tokens=100)
     b = run(tmp_path / 'b', {'one': 1}, tokens=120)
@@ -56,8 +56,8 @@ def test_legacy_report_recovers_contract_without_reimport(tmp_path):
         (path / 'resolved.json').write_text(json.dumps(plan))
     saved = [(path / 'report.json').read_bytes() for path in (a,b)]
     result = compare(a,b)
-    assert result['quality'] == 'better'
-    assert result['matched_tokens']['percent'] == 20
+    assert result['quality'] is None
+    assert result['matched_tokens']['percent'] is None
     assert saved == [(path / 'report.json').read_bytes() for path in (a,b)]
 
 

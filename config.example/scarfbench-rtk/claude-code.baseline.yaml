@@ -1,21 +1,19 @@
 schema_version: 2
 config_dir: ..
-# Baseline paired with the RTK config; limit selects the same migrations.
 run_id: scarfbench-baseline-claude-code
 benchmark: scarfbench
 harness: claude-code
 model: google-vertex-anthropic/claude-haiku-4-5
-proxy: praxis
 limit: 1
-max_workers: 1
 output_dir: ../../runs/scarfbench-rtk
 overrides:
   benchmark:
     scarfbench_image: localhost/acb-scarfbench-rtk:1
   harness:
-    version: "2.1.241"
+    version: 2.1.241
     workdir: /work
     conda_env: null
     timeout: 1800
-    launch_profile: isolated-hooks
-    execution_integrations: []
+    extensions: []
+execution:
+  max_workers: 1

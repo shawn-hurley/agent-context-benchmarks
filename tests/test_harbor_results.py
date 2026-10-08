@@ -188,7 +188,7 @@ def test_failed_step_cannot_be_hidden_by_aggregate_reward(tmp_path):
               'verifier_result': {'rewards': {'reward': 1}},
               'step_results': [{'step_name': 'first',
                                 'exception_info': {'exception_type': 'AgentTimeoutError'}}]}
-    artifacts = tmp_path / 'harbor/trial/agent/acb'
+    artifacts = tmp_path / '.harbor/trial/agent/acb'
     artifacts.mkdir(parents=True)
     (artifacts / 'measurement.json').write_text('{"complete": true}')
     import_results(plan, tmp_path, [result])
@@ -211,7 +211,7 @@ def test_step_usage_follows_execution_order_and_missing_steps_are_incomplete(tmp
     result={'id':'trial-id','task_name':'task','trial_name':'trial','config':{'agent':{'kwargs':{'harness':'pi'}}},
             'verifier_result':{'rewards':{'reward':1}},'step_results':[{'step_name':'z-first'},{'step_name':'a-second'}]}
     for step in ('z-first',) if missing_second else ('z-first','a-second'):
-        folder=tmp_path/'harbor/trial/steps'/step/'agent/acb';folder.mkdir(parents=True)
+        folder=tmp_path/'.harbor/trial/steps'/step/'agent/acb';folder.mkdir(parents=True)
         (folder/'measurement.json').write_text('{"complete":true}')
         row={'run_id':'test','benchmark':'fixture','harness':'pi','model':'local','instance_id':'trial-id',
              'turn_index':0,'request_id':step,'input_tokens':10,'output_tokens':2}

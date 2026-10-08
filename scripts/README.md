@@ -58,7 +58,10 @@ For persistent ScarfBench Maven downloads and its model-free container check, se
 `uv run python -m scripts.reset_config` installs
 [`config.example/feature-tests`](../config.example/feature-tests/README.md) into
 `config/`, archiving the old tree under `.config/backups/`. The local copy retains
-model settings and available native-benchmark/rgctl prerequisites. The tracked
+current model settings, the selected engine, costs and a valid external
+ScarfBench prerequisite directory. Supply RH task bundles and rgctl binaries
+through explicit current settings; reset does not search historical runs or
+import retired proxy/phase6 registries. The tracked
 template contains no credentials or compiled binaries.
 
 `uv run pytest tests/test_feature_configs.py -q` validates every matrix config,
@@ -87,3 +90,28 @@ native Cart controls; `--scarf-benchmark` explicitly uses local assets instead.
 `check.json` retains grades, coverage, tool tracking, timings, and offline bundle
 link checks. Cold-install validation needs a separate empty engine store; these
 checks never prune existing experiment caches.
+
+## Canonical Praxis and workflow sources
+
+Praxis build sources are under `acb/assets/praxis`:
+
+```sh
+cargo test --locked --offline --manifest-path acb/assets/praxis/praxis-vertex-anthropic/Cargo.toml
+podman build -t acb-praxis-ai:latest -f acb/assets/praxis/Containerfile acb/assets/praxis
+```
+
+Shared workflow helpers are under `acb/workflows/_shared`, including the pinned
+`rgctl/v0.4.18` skill bundle and lockfile. Bundled workflows declare destination
+paths; resolution maps them to canonical sources, hashes their contents and
+export copies a complete build context. Custom workflows keep their own contained
+asset paths. `scripts/check_package.py` checks installed resources and materializes
+all bundled workflows outside the checkout. No generated duplicate source needs
+a drift check; snapshot validation checks canonical source changes.
+
+The metrics filter accepts and stores `max_body_bytes` for configuration
+compatibility; that setting does not enforce a collection limit. Vertex and
+request-classifier body limits remain separate operational controls.
+
+The [Harbor API inventory](../docs/harbor-api-contracts.md) maps private provider
+and job dependencies to focused upgrade checks. The
+[runtime cleanup record](../docs/runtime-cleanup.md) tracks this removal batch.

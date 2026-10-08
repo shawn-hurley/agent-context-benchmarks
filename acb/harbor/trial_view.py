@@ -5,7 +5,7 @@ import os
 from pathlib import Path
 import shutil
 
-from acb.harbor.paths import job_dir
+from acb.harbor.paths import job_dir, trial_directory
 
 
 def _link(destination: Path, source: Path) -> None:
@@ -16,16 +16,13 @@ def _link(destination: Path, source: Path) -> None:
 def expose_trial(run_dir: Path, harness: str, trial_id: str, trial_name: str) -> Path:
     """Create paths before agent execution so `tail -F` can follow live files."""
     run_dir = Path(run_dir)
-    if Path(trial_name).name != trial_name or not trial_name:
+    if Path(trial_name).name != trial_name or not trial_name or trial_name in (".", ".."):
         raise ValueError("invalid Harbor trial name")
     if Path(harness).name != harness or not harness:
         raise ValueError("invalid harness name")
     trial = job_dir(run_dir) / trial_name
-    view = run_dir / harness / trial_id
+    view = trial_directory(run_dir, harness, trial_id)
     view.mkdir(parents=True, exist_ok=True)
-    aliases = run_dir / harness / "instances"
-    aliases.mkdir(exist_ok=True)
-    _link(aliases / trial_id, view)
     _link(view / "job.log", run_dir / "job.log")
     _link(view / "trial.log", trial / "trial.log")
     for name in ("transcript.jsonl", "praxis.log"):
@@ -63,7 +60,7 @@ def archive_job_log(run_dir: Path, harnesses: list[str]) -> None:
         if not directory.is_dir():
             continue
         for trial in directory.iterdir():
-            if trial.name == "instances" or not trial.is_dir():
+            if not (trial / "evaluation.json").is_file() or not trial.is_dir():
                 continue
             destination = trial / "job.log"
             if destination.is_symlink():

@@ -83,7 +83,7 @@ or timeout; the run ID and concurrent trial count require values.
 | Timeout (seconds) | Positive timeout applied across harnesses; empty uses configured defaults |
 | Concurrent trials (global) | Positive maximum number of concurrent trials across the entire run |
 
-Models must already be defined in `models.yaml` or `proxy.yaml`; the editor does
+Models must already be defined in `models.yaml`; the editor does
 not create provider definitions. The [Quick Start](quick-start.md) explains that
 setup; the [configuration reference](configuration.md) covers precedence and
 paths. For a new run, registries are discovered from the current directory and

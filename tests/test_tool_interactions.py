@@ -92,7 +92,7 @@ def test_result_without_matching_call_remains_visible_with_next_call():
     assert sum(item["tokens"] for item in interactions) == 80
 
 
-def test_shell_breakdown_reads_new_tool_identities_and_legacy_shape():
+def test_shell_breakdown_ignores_retired_scalar_shape():
     modern_call = _record("request-1", "tool_call", 10, "call-1", name="Bash")
     modern_call["tools"][0]["detail"] = "rg"
     modern_result = _record("request-2", "tool_result", 20, "call-1", name="Bash")
@@ -104,19 +104,18 @@ def test_shell_breakdown_reads_new_tool_identities_and_legacy_shape():
 
     assert commands["rg"]["calls"] == commands["rg"]["results"] == 1
     assert commands["rg"]["total_tokens"] == 30
-    assert commands["git"]["calls"] == 1
-    assert commands["git"]["total_tokens"] == 5
+    assert "git" not in commands
 
 
 def test_shell_command_breakdown_groups_bash_calls_by_command():
     from acb.report_metrics import shell_command_breakdown
 
     rows = [
-        {"content_type": "tool_call", "tool_name": "Bash", "tool_detail": "git",
+        {"content_type": "tool_call", "tools": [{"name": 'Bash', "detail": 'git'}],
          "input_tokens": 10, "output_tokens": 0, "turn_index": 0},
-        {"content_type": "tool_result", "tool_name": "bash", "tool_detail": "git",
+        {"content_type": "tool_result", "tools": [{"name": 'bash', "detail": 'git'}],
          "input_tokens": 20, "output_tokens": 0, "turn_index": 1},
-        {"content_type": "tool_call", "tool_name": "Read", "tool_detail": None,
+        {"content_type": "tool_call", "tools": [{"name": "Read"}],
          "input_tokens": 5, "output_tokens": 0, "turn_index": 2},
     ]
 

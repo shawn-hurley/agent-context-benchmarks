@@ -48,3 +48,6 @@ Keep repository-wide usage/reference docs here, with README as the root entry
 point. Example-specific instructions stay with `config.example/`; maintenance
 commands stay with `scripts/`; packaged prompts and workflow skills stay with
 their runtime assets.
+
+- [Runtime cleanup decisions and acceptance](runtime-cleanup.md)
+- [Pinned Harbor API inventory](harbor-api-contracts.md)

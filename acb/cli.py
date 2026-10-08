@@ -3,7 +3,7 @@
     acb run   # interactive run configuration
     acb run   --config config/run.requests-1142.yaml
     acb run   --benchmark swebench --harness goose --model mlx-community/Qwen3.8-27B-4bit \
-              --run-id demo --limit 1 --proxy praxis
+              --run-id demo --limit 1
     acb report runs/<run_id>                     # show saved results
     acb report runs/<run_id> --html              # also write runs/<run_id>/report.html
     acb report runs/<a> runs/<b> --html          # combined multi-run HTML comparison
@@ -22,7 +22,7 @@ import yaml
 
 from acb.config import RunConfig, Registries
 
-RUN_FLAGS = ("benchmark", "harness", "model", "run_id", "limit", "max_workers", "proxy")
+RUN_FLAGS = ("benchmark", "harness", "model", "run_id", "limit", "max_workers")
 CONFIG_DIR_HELP = ("registry directory, relative to the current directory; overrides YAML/discovery "
                    "(default: nearest .acb/ or config/ beside the run YAML, or current directory)")
 
@@ -50,8 +50,8 @@ def _cmd_run(args):
             return
         cfg = RunConfig(
             run_id=args.run_id, benchmark=args.benchmark, harness=args.harness,
-            model=args.model, proxy=args.proxy or "praxis", limit=args.limit,
-            max_workers=args.max_workers if args.max_workers is not None else 4,
+            model=args.model, limit=args.limit,
+            execution={"max_workers": args.max_workers if args.max_workers is not None else 4},
         )
     if args.config_dir:
         cfg.config_dir = str(Path(args.config_dir).expanduser().absolute())
@@ -94,8 +94,6 @@ def _cmd_list(args):
     registries = Registries.load(Path(args.config_dir).expanduser() if args.config_dir else None)
     category = "mcp_servers" if args.category == "mcp" else args.category
     entries = {**defaults().get(category, {}), **getattr(registries, category)}
-    if category == "models":
-        entries = {**registries.proxy.get("models", {}), **entries}
     print(json.dumps(entries, indent=2))
     if not entries:
         hint = ("Add a model alias to models.yaml with its model ID, API and endpoint."
@@ -284,7 +282,6 @@ for the self-contained setup task and container requirements.""")
     r.add_argument("--harness", help="one harness identity (see acb list harnesses)")
     r.add_argument("--model", help="configured model alias (see acb list models); provider ID belongs in models.yaml")
     r.add_argument("--run-id", help="run directory name under output_dir (default parent: runs/); collisions get a suffix")
-    r.add_argument("--proxy", choices=("praxis",), help="measurement proxy (default: praxis)")
     r.add_argument("--limit", type=int, help="positive task limit per harness; omitted means all selected tasks")
     r.add_argument("--max-workers", type=int, help="positive global limit on concurrent trials across harnesses (default: 4)")
     r.add_argument("--verbose", "-v", action="store_true",

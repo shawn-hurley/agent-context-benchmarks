@@ -1,13 +1,15 @@
 """Controller-side lifecycle shared by execution integrations and model middleware."""
 from __future__ import annotations
 
+from acb.transport import EnvironmentTransport
+
 from dataclasses import dataclass, field
 from pathlib import Path
 
 
 @dataclass(frozen=True)
 class IntegrationContext:
-    container: str
+    container: EnvironmentTransport
     arch: str
     harness: str
     harness_version: str

@@ -115,7 +115,8 @@ def import_results(plan: dict, output: Path, results: list[dict], *, control=Non
     for harness in harnesses:
         for task in plan["manifest"].get("tasks", []):
             for slot in range(counts[harness, task["id"]], plan.get("attempts", 1)):
-                identity = f"missing-{harness}-{task['id']}-{slot + 1}"
+                from uuid import NAMESPACE_URL, uuid5
+                identity = "missing-" + str(uuid5(NAMESPACE_URL, json.dumps([harness, task["id"], slot + 1])))
                 missing.append({"harness": harness, "task_id": task["id"], "slot": slot + 1})
                 results.append({"id": identity, "task_name": task["id"], "trial_name": identity,
                                 "config": {"agent": {"kwargs": {"harness": harness}}},
@@ -129,7 +130,8 @@ def import_results(plan: dict, output: Path, results: list[dict], *, control=Non
         if harness not in by_harness:
             by_harness[harness], evaluations[harness] = {}, []
         identity = str(result["id"])
-        destination = output / harness / "instances" / identity
+        from acb.harbor.paths import trial_directory
+        destination = trial_directory(output, harness, identity)
         trial_dir = job_dir(output) / result["trial_name"]
         view = None
         if trial_dir.is_dir() and not result.get("missing_trial"):
@@ -210,6 +212,7 @@ def import_results(plan: dict, output: Path, results: list[dict], *, control=Non
         record = evaluation(result, config.get("reward_metric"), config.get("success_value"))
         if result.get("missing_trial"):
             record.update(trial_id=None, trial_name=None, error_phase="scheduling_or_execution", missing_trial=True)
+        record["artifact_id"] = identity
         record["dataset"] = plan["manifest"]["source"]
         record["task_id"] = result["task_name"]
         measurement = destination / "measurement.json"
@@ -223,9 +226,9 @@ def import_results(plan: dict, output: Path, results: list[dict], *, control=Non
     for harness, resolved in by_harness.items():
         directory = output / harness
         directory.mkdir(parents=True, exist_ok=True)
-        aggregate_per_instance_files(directory)
+        aggregate_per_instance_files(directory, list(resolved))
         cfg = RunConfig(run_id=plan["run_id"], benchmark=plan["benchmark"], harness=harness,
-                        model=plan["model"]["name"], proxy=plan["proxy"])
+                        model=plan["model"]["name"])
         report_path = build_report(directory / "usage.jsonl", resolved, directory, cfg)
         report = json.loads(report_path.read_text())
         records = evaluations[harness]

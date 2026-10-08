@@ -35,7 +35,7 @@ def test_new_run_save_resolves_screen_values(configured):
     saved = yaml.safe_load(path.read_text())
     assert saved["run_id"] == document["run_id"] == "interactive-smoke"
     assert saved["execution"]["timeout"] == 90
-    assert saved["max_workers"] == document["max_workers"] == 2
+    assert saved["execution"]["max_workers"] == document["max_workers"] == 2
     assert set(document["harnesses"]) == {"goose", "pi"}
     assert document["subset"] == ["task-1", "task-2"]
     assert document["requested_config"]["source_file"] == str(path)

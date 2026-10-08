@@ -1,26 +1,23 @@
 schema_version: 2
 config_dir: ..
-# Discover all apps for the ScarfBench source/target pair; limit selects the first N.
 run_id: scarfbench-rtk-opencode
 benchmark: scarfbench
 harness: opencode
 model: google-vertex-anthropic/claude-haiku-4-5
-proxy: praxis
 limit: 1
-max_workers: 1
 output_dir: ../../runs/scarfbench-rtk
 overrides:
   benchmark:
     scarfbench_image: localhost/acb-scarfbench-rtk:1
   harness:
-    version: "1.18.22"
+    version: 1.18.22
     workdir: /work
     conda_env: null
     timeout: 1800
-    execution_integrations:
-      - name: rtk
-        version: "0.48.0"
-        mode: native
-        experimental: true
+    extensions:
+    - name: rtk
+      options:
         binary_path: /absolute/path/to/rtk-0.48.0-linux-arm64
-        sha256: "<SHA256-of-the-Linux-binary>"
+        sha256: <SHA256-of-the-Linux-binary>
+execution:
+  max_workers: 1

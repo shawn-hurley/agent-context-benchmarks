@@ -231,11 +231,10 @@ files may appear after the directory is created. The transcript stream is
 JSONL; `transcript.log` is an alias for `transcript.jsonl`. Praxis diagnostics
 are polled during model execution, then replaced with the complete sidecar
 log when the service stops. After execution, ACB saves trial logs and evidence as
-regular files. The writer also creates `<harness>/instances/<trial-id>` aliases,
-but current report rendering reads the visible trial directories directly. The harness report is `<harness>/report.json`.
+regular files. Import, missing-trial placeholders and report aggregation all use
+these direct trial directories. The harness report is `<harness>/report.json`.
 
-Harbor creates `<run>/.harbor/` as its native job directory for new runs.
-Older runs retain `<run>/harbor/`. The native directory's top-level
+Harbor creates `<run>/.harbor/` as its native job directory. The native directory's top-level
 `config.json` declares the native job and `lock.json` records resolved job
 inputs. Each `<task>__<attempt>/` is one trial and has its own config and
 resolved lock. Harbor also creates `agent/` for agent logs, `verifier/` for
