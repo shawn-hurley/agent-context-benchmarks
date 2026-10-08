@@ -1,7 +1,7 @@
 # Shared extension configuration
 
 > Historical design/checkpoint record. For current task status and accepted scope,
-> use [Harbor cleanup](harbor-cleanup.md). Later decisions there supersede
+> use [Harbor cleanup](../harbor-cleanup.md). Later decisions there supersede
 > open-task lists and compatibility requirements below.
 
 > September 17 revised scope: Phase 4 now covers shared RTK/Caveman preparation
@@ -23,7 +23,7 @@ to expose adapter modes, binary paths, hashes, and launch profiles in each run
 configuration. It does not change compression behavior or promise token savings.
 
 Companions: [configuration UX](configuration-ux-plan.md) and
-[combined Harbor architecture/delivery](../HARBOR_PLAN.md). All four harnesses
+[combined Harbor architecture/delivery](harbor-migration-tasks.md). All four harnesses
 are required, with Docker and Podman container-only execution. The host may run
 the resolver, preparation tooling, and controller, but measured agents, Praxis,
 MCP services, and extension runtimes execute in containers. Local model endpoints

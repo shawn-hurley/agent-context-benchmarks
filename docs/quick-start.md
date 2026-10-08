@@ -251,19 +251,7 @@ A fresh clone and empty ACB cache do not imply an empty container-engine store.
 Use a disposable runner or separate engine for cold-install acceptance; never
 delete another experiment's images or caches to simulate one.
 
-See [the recorded validation results and limits](quick-start-validation.md).
+See [the recorded validation results and limits](validation/quick-start-validation.md).
 
-## Publishing these changes (maintainer)
-
-Push the ACB commits to the public repository before asking others to follow
-the GitHub clone instructions. To update the existing benchmark PR from the
-local corrected checkout:
-
-```sh
-git -C ../scarfbench-benchmark push \
-  https://github.com/shawn-hurley/scarf-benchmark.git \
-  d0a6a3d3bd7c0e8a80bc6474737475a593ba4418:refs/heads/fix/realworld-shared-behavior
-```
-
-This is a regular fast-forward push. Verify the public branch contains the
-pinned commit before claiming the public ScarfBench quick start is validated.
+For maintainer acceptance checks, see the
+[maintenance guide](../scripts/README.md#fresh-clone-quick-start-check).

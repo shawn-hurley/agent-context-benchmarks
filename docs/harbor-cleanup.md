@@ -1,6 +1,6 @@
 # Harbor integration cleanup
 
-Updated October 6, 2026. **This is the authoritative task/status record.**
+Updated October 7, 2026. **This is the authoritative task/status record.**
 The migration phases are closed. Phase checklists, reviews and checkpoints record
 historical decisions and evidence; they do not define additional open gates.
 
@@ -11,7 +11,7 @@ historical decisions and evidence; they do not define additional open gates.
   C15 maintenance work.
 - **Deferred:** C13 (Harbor agent options schema). Effectiveness experiments are
   user-owned; full dependency locking and amd64 emulation repair remain deferred.
-  Docker Quick Start checks now have [scoped evidence](quick-start-validation.md);
+  Docker Quick Start checks now have [scoped evidence](validation/quick-start-validation.md);
   the full Docker harness/isolation matrix remains unverified. MCP selection/validation stays
   supported within its documented adapter limits; broader MCP work is deferred.
 - **Backward compatibility is not required.** This supersedes earlier preservation
@@ -19,8 +19,10 @@ historical decisions and evidence; they do not define additional open gates.
   boundaries. Current grade, measurement and execution semantics still apply.
   Historical artifacts may be retained as evidence without supporting their formats.
 
-Latest regression: **635 passed, four opt-in skips**, with two existing
-multiprocessing/fork deprecation warnings. C10/C16 verification is detailed below.
+Latest code regression (October 7): **705 passed, four opt-in skips**, with two
+existing multiprocessing/fork deprecation warnings. The subsequent documentation
+pass groups current guides, validation records and archived plans under the
+[documentation index](README.md). Historical C10/C16 verification is detailed below.
 
 ## Open work, owners and acceptance
 
@@ -130,10 +132,10 @@ horizontal overflow. Screenshots and browser results are retained under
 shows unavailable comparable grades/tokens. Relative documentation links and
 `git diff --check` passed.
 
-Artifact previews include links to their original local files. Those links require
-the original run directory; embedded evidence remains available when a bundle is
-copied elsewhere. Chart.js is loaded from a CDN; tables and patch previews work
-offline. These are explicit output limitations, not new cleanup gates.
+At that checkpoint, file links required the original run and charts required a
+CDN. Those limitations have since been resolved: current exported reports bundle
+Chart.js locally and copy linked evidence for offline sharing. See
+[report rendering](report-rendering.md) for current export behavior.
 
 ### Migration verification retained
 

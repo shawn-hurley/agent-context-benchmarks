@@ -1,5 +1,9 @@
 # Matched Phase 4 configurations
 
+These templates retain the inputs used for the historical Phase 4 pilots.
+For current feature coverage, including combined treatments, use the
+[feature configurations](../feature-tests/README.md).
+
 Copy this directory to an experiment directory. Edit `config/models.yaml` for
 your model and `config/machine.yaml` for the provider/cache. Paths are relative
 to their declaring YAML files; no machine-specific paths or binary checksums
@@ -20,7 +24,8 @@ selection, 300-second budget and one worker:
 | `context.yaml` | Caveman context compression and recovery |
 
 `skills: [caveman]` and `extensions: [caveman]` select different features.
-Combined RTK/context experiments belong to Phase 6.
+These pilot arms keep the treatments separate; current feature examples also
+include combined RTK/context and response-skill selections.
 
 ## Harbor input
 
@@ -85,5 +90,6 @@ acb run --config swebench.context.yaml
 
 Add `claude-code` when its binary can run in the selected task image. The local
 ARM host's emulated amd64 Claude failure remains an accepted upstream limitation.
-All four harnesses have native ARM functional evidence. Full dependency locking,
-and further treatment experiments remain deferred.
+All four harnesses have native ARM functional evidence. Full dependency locking
+remains deferred; effectiveness experiments are user-owned. See the
+[current status](../../docs/harbor-cleanup.md) for scope and evidence limits.

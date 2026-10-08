@@ -8,6 +8,9 @@ Supported benchmarks include ScarfBench, SWE-bench, SWE-bench Lite, RH SWE-bench
 and local Harbor tasks. Runs can vary models, skills, extensions, and staged
 workflows while retaining the application inputs and behavior tests for comparison.
 
+Use the [documentation index](docs/README.md) to find setup, configuration,
+workflow authoring, reporting and development guides.
+
 ## Quick Start
 
 You need Git, [uv](https://docs.astral.sh/uv/getting-started/installation/),
@@ -78,7 +81,7 @@ not require resetting existing configuration or initializing SWE-bench.
   `migiq`. See [workflow configuration and bundled skills](docs/workflows.md).
 - **Other harnesses and treatments:** See the
   [feature configuration matrix](config.example/feature-tests/README.md),
-  [RTK guide](RTK.md), and [execution operations](docs/harbor-operations.md).
+  [RTK guide](docs/rtk.md), and [execution operations](docs/harbor-operations.md).
 
 For [interactive configuration](docs/interactive-run.md), run `uv run acb run`
 in a terminal. The editor can save configuration without running, browse task
@@ -132,5 +135,5 @@ uv run python scripts/check_package.py dist/agent_context_benchmarks-0.1.0-py3-n
 
 The automated suite makes no paid model calls. Container acceptance checks are
 opt-in; the Quick Start documents a model-free check and a one-task real-model
-check. [Architecture](DESIGN.md) and [current limits](docs/harbor-cleanup.md)
+check. [Architecture](docs/architecture.md) and [current limits](docs/harbor-cleanup.md)
 describe the implementation and evidence boundaries.

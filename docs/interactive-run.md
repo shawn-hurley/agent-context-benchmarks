@@ -85,7 +85,8 @@ or timeout; the run ID and concurrent trial count require values.
 
 Models must already be defined in `models.yaml` or `proxy.yaml`; the editor does
 not create provider definitions. The [Quick Start](quick-start.md) explains that
-setup. For a new run, registries are discovered from the current directory and
+setup; the [configuration reference](configuration.md) covers precedence and
+paths. For a new run, registries are discovered from the current directory and
 its ancestors. A loaded run uses its YAML `config_dir` or discovery beside that
 file. Explicit CLI `--config-dir` overrides those choices.
 

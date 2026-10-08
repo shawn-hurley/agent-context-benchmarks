@@ -1,7 +1,7 @@
 # Phase 4 validation checkpoint
 
 > Historical design/checkpoint record. For current task status and accepted scope,
-> use [Harbor cleanup](harbor-cleanup.md). Later decisions there supersede
+> use [Harbor cleanup](../harbor-cleanup.md). Later decisions there supersede
 > open-task lists and compatibility requirements below.
 
 **Phase 4 complete — September 18, 2026, within the agreed scope and documented pilot deviations.**

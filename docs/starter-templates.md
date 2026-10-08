@@ -57,7 +57,8 @@ acb run --config experiment/run.yaml
 Model execution may incur charges. Inspect the actual result directory printed
 by the run. Output initially goes under `runs/quickstart/`, relative to the
 invocation directory. The starter's cache is `experiment/.cache/`, relative to
-its machine file. Both settings are editable.
+its machine file. Both settings are editable. See the
+[configuration reference](configuration.md) for registry, override and path rules.
 
 The task is included in installed packages. The source checkout's existing
 `config.example/quickstart` remains available and also includes a ScarfBench

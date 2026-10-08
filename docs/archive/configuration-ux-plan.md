@@ -1,7 +1,7 @@
 # Configuration user experience review
 
 > Historical design/checkpoint record. For current task status and accepted scope,
-> use [Harbor cleanup](harbor-cleanup.md). Later decisions there supersede
+> use [Harbor cleanup](../harbor-cleanup.md). Later decisions there supersede
 > open-task lists and compatibility requirements below.
 
 Status: Phase 1 complete as of September 17, 2026. Schema-v2 resolution,
@@ -12,7 +12,7 @@ and requested pause before phase 4. The later design proposals below remain
 subject to their assigned migration phases; MCP remains deferred.
 Companion: [shared extension plan](extension-configuration-plan.md).
 
-Execution and combined delivery: [Harbor integration plan](../HARBOR_PLAN.md).
+Execution and combined delivery: [retained migration tasks](harbor-migration-tasks.md).
 This UX is the frontend for Harbor jobs. Goose, Pi, OpenCode, and Claude Code
 are required, with container-only execution on Docker and Podman. The host runs
 configuration/preparation/controller tooling; agents, Praxis, MCP services, and

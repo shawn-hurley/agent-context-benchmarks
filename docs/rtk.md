@@ -1,19 +1,49 @@
 # RTK execution integrations
 
-RTK intercepts ordinary shell-tool commands and filters supported command output before it reaches the model. Enable it through `overrides.harness.execution_integrations`, independently of skills and MCP.
+RTK intercepts ordinary shell-tool commands and filters supported command output
+before it reaches the model. Select `extensions: [rtk]` in run YAML, independently
+of skills and MCP. Preparation obtains a verified Linux binary for the inspected
+task architecture and selects the adapter mode for each harness.
 
 | Harness | Harness release | Mode | Intercepted tool |
 | --- | --- | --- | --- |
-| Goose | Exact configured release; pilot tested `1.50.0` | `shell-wrapper` | Developer shell |
+| Goose | Packaged default `1.50.1`; earlier pilot tested `1.50.0` | `shell-wrapper` | Developer shell |
 | Pi | `0.84.3` | `native` | `bash` |
 | OpenCode | `1.18.22` | `native` | `bash` |
 | Claude Code | `2.1.241` | `native`, `isolated-hooks` profile | `Bash` |
 
-All modes currently require `experimental: true`. Native adapters require RTK `0.48.0`; other releases fail validation until their compatibility is tested.
+Native adapters require RTK `0.48.0`; other releases fail validation until their
+compatibility is tested. Named selection supplies the reviewed mode and
+`experimental: true` automatically. The packaged Claude Code profile is
+`isolated-hooks`, required for RTK.
 
-## Configure a paired pilot
+## Configure a named treatment
 
-Copy the [Goose](config.example/rtk-native/goose.rtk.yaml), [Pi](config.example/rtk-native/pi.rtk.yaml), [OpenCode](config.example/rtk-native/opencode.rtk.yaml), or [Claude Code](config.example/rtk-native/claude-code.rtk.yaml) template, along with its corresponding baseline configuration, into `config/`. Set `binary_path` to a Linux RTK executable matching the benchmark container's architecture, and `sha256` to its SHA-256. A macOS RTK binary cannot run inside the container.
+Start from a working baseline and change only the treatment and run ID:
+
+```yaml
+skills: []
+extensions: [rtk]
+```
+
+Resolve, prepare and execute the baseline and treatment separately:
+
+```sh
+acb resolve --config treatment.yaml
+acb prepare --config treatment.yaml
+acb run --config baseline.yaml
+acb run --config treatment.yaml
+acb compare BASELINE_RUN TREATMENT_RUN --html --bundle runs/rtk-comparison.zip
+```
+
+Use the actual reserved result paths in the comparison. Match model-server
+settings, task inputs, harness profiles and cache policy between arms. See
+[feature examples](../config.example/feature-tests/README.md) and
+[configuration precedence](configuration.md#precedence-and-component-selections).
+
+## Advanced binary configuration
+
+Copy the [Goose](../config.example/rtk-native/goose.rtk.yaml), [Pi](../config.example/rtk-native/pi.rtk.yaml), [OpenCode](../config.example/rtk-native/opencode.rtk.yaml), or [Claude Code](../config.example/rtk-native/claude-code.rtk.yaml) template, along with its corresponding baseline configuration, into `config/`. Set `binary_path` to a Linux RTK executable matching the benchmark container's architecture, and `sha256` to its SHA-256. A macOS RTK binary cannot run inside the container.
 
 ```yaml
 overrides:
@@ -28,7 +58,14 @@ overrides:
         sha256: "<binary-SHA256>"
 ```
 
-Run each arm separately with `UV_MANAGED_PYTHON=1 UV_PYTHON=3.12 uv run --extra datasets acb run --config <config-file>`. These variables also select managed Python for the evaluator's isolated environment and avoid system Python certificate-bootstrap issues observed on macOS. The templates select the configured local Qwen model and `psf__requests-1142`. Match model-server settings and cache policy between arms; distinct run IDs prevent artifact reuse. Use one harness per configuration because harness overrides are shared across selected harnesses.
+These low-level templates retain the versions/model/task of the original pilot;
+named feature examples use current packaged defaults. Run each arm with
+`uv run --extra datasets acb run --config <config-file>`. Harbor's worker uses the
+same Python environment as ACB, not a second evaluator environment. The templates
+select a local Qwen model and `psf__requests-1142`; configure your endpoint first.
+All advanced entries require `experimental: true`. Use one harness per template,
+or [per-harness overrides](configuration.md#precedence-and-component-selections)
+for adapter-specific settings. Do not also select named extensions.
 
 Pi loads a reviewed local extension through explicit `-e`. OpenCode adds a reviewed local plugin to its final provider/MCP configuration. Adapters preserve other tool arguments and native permissions. They do not add RTK instructions to the model prompt or compress native read/edit/search tools.
 
@@ -36,11 +73,26 @@ OpenCode `1.18.22` normally waits for an npm dependency bootstrap when loading a
 
 ## Claude Code launch profile
 
-Set `launch_profile: isolated-hooks` in **both** Claude configurations. The default remains `bare`; the pinned release skips explicitly configured hooks under `--bare`, so historical bare runs require a new matched baseline. The profile uses explicit settings, an isolated `CLAUDE_CONFIG_DIR`, empty settings sources, disabled project instructions and auto-memory, and explicit Bash/Edit/Read exposure. Slash commands and discovered MCP servers are disabled. Configured system prompts and explicit skill-reading hints are preserved.
+Use `launch_profile: isolated-hooks` in **both** Claude configurations. This is
+the packaged default; an explicit `bare` override cannot be used with RTK. The
+pinned release skips explicitly configured hooks under `--bare`, so historical
+bare runs require a new matched baseline. The profile uses explicit settings, an
+isolated `CLAUDE_CONFIG_DIR`, empty settings sources, disabled project instructions
+and auto-memory, and explicit Bash/Edit/Read exposure. Slash commands and discovered
+MCP servers are disabled. Configured system prompts, explicit skill-reading hints
+and explicitly selected MCP servers are preserved.
 
 The RTK settings file registers SessionStart loading verification, a Bash PreToolUse hook, and result hooks. Its repository-owned Python shim returns the full tool input with only `command` changed and leaves Claude's native permission checks intact. This follows Claude's [hook JSON protocol](https://code.claude.com/docs/en/hooks) and [explicit CLI configuration](https://code.claude.com/docs/en/cli-reference). No permission bypass or global host initialization is used.
 
-The interpreter `/opt/miniconda3/bin/python` and its standard-library dependencies are checked during setup. RTK is exposed through a container-local `/usr/local/bin/rtk` symlink; an existing file at that location is rejected. Rewriting runs in the isolated adapter directory because RTK itself reads Claude permission files from its working directory. The rewritten command still executes in the native tool's original working directory. Project instruction/settings isolation is tested against the exact pinned binary, including conflicting project hooks and deny rules.
+Preparation selects the task's inspected helper Python (3.8+) for the hook; an
+explicit `python_path` must identify a suitable interpreter inside the container.
+Setup checks its standard-library dependencies. RTK is exposed through a
+container-local `/usr/local/bin/rtk` symlink; an existing file at that location is
+rejected. Rewriting runs in the isolated adapter directory because RTK itself reads
+Claude permission files from its working directory. The rewritten command still
+executes in the native tool's original working directory. Project instruction/settings
+isolation is tested against the exact pinned binary, including conflicting project
+hooks and deny rules.
 
 Claude always uses the Anthropic API. Local Qwen pilots route through Praxis translation; the offline compatibility fixture speaks Anthropic directly and does not test model quality or that proxy translation.
 
@@ -63,7 +115,7 @@ Podman. On macOS, initialize and start `podman machine` first. Run:
 bash scripts/run_rtk_smoke.sh
 ```
 
-The script builds [Dockerfile.rtk-smoke](Dockerfile.rtk-smoke), obtains RTK
+The script builds [Dockerfile.rtk-smoke](../Dockerfile.rtk-smoke), obtains RTK
 `0.48.0` from its immutable upstream release commit, compiles it inside Ubuntu
 22.04 with locked Cargo dependencies, and exports the Linux binary to
 `runs/.cache/rtk-smoke/rtk`. The fixture image contains a real, offline-cloned
@@ -93,9 +145,10 @@ recipe must all be included in the commit being cloned. Local `config/` and
 `runs/` are deliberately ignored and are recreated on the receiving machine.
 
 ```bash
-uv run --with pytest python -m pytest tests -q
+uv sync --locked --group dev
+uv run pytest tests -q
 ACB_RTK_LIVE=1 ACB_RTK_BINARY=/path/to/linux/rtk \
-  uv run --with pytest python -m pytest tests/test_rtk_native_live.py -v
+  uv run pytest tests/test_rtk_native_live.py -v
 ```
 
 The opt-in tests cover all four real pinned harnesses inside temporary,

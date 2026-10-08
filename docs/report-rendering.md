@@ -6,6 +6,12 @@ totals. The current cleanup status lives in [the cleanup record](harbor-cleanup.
 
 ## Generate reports
 
+`acb report ACTUAL_RUN` and `acb compare BASELINE_RUN CANDIDATE_RUN` show text
+summaries in a terminal and JSON when piped. Use `--text` or `--json` explicitly
+for scripts or saved output. Text reports include execution failures, their phase
+and message, and available job-log/run-directory evidence. Incomplete usage is
+unavailable rather than zero. Export notices go to stderr so JSON stays parseable.
+
 ```sh
 acb report runs/example --html
 acb compare runs/baseline runs/candidate runs/another-candidate --html runs/comparison.html

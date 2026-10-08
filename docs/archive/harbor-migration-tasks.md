@@ -1,19 +1,22 @@
 # Harbor migration tasks
 
+> Historical checklist and closure record. Use [Harbor cleanup](../harbor-cleanup.md)
+> for current tasks and the [documentation index](../README.md) for usage guides.
+
 Updated: September 21, 2026.
 
 **Benchmark migration update:** SWE-bench, SWE-bench Lite, and ScarfBench now
 default to Harbor. Task export, controller-side native verifiers, fixed-fixture
 grading parity, and C06 packaging are implemented. See
-[benchmark migration and evidence](harbor-benchmark-migration.md). H05-04 is complete: Harbor is the sole runner, shared helpers are extracted,
-and legacy scheduling is removed. [Cleanup status](harbor-cleanup.md) is
+[benchmark migration and evidence](../harbor-benchmark-migration.md). H05-04 is complete: Harbor is the sole runner, shared helpers are extracted,
+and legacy scheduling is removed. [Cleanup status](../harbor-cleanup.md) is
 authoritative; deferred-phase notes below describe earlier checkpoints.
 
-**Phase 6 implementation complete under the selected scope.** See the [Phase 6 checkpoint](harbor-phase6-checkpoint.md) and [post-integration cleanup](harbor-cleanup.md). H06-05 experiments are user-owned; Phase 5 was subsequently completed as cleanup C14. Phase 6 checkpoint regression: 413 passed, four existing skips. All controlled checks were rerun after the user cleaned `runs/`; a fresh Qwen RH baseline/combined pair and real-data reports are retained. Both RH agents timed out at 600 seconds, explicitly shown as incomplete comparisons.
+**Phase 6 implementation complete under the selected scope.** See the [Phase 6 checkpoint](harbor-phase6-checkpoint.md) and [post-integration cleanup](../harbor-cleanup.md). H06-05 experiments are user-owned; Phase 5 was subsequently completed as cleanup C14. Phase 6 checkpoint regression: 413 passed, four existing skips. All controlled checks were rerun after the user cleaned `runs/`; a fresh Qwen RH baseline/combined pair and real-data reports are retained. Both RH agents timed out at 600 seconds, explicitly shown as incomplete comparisons.
 
 **Cleanup update:** C01–C10, C14 and C16 are complete. C11/C12 and the
 remaining C15 work are open; C13 remains deferred. Current acceptance criteria,
-module ownership and verification live only in [Harbor cleanup](harbor-cleanup.md).
+module ownership and verification live only in [Harbor cleanup](../harbor-cleanup.md).
 Backward compatibility is not required for future cleanup.
 
 ## Historical phase checklist and decisions
@@ -24,13 +27,13 @@ open/deferred notes are historical unless listed in the current cleanup record.
 **Phase 4 complete.** See the [completion checkpoint](harbor-phase4-checkpoint.md). All functional gates and approved pilots are complete. Regression: 388 passed, four skipped; package and cleanup checks passed.
 
 **September 17 review completed under revised scope.** See the
-[phase audit](harbor-phase-2-3-audit.md) and [operation/support notes](harbor-operations.md).
+[phase audit](harbor-phase-2-3-audit.md) and [operation/support notes](../harbor-operations.md).
 Live Docker testing is waived by user decision; provider-neutral Harbor routing
 and installed-worker configuration were reviewed for both engines. Offline use
 retains documented natural engine failures and ACB asset-download controls, without
 claiming that `offline` prevents every task-image network attempt. The final
 package/CLI/evidence review passed. Claude amd64/QEMU startup failure is now an
-accepted [known issue](harbor-operations.md#known-issue-claude-code-on-emulated-amd64-benchmarks),
+accepted [known issue](../harbor-operations.md#known-issue-claude-code-on-emulated-amd64-benchmarks),
 with further investigation deferred by user decision. Phases 2/3 are complete
 under this scope. Phase 1 and the UX/structure review are now complete;
 Phase 4 is complete under the revised scope below. Historical
@@ -431,7 +434,7 @@ without a concrete regression or new scope decision.
 
 Phases 2/3 are complete under the September 17 scope decisions. The Claude RH
 emulation investigation is closed for this migration as an accepted limitation,
-not as a fixed bug. See the [known issue and upstream links](harbor-operations.md#known-issue-claude-code-on-emulated-amd64-benchmarks).
+not as a fixed bug. See the [known issue and upstream links](../harbor-operations.md#known-issue-claude-code-on-emulated-amd64-benchmarks).
 Do not reopen Claude emulation, Docker testing, general cache hardening or broader
 network coverage as phase gates without a new scope decision.
 
@@ -590,7 +593,7 @@ Execution order: H04-05, H04-01/02, H04-06/07, then H04-03/04.
 The benchmark migration is now implemented under cleanup C14. Both benchmark
 families use Harbor by default and retain native grading. Fixed-fixture tests
 and live Podman controls are recorded in the
-[migration checkpoint](harbor-benchmark-migration.md). Optional pricing remains
+[migration checkpoint](../harbor-benchmark-migration.md). Optional pricing remains
 follow-on work and is not a prerequisite for runner retirement.
 
 - [x] **H05-01 — ScarfBench task export and verifier.** Preserve the complete
@@ -604,7 +607,7 @@ follow-on work and is not a prerequisite for runner retirement.
 - [x] **H05-04 — Configuration completion and old runner retirement.** Completed
   September 21 under cleanup C09/C14d after both native grading parity gates.
   Shared helpers, CLI routing, replacement coverage, installed resources and
-  examples are updated. See [current evidence and limitations](harbor-cleanup.md).
+  examples are updated. See [current evidence and limitations](../harbor-cleanup.md).
 
 ## Phase 6: concrete advanced capabilities and experiments
 
@@ -730,6 +733,6 @@ Implementation evidence and supported limits: [Phase 6 checkpoint](harbor-phase6
 ## Completion rule
 
 All selected migration phases are complete, including Phase 5 through cleanup
-C14. Current implementation work is tracked in [Harbor cleanup](harbor-cleanup.md).
+C14. Current implementation work is tracked in [Harbor cleanup](../harbor-cleanup.md).
 Effectiveness experiments remain user-owned; accepted live-test waivers and known
 runtime limitations still apply. Historical evidence is not a new acceptance gate.

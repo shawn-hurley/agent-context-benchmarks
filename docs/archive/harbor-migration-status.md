@@ -1,7 +1,7 @@
 # Harbor migration checkpoint
 
 > Historical design/checkpoint record. For current task status and accepted scope,
-> use [Harbor cleanup](harbor-cleanup.md). Later decisions there supersede
+> use [Harbor cleanup](../harbor-cleanup.md). Later decisions there supersede
 > open-task lists and compatibility requirements below.
 
 > Historical September 16 snapshot. Its open-issue and resume lists are superseded
@@ -18,7 +18,7 @@ Updated: September 16, 2026. Implementation paused at the user's request to
 consolidate status. Scope remains the entire six-phase migration.
 
 Use the [task checklist](harbor-migration-tasks.md) for acceptance gates and the
-[architecture plan](../HARBOR_PLAN.md) for intended behavior. This checkpoint
+[architecture plan](harbor-migration-tasks.md) for intended behavior. This checkpoint
 records implementation and evidence; it does not change the acceptance criteria.
 Tasks are repository checkboxes, not native Codex tasks. Changes are uncommitted.
 

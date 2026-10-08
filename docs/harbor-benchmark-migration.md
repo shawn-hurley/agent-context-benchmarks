@@ -38,7 +38,8 @@ reference projects still undergo the benchmark's actual grading.
   `benchmark.swebench_python` to an interpreter containing the same official
   task-repo-era SWE-bench harness. The tested submodule revision is
   `02e7a74ffd0b707aab73d203fe87bdc7c76afc8e`.
-- The selected Docker or Podman engine must be available on the controller.
+- The selected Docker or Podman engine and Compose frontend must be available
+  on the controller; see [container prerequisites](harbor-operations.md#container-prerequisites-and-compose).
   SWE-bench's Docker SDK must reach that engine; `benchmark.docker_host` remains
   available. Preparation checks that it can see Harbor's prepared images.
 
@@ -124,9 +125,12 @@ Harbor controls, ScarfBench 0.1.2, and the official SWE-bench harness. Evidence:
 
 These checks establish fixed-fixture grading and lifecycle behavior. They are
 not paid-model effectiveness runs or a new sweep of public benchmark instances.
-Live Docker coverage remains waived under the existing migration scope.
+Live Docker coverage was waived for that migration gate. Later
+[Quick Start validation](validation/quick-start-validation.md) covers the repair
+task and native Cart controls; the full migration/parity matrix remains unverified
+on Docker.
 
-Final regression: **478 passed, four skipped**. The rebuilt wheel was installed
+Regression at that checkpoint: **478 passed, four skipped**. The rebuilt wheel was installed
 into a temporary directory: ScarfBench task export and manifest verification
 passed using only its packaged resources, and the installed bridge's official
 SWE-bench SDK preflight could see the prepared Harbor image.

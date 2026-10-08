@@ -1,11 +1,11 @@
 # Harbor operation and supported scope
 
-Updated October 6, 2026. Podman has acceptance evidence across all four harnesses.
+Updated October 7, 2026. Podman has acceptance evidence across all four harnesses.
 Docker now has macOS ARM64/Colima evidence for the bundled repair task and native
 ScarfBench Cart controls. The model trial passed the task and exposed a stream
 accounting bug; its fix passed a no-model HTTP replay. Broader Docker harness,
 SWE-bench, and separate-verifier coverage remains unverified. See
-[Quick Start validation](quick-start-validation.md) for results and limits.
+[Quick Start validation](validation/quick-start-validation.md) for results and limits.
 
 Current task status and scope are tracked in [Harbor cleanup](harbor-cleanup.md).
 
@@ -132,7 +132,8 @@ suffixes rather than overwriting earlier results.
 CLI input paths are relative to the current directory and support `~`.
 YAML asset paths and YAML `config_dir` are relative to their declaring file;
 `output_dir` is relative to the invocation directory. Explicit `--config-dir`
-overrides registry discovery. `resolve` validates selections but does not
+overrides registry discovery. See [configuration](configuration.md) for registry
+precedence and per-harness settings. `resolve` validates selections but does not
 enumerate the task manifest; `tasks` discovers eligible IDs without exporting
 tasks, and `prepare` emits the selected manifest.
 
@@ -150,7 +151,7 @@ in `.harbor/worker.log`. `clean` deletes all output items except `.cache` and
 `.gitkeep`, including exported reports and bundles stored there. In a script it
 requires `--yes`; `--dry-run` never requires confirmation.
 
-The [CLI usability review](cli-usability-review.md) records the walkthrough,
+The [CLI usability review](validation/cli-usability-review.md) records the walkthrough,
 fixes and remaining improvements.
 
 ## Offline semantics
@@ -365,7 +366,7 @@ valid model-quality result. A separately approved native pilot builds the
 unchanged task Dockerfile on ARM64, preserves CPU/memory/tests, and pins the
 inspected image across arms. Its no-op/oracle controls pass with rewards 0/1.
 The original amd64 artifacts remain available. See the
-[Phase 4 checkpoint](harbor-phase4-checkpoint.md) for results and provenance.
+[Phase 4 checkpoint](archive/harbor-phase4-checkpoint.md) for results and provenance.
 
 
 ## Dataset metrics and comparisons

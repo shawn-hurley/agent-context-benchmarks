@@ -1,14 +1,14 @@
 # Code review: Harbor integration and cleanup
 
 > Historical design/checkpoint record. For current task status and accepted scope,
-> use [Harbor cleanup](harbor-cleanup.md). Later decisions there supersede
+> use [Harbor cleanup](../harbor-cleanup.md). Later decisions there supersede
 > open-task lists and compatibility requirements below.
 
 Reviewed September 18, 2026. Scope: the working-tree changes relative to `HEAD`,
 including new, untracked implementation, tests, assets, examples and documents.
 The findings below describe the original review, before the subsequent decisions
 and implementation recorded here.
-The [cleanup plan](harbor-cleanup.md) owns the remaining work. Accepted migration
+The [cleanup plan](../harbor-cleanup.md) owns the remaining work. Accepted migration
 phases stay closed, and historical live checkpoints retain their original scope.
 
 ## Subsequent user decisions and implementation
@@ -37,7 +37,7 @@ Latest regression: **465 passed, 4 skipped**, including real local worker
 process cleanup, concurrent reservations, permission-sensitive snapshots,
 measurement-completeness comparisons and interleaved Make/engine-double validation. No fresh live
 container/model run was performed. See the
-[current cleanup dispositions](harbor-cleanup.md#review-follow-up-september-18-2026)
+[current cleanup dispositions](../harbor-cleanup.md#completed-cleanup)
 for acceptance and remaining work. The original severity/order below is historical.
 
 ## Assessment
@@ -312,6 +312,6 @@ These are structural tasks, not additional claims of runtime defects:
 4. ScarfBench and SWE-bench exporters, passing/failing parity fixtures and
    configuration/extension parity; then remove the legacy scheduler and pods.
 
-The [cleanup plan](harbor-cleanup.md#review-follow-up-september-18-2026) translates
+The [cleanup plan](../harbor-cleanup.md) translates
 this order into tasks with completion criteria. The subsequent user decisions
 above and the current cleanup plan supersede this original ordering.

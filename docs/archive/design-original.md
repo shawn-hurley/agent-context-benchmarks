@@ -1,8 +1,8 @@
 # Design: agent-context-benchmarks (acb)
 
-> Original architecture/design record. Current runtime behavior is documented in
-> [Harbor operations](docs/harbor-operations.md); current task status and scope
-> are tracked in [Harbor cleanup](docs/harbor-cleanup.md).
+> Historical design of the retired runner. This does not describe current code.
+> See [current architecture](../architecture.md) and [Harbor operations](../harbor-operations.md); current task status and scope
+> are tracked in [Harbor cleanup](../harbor-cleanup.md).
 
 Measure and compare **context/token usage** of different agent harnesses
 (claude-code, goose, opencode, pi, …) running the same coding benchmarks
@@ -69,7 +69,7 @@ Time T2: Worker1(goose-5), Worker2(claude-3), Worker3(..idle), Worker4(..idle)
 ```
 QUEUED ─▶ RUNNING ─▶ GENERATED ─▶ VERIFYING ─▶ VERIFIED_PASS
                                             └─▶ VERIFIED_FAIL
-                                   
+
 FAILED (generation/evaluation crash)
 ```
 
@@ -168,8 +168,8 @@ binary entirely).
 All four harnesses (`goose`, `claude-code`, `opencode`, `pi`) have container-mode
 implementations (`HarnessAdapter.run_container()`):
 - **goose**: static-ish Linux binary from GitHub Releases
-- **claude-code**: standalone per-arch native executable (`@anthropic-ai/claude-code-linux-{arm64,x64}` 
-  on npm -- not a Node.js package, just a single ELF binary; see 
+- **claude-code**: standalone per-arch native executable (`@anthropic-ai/claude-code-linux-{arm64,x64}`
+  on npm -- not a Node.js package, just a single ELF binary; see
   `acb/harnesses/claude_code.py`'s module docstring)
 - **opencode**: standalone binary from GitHub Releases
 - **pi**: standalone binary with bundled node_modules (native addons)

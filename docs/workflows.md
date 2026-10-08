@@ -133,17 +133,28 @@ Bounded graph evidence, plans and execution reports are archived at stage gates.
 A native gate may also declare `archive` and `required` to capture final reports
 before grading; artifact capture never replaces the native benchmark reward.
 
-From the repository root, select the isolated local configurations with:
+In a working ScarfBench run YAML, select a bundled workflow and a distinct run ID:
 
-```sh
-acb run --config config/local/scarfbench/kantra-rgctl-fixed-benchmark.yaml
-acb run --config config/local/scarfbench/migiq-fixed-benchmark.yaml
+```yaml
+run_id: kantra-rgctl-treatment
+harness: goose
+workflow: kantra-rgctl
 ```
 
-They copy the existing fixed benchmark baseline's model, harness, dataset,
-worker count and timeout settings and use distinct run IDs. No benchmark is
-launched by adding these configurations. To inspect configuration without
-running agents, use `acb resolve --config <config>`.
+For the other treatment, use `workflow: migiq` and a different run ID. Retain the
+baseline's model, task selection, worker count and execution timeout. Each stage
+also has the timeout declared in its workflow. These bundled workflows target
+ScarfBench and Goose; they are not compatible with the quickstart repair task.
+Resolve before execution:
+
+```sh
+acb resolve --config treatment.yaml
+acb prepare --config treatment.yaml
+acb run --config treatment.yaml
+```
+
+Use [ScarfBench setup](quick-start.md#5-run-the-corrected-scarfbench-benchmark) for dataset
+and native-grader prerequisites. Model execution may incur provider charges.
 
 ## Comparison identity
 

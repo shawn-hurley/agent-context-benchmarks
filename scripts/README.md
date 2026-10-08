@@ -25,7 +25,7 @@ remains historical; maintained lifecycle and treatment checks use Harbor.
 ## Required local regression gate
 
 ```sh
-uv sync --group dev
+uv sync --locked --group dev
 uv run pytest tests -q
 uv build --out-dir dist
 uv run python scripts/check_package.py dist/agent_context_benchmarks-0.1.0-py3-none-any.whl
@@ -33,8 +33,9 @@ uv run python scripts/check_package.py dist/agent_context_benchmarks-0.1.0-py3-n
 
 `uv build` builds the wheel from a fresh source distribution. This avoids stale
 modules left in a previous build directory. The package check installs the wheel
-into a temporary directory and checks imports/resources and ScarfBench export
-from outside the checkout. It makes no model or container requests.
+into a temporary directory and checks imports/resources, packaged starter
+creation and ScarfBench export from outside the checkout. It makes no model or
+container requests.
 
 For live recovery-store isolation, build the pinned Caveman image and run:
 
@@ -68,6 +69,10 @@ or container startup. Use the feature guide for controls and live prerequisites.
 
 See [Quick Start](../docs/quick-start.md) for a dedicated starter configuration
 and publication prerequisites for the corrected ScarfBench fork.
+
+Public-clone acceptance requires the documented ACB revision and pinned benchmark
+revision to be available from their public repositories. Verify both before
+recording a public-download result; local assets only establish local acceptance.
 
 ```sh
 uv run python scripts/check_quickstart.py /tmp/acb-quickstart-check --environment podman

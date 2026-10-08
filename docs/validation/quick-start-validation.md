@@ -79,4 +79,4 @@ The guide intentionally fails a pinned checkout rather than substituting the
 older tests. Both ACB changes and the corrected fork revision must be published
 before the public clone instructions can be considered validated.
 
-See [Quick Start](quick-start.md) for repeatable checks and maintainer push steps.
+See [Quick Start](../quick-start.md) for repeatable checks and maintainer push steps.

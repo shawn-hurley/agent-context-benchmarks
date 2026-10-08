@@ -25,7 +25,7 @@ those paths without adding new execution modes.
 | Medium | `clean` described every output item as a run, and piped input could end in an EOF error | Help and preview explain that reports/bundles are included; noninteractive deletion requires `--yes` and points to `--dry-run` first |
 | Low | Literal `~/...` paths worked for some flags but failed for config files, catalog lookup and report/export paths | These CLI paths expand the home directory consistently |
 
-The [operations guide](harbor-operations.md#choosing-a-command) maps user goals
+The [operations guide](../harbor-operations.md#choosing-a-command) maps user goals
 to commands and explains how to run multiple harnesses, select treatments,
 choose task limits, compare harnesses and interpret process success.
 
@@ -60,8 +60,8 @@ continues to apply. Remaining opportunities are recorded below.
 
 Use `--json` when a script needs an explicit format; export-location messages
 and preparation progress are sent to stderr. Component `list` retains its JSON
-format. Task discovery is covered in the [task guide](task-discovery.md), and
-starting points in the [template guide](starter-templates.md).
+format. Task discovery is covered in the [task guide](../task-discovery.md), and
+starting points in the [template guide](../starter-templates.md).
 
 ## Verification and limits
 
@@ -122,7 +122,7 @@ now implemented at preparation entry, covering ordinary runs and controls. It
 checks the selected frontend version, engine response and wrapper-provider
 connection before cache/download/trial creation; failures name the command and
 setup guidance. Configuration/discovery/save-only commands remain engine-free.
-See [container prerequisites](harbor-operations.md#container-prerequisites-and-compose)
+See [container prerequisites](../harbor-operations.md#container-prerequisites-and-compose)
 for why the runner needs Compose. This pass adds no matrix, resume, automatic
 custom-workflow scanning or compatibility-label features.
 

@@ -1,7 +1,7 @@
 # Phase 2/3 scope and evidence audit
 
 > Historical design/checkpoint record. For current task status and accepted scope,
-> use [Harbor cleanup](harbor-cleanup.md). Later decisions there supersede
+> use [Harbor cleanup](../harbor-cleanup.md). Later decisions there supersede
 > open-task lists and compatibility requirements below.
 
 > Subsequent September 17 decisions supersede the remaining list in this audit:
@@ -9,8 +9,8 @@
 > reports. Offline support is interpreted as disconnected operation with natural
 > engine failures, not a guarantee against every network attempt while connected.
 > The package/CLI/evidence review is now complete (282 passed, 4 skipped).
-> See [current operations](harbor-operations.md) and the [checklist](harbor-migration-tasks.md).
-> Claude amd64 emulation is now an accepted [known issue](harbor-operations.md#known-issue-claude-code-on-emulated-amd64-benchmarks);
+> See [current operations](../harbor-operations.md) and the [checklist](harbor-migration-tasks.md).
+> Claude amd64 emulation is now an accepted [known issue](../harbor-operations.md#known-issue-claude-code-on-emulated-amd64-benchmarks);
 > further debugging is deferred. Phases 2/3 are complete under the revised scope.
 
 September 17, 2026. Implementation is paused for this audit. No runtime code was

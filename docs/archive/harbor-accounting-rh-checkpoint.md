@@ -1,13 +1,13 @@
 # Accounting and RH baseline follow-up
 
 > Historical design/checkpoint record. For current task status and accepted scope,
-> use [Harbor cleanup](harbor-cleanup.md). Later decisions there supersede
+> use [Harbor cleanup](../harbor-cleanup.md). Later decisions there supersede
 > open-task lists and compatibility requirements below.
 
 > Historical checkpoint. Use the [September 17 phase audit](harbor-phase-2-3-audit.md)
 > for current scope and remaining work. Subsequent checks closed setup/stream
 > cancellation and other items described as outstanding below. Claude amd64/QEMU
-> failure is now an accepted [known issue](harbor-operations.md#known-issue-claude-code-on-emulated-amd64-benchmarks),
+> failure is now an accepted [known issue](../harbor-operations.md#known-issue-claude-code-on-emulated-amd64-benchmarks),
 > with investigation deferred; phases 2/3 are complete under the revised scope.
 
 September 16, 2026. Scope: finish accounting/failure-reporting checks, investigate

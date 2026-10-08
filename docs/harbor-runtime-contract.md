@@ -49,7 +49,7 @@ own policy overlays. Praxis/Caveman references are resolved during preparation;
 measured execution verifies the running provider image IDs. Offline preparation
 fails if an image is missing. Separate-verifier contracts and package verification
 are implemented (see below). Docker Quick Start evidence is recorded in
-[Quick Start validation](quick-start-validation.md); the broader contract matrix
+[Quick Start validation](validation/quick-start-validation.md); the broader contract matrix
 has only the Podman evidence below.
 
 ## Podman Compose
@@ -58,6 +58,12 @@ When available, ACB invokes `podman-compose --in-pod=false` directly. This keeps
 installing Docker Compose from changing the frontend used for Podman trials.
 Otherwise, ACB requires a Compose V2 compatible frontend through `podman compose`.
 
+Preparation checks the selected Compose frontend and engine connection before
+task downloads, cache creation or worker startup. Harbor uses Compose for task
+services and lifecycle operations; ACB's environment overrides retain that
+dependency. See [prerequisites](harbor-operations.md#container-prerequisites-and-compose)
+for diagnostics.
+
 ## Verification
 
 - `runs/harbor-rh-language-check-podman`: live RH inspection confirms
@@ -65,9 +71,10 @@ Otherwise, ACB requires a Compose V2 compatible frontend through `podman compose
 - `runs/harbor-runtime-accounting-check`: all four native ARM fixture runs earn
   reward 1 and reconcile model requests and tokens exactly.
 
-These checks do not resolve Claude's amd64 startup failure; repair is deferred
-under the accepted scope. MCP is deferred from this implementation;
-skills remain in scope.
+These dated checks do not resolve Claude's amd64 startup failure; repair remains
+deferred under the accepted scope. They did not exercise MCP. Current explicit MCP
+delivery supports Goose, OpenCode and Claude Code; Pi rejects it. Broader MCP work
+remains deferred. See the [feature matrix](../config.example/feature-tests/README.md).
 
 ## Additional Podman evidence
 

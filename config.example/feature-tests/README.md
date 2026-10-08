@@ -82,7 +82,9 @@ they are not expressible as a positive run YAML alone.
   dataset; unsupported disk quotas need an explicitly reviewed task copy. Local
   reset copies the previously approved bundle and deviation record into
   `assets/benchmarks/rh-swe-bench` when available; no new quota override is applied.
-- Docker configs are available, but live Docker acceptance remains waived.
+- Docker has [scoped Quick Start evidence](../../docs/validation/quick-start-validation.md)
+  for the repair task and native Cart controls. The full Docker feature/harness
+  and isolation matrix remains unverified.
 - Verifier failures are expected outcomes, normally with a successful ACB process
   exit. Infrastructure/setup failures and cancellation still fail execution.
 
